@@ -78,17 +78,27 @@ inline std::wstring normalizePath(std::wstring path, std::wstring* prefixed)
 {
     // trim spaces and quotes
     const auto isPad = [](wchar_t c) { return c == L' ' || c == L'"' || c == L'\t'; };
-    while (!path.empty() && isPad(path.front()))
-        path.erase(path.begin());
-    while (!path.empty() && isPad(path.back()))
-        path.pop_back();
-    if (path.size() == 2 && path[1] == L':')
-        path += L'\\';
+    const auto trim = [&isPad](std::wstring& p) {
+        while (!p.empty() && isPad(p.front()))
+            p.erase(p.begin());
+        while (!p.empty() && isPad(p.back()))
+            p.pop_back();
+    };
+    trim(path);
     if (path.empty())
         return {};
-    // strip a trailing backslash unless this is a root ("C:\" or "\\")
-    while (path.size() > 2 && path.back() == L'\\')
-        path.pop_back();
+    // A drive letter on its own means the drive root.
+    if (path.size() == 2 && path[1] == L':')
+        path += L'\\';
+    // Strip trailing backslashes, but keep the root's own ("C:\" or "\\").
+    const bool isDriveRoot = path.size() == 3 && path[1] == L':' && path[2] == L'\\';
+    if (!isDriveRoot && path != L"\\")
+        while (path.size() > 1 && path.back() == L'\\')
+            path.pop_back();
+    // Removing the separator can expose padding again ("D:\dir \ " -> "D:\dir").
+    trim(path);
+    if (path.empty())
+        return {};
     if (prefixed) {
         if (path.rfind(L"\\\\?\\", 0) == 0)
             *prefixed = path;
@@ -192,7 +202,7 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
     std::uint32_t selfFiles = 0, selfDirs = 0;
     bool ok = true;
     for (;;) {
-        if (ctx.cancel || !report(ctx, displayDir)) {
+        if (*ctx.cancel || !report(ctx, displayDir)) {
             out->cancelled = true;
             ok = false;
             break;

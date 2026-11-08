@@ -72,8 +72,10 @@ inline std::string formatCount(std::uint64_t n)
     char buf[32];
     std::snprintf(buf, sizeof buf, "%llu", static_cast<unsigned long long>(n));
     std::string s = buf;
-    for (std::size_t i = s.size() > 3 ? s.size() - 3 : 0; i > 0; i -= 3)
-        s.insert(i, ",");
+    // Group by three from the right. The loop stops at i > 3 so the index
+    // never underflows (i -= 3 on a size_t would wrap past zero).
+    for (std::size_t i = s.size(); i > 3; i -= 3)
+        s.insert(i - 3, ",");
     return s;
 }
 
@@ -146,7 +148,7 @@ inline double rowWorstExtra(const std::vector<double>& areas, double side, doubl
 // which paints its own label, so the picture remains honest. `basePath` is
 // the display path of `node` itself; every tile carries its full path.
 inline void treemapTiles(const Node& node, const Rect& area, int depth, double minArea,
-                         std::vector<Tile>& out, const std::wstring& basePath = {},
+                         std::vector<Tile>& out, std::wstring basePath = {},
                          int maxDepth = 24)
 {
     if (depth > maxDepth || node.children.empty() || area.w <= 0 || area.h <= 0)
@@ -254,7 +256,7 @@ struct Slice {
 
 inline void sunburstSlices(const Node& node, double cx, double cy, double r0, double ringWidth,
                            double a0, double a1, int depth, double minAngle,
-                           std::vector<Slice>& out, const std::wstring& basePath = {},
+                           std::vector<Slice>& out, std::wstring basePath = {},
                            int maxDepth = 16)
 {
     if (depth > maxDepth || node.children.empty())

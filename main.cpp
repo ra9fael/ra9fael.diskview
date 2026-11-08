@@ -69,7 +69,7 @@ winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
 }
 
 // A path in the query text: one row that opens and scans right away, plus a
-// row that opens the same folder's parent instead.
+// row with an example path.
 winshun::Items pathItems(const std::string& text, bool zh)
 {
     winshun::Item item("disk.open", tr(zh, "打开磁盘透视 · ", "Open Disk View · ") + text,
