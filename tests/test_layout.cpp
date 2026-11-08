@@ -74,6 +74,31 @@ static diskview::Node makeDir(const std::wstring& name,
     return d;
 }
 
+static diskview::Node makeFile(const std::wstring& name, std::uint64_t size)
+{
+    diskview::Node f;
+    f.name = name;
+    f.logical = size;
+    f.allocApprox = size;
+    return f;
+}
+
+// A directory node whose children are given as-is; the totals are summed.
+static diskview::Node makeDirOf(std::wstring name, std::vector<diskview::Node> children)
+{
+    diskview::Node d;
+    d.name = std::move(name);
+    d.dir = true;
+    for (diskview::Node& c : children) {
+        d.logical += c.logical;
+        d.allocApprox += c.logical;
+        d.files += c.files;
+        d.dirs += c.dir ? 1 : 0;
+        d.children.push_back(std::move(c));
+    }
+    return d;
+}
+
 static void testTreemapCoversArea()
 {
     diskview::Node root = makeDir(L"root", {{L"a", 600}, {L"b", 300}, {L"c", 100}});
@@ -144,14 +169,12 @@ static void testTreemapCullingKeepsParent()
 static void testTreemapNestsPaths()
 {
     diskview::Node sub = makeDir(L"sub", {{L"x", 50}, {L"y", 50}});
-    diskview::Node root = makeDir(L"root", {{L"sub", 100}, {L"z", 100}});
-    root.children.insert(root.children.begin(), sub);
-    root.logical += sub.logical;
-    root.files += sub.files;
-    root.dirs = 1;
+    diskview::Node root = makeDirOf(L"root", {sub, makeFile(L"z", 100)});
     const diskview::Rect area {0, 0, 100, 100};
     std::vector<diskview::Tile> tiles;
-    diskview::treemapTiles(root, area, 0, 0.0, tiles);
+    // The base path is the display path of the node itself ("D:\dir" in the
+    // window), so every tile carries it plus its own name.
+    diskview::treemapTiles(root, area, 0, 0.0, tiles, L"root");
     bool sawSubFile = false;
     for (const diskview::Tile& t : tiles) {
         if (t.node->name == L"x") {
@@ -197,12 +220,10 @@ static void testSunburstSpans()
 static void testSunburstNestsRings()
 {
     diskview::Node sub = makeDir(L"sub", {{L"x", 60}, {L"y", 40}});
-    diskview::Node root = makeDir(L"root", {{L"sub", 100}, {L"z", 100}});
-    root.children.insert(root.children.begin(), sub);
-    root.logical += sub.logical;
+    diskview::Node root = makeDirOf(L"root", {sub, makeFile(L"z", 100)});
     std::vector<diskview::Slice> slices;
     const double pi = 3.14159265358979323846;
-    diskview::sunburstSlices(root, 0, 0, 10, 20, -pi / 2, -pi / 2 + 2 * pi, 0, 0.0, slices);
+    diskview::sunburstSlices(root, 0, 0, 10, 20, -pi / 2, -pi / 2 + 2 * pi, 0, 0.0, slices, L"root");
     const diskview::Slice* subSlice = nullptr;
     int depth1 = 0;
     for (const diskview::Slice& sl : slices) {
@@ -300,10 +321,11 @@ static void testScanSumsAndLargest()
     // display root has no trailing backslash
     CHECK(!r.displayRoot.empty() && r.displayRoot.back() != L'\\');
     // children sorted by size, largest first
-    CHECK(r.root.children.size() == 2);
-    if (r.root.children.size() == 2) {
+    CHECK(r.root.children.size() == 3);
+    if (r.root.children.size() == 3) {
         CHECK(r.root.children[0].name == L"big.bin");
         CHECK(r.root.children[1].name == L"sub");
+        CHECK(r.root.children[2].name == L"small.txt");
     }
 }
 
@@ -357,18 +379,25 @@ static void testNormalize()
 
 int main()
 {
-    testFormat();
-    testTreemapCoversArea();
-    testTreemapAspectRatio();
-    testTreemapCullingKeepsParent();
-    testTreemapNestsPaths();
-    testSunburstSpans();
-    testSunburstNestsRings();
-    testSunburstCulling();
-    testScanSumsAndLargest();
-    testScanMissingAndEmpty();
-    testScanCancel();
-    testNormalize();
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+#define RUN(fn)                                                                                                       \
+    do {                                                                                                               \
+        std::printf("-> %s\n", #fn);                                                                                    \
+        fn();                                                                                                          \
+    } while (0)
+    RUN(testFormat);
+    RUN(testTreemapCoversArea);
+    RUN(testTreemapAspectRatio);
+    RUN(testTreemapCullingKeepsParent);
+    RUN(testTreemapNestsPaths);
+    RUN(testSunburstSpans);
+    RUN(testSunburstNestsRings);
+    RUN(testSunburstCulling);
+    RUN(testScanSumsAndLargest);
+    RUN(testScanMissingAndEmpty);
+    RUN(testScanCancel);
+    RUN(testNormalize);
+#undef RUN
 
     if (g_failures == 0) {
         std::printf("diskview tests: all passed\n");

@@ -33,6 +33,9 @@ target_include_directories(diskview_tests PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_definitions(diskview_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 if(MSVC)
     target_compile_options(diskview_tests PRIVATE /utf-8 /W4 /permissive-)
+    # Static CRT, like the plugin exe: the test binary must run on a machine
+    # without the redistributable installed.
+    set_target_properties(diskview_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
     target_compile_options(diskview_tests PRIVATE -finput-charset=UTF-8 -fexec-charset=UTF-8 -Wall -Wextra -O2)
 endif()
