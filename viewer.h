@@ -13,10 +13,12 @@
 #define DISKVIEW_VIEWER_H
 
 #include "scan.h"
+#include "scan_helper.h"
 #include "tree.h"
 #include "winshun.h"
 
 #include <windows.h>
+#include "window_icons.h"
 #include <windowsx.h>
 
 #include <algorithm>
@@ -33,6 +35,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <deque>
 
 namespace diskview {
 
@@ -107,6 +110,8 @@ namespace detail {
 constexpr UINT WM_APP_PROGRESS = WM_APP + 1;
 constexpr UINT WM_APP_DONE = WM_APP + 2;
 constexpr UINT WM_APP_APPEARANCE = WM_APP + 3;
+constexpr UINT WM_APP_PARTIAL = WM_APP + 4;
+constexpr UINT WM_APP_START_SCAN = WM_APP + 5;
 
 struct Palette {
     COLORREF bg, panel, panelText, text, muted, accent, danger, border, hoverLine, progress;
@@ -132,20 +137,20 @@ inline COLORREF tileText(COLORREF bg)
 
 inline Palette darkPalette()
 {
-    const COLORREF accent = RGB(88, 166, 255);
-    const COLORREF panel = RGB(31, 34, 39);
-    return {RGB(24, 26, 30), panel, RGB(232, 234, 237), RGB(232, 234, 237), RGB(120, 128, 136),
-            accent, RGB(240, 128, 128), RGB(52, 57, 64), accent, accent,
-            accent, tileText(accent), lighten(panel, 14), RGB(20, 22, 26), true};
+    const COLORREF accent = RGB(131, 185, 255);
+    const COLORREF panel = RGB(32, 38, 48);
+    return {RGB(23, 27, 34), panel, RGB(236, 240, 247), RGB(236, 240, 247), RGB(179, 191, 208),
+            accent, RGB(244, 202, 136), RGB(59, 69, 85), accent, accent,
+            RGB(151, 196, 255), RGB(21, 36, 56), RGB(39, 62, 92), panel, true};
 }
 
 inline Palette lightPalette()
 {
-    const COLORREF accent = RGB(9, 105, 218);
+    const COLORREF accent = RGB(7, 93, 184);
     const COLORREF panel = RGB(255, 255, 255);
-    return {RGB(246, 247, 249), panel, RGB(24, 26, 30), RGB(24, 26, 30), RGB(110, 118, 126),
-            accent, RGB(180, 40, 40), RGB(210, 214, 219), accent, accent,
-            accent, tileText(accent), lighten(panel, -10), RGB(255, 255, 255), false};
+    return {RGB(245, 247, 251), panel, RGB(32, 43, 60), RGB(32, 43, 60), RGB(86, 101, 123),
+            accent, RGB(128, 83, 27), RGB(221, 228, 238), accent, accent,
+            RGB(8, 102, 201), RGB(255, 255, 255), RGB(234, 243, 255), panel, false};
 }
 
 // ---- the host's look (appearance()["nativeLook"]) --------------------------------------
@@ -252,9 +257,7 @@ inline COLORREF hsl(int hue, int sat, int light)
 
 inline COLORREF dirColor(int depth, const Palette& p)
 {
-    if (p.dark)
-        return hsl(215, 32, std::max(26, 52 - depth * 5));
-    return hsl(215, 32, std::min(88, 74 + depth * 3));
+    return lighten(p.dark?RGB(41,73,67):RGB(214,234,230),depth*(p.dark?7:-5));
 }
 
 // Extension categories, WizTree-style; unlisted extensions hash to a stable
@@ -273,7 +276,7 @@ inline int extHue(const std::wstring& name)
     } groups[] = {
         {L"exe dll sys msi scr com", 275},
         {L"zip rar 7z tar gz bz2 xz zst iso img vhd vhdx wim cab", 45},
-        {L"mp4 mkv avi mov wmv flv webm mp3 wav flac ogg m4a", 20},
+        {L"mp4 mkv avi mov wmv flv webm mp3 wav flac ogg m4a", 275},
         {L"jpg jpeg png gif bmp webp heic psd tiff", 130},
         {L"doc docx pdf ppt pptx xls xlsx txt md log csv odt rtf", 210},
         {L"db sqlite bak old dmp", 350},
@@ -304,9 +307,7 @@ inline int extHue(const std::wstring& name)
 inline COLORREF fileColor(const std::wstring& name, int depth, const Palette& p)
 {
     const int hue = extHue(name);
-    if (p.dark)
-        return hsl(hue, 38, std::max(24, 44 - depth * 2));
-    return hsl(hue, 42, std::min(86, 70 + depth * 2));
+    return p.dark?hsl(hue,25,25+depth*2):hsl(hue,42,89-depth*2);
 }
 
 inline RECT toRect(const Rect& r)
@@ -321,6 +322,7 @@ inline bool inRect(const RECT& r, int x, int y)
 }
 
 struct ViewerState {
+    WindowIcons windowIcons;
     std::mutex m;
     std::condition_variable cv;
     std::thread worker; // the window thread
@@ -333,7 +335,7 @@ struct ViewerState {
     ViewerSpec spec;
     Palette palette;
     int dpi = 96;
-    HFONT font = nullptr, fontBold = nullptr, fontSmall = nullptr;
+    HFONT font = nullptr, fontBold = nullptr, fontSmall = nullptr, fontHeading = nullptr;
 
     // The host's new look, waited for by the window thread (under `m`).
     winshun::Json pendingAppearance;
@@ -346,7 +348,9 @@ struct ViewerState {
     ScanProgress progress;
     std::string lastScanError; // UTF-8, shown in the content area
 
-    std::vector<LargeFile> largest;
+    std::vector<LargeFile> largest; // the current folder's top 1000
+    std::vector<LargeFile> rootLargest; // cached scan-wide ranking
+    std::vector<const Node*> folders; // immediate folders, including empty ones
     std::vector<SkippedDir> skippedList;
     std::uint64_t files = 0, dirs = 0, skippedDirs = 0, skippedLinks = 0;
     std::uint64_t elapsedMs = 0;
@@ -354,11 +358,12 @@ struct ViewerState {
 
     bool sunburst = false;
     const Node* viewRoot = nullptr; // into *tree
-    std::vector<const Node*> drill; // ancestors above viewRoot
+    std::vector<const Node*> drill; // ancestors, excluding the scan root and viewRoot
     std::vector<Tile> tiles;
     std::vector<Slice> slices;
 
     int hoverTile = -1, hoverSlice = -1, hoverTop = -1, hoverCrumb = -1;
+    int hoverDrive = -1; // welcome page: the card under the mouse
     bool hoverScan = false, hoverBack = false, hoverTreemapBtn = false, hoverSunburstBtn = false;
 
     RECT rcClient = {}, rcToolbar = {}, rcContent = {}, rcChart = {}, rcTopList = {}, rcStatus = {};
@@ -367,10 +372,52 @@ struct ViewerState {
     std::vector<const Node*> crumbNodes;
     int topScroll = 0;
 
+    // The right pane's mode: the largest files, or the folders of the level
+    // on display. Single click selects; double click enters a folder.
+    bool listFolders = true;
+    int hoverFolder = -1;
+    RECT rcListFiles = {}, rcListFolders = {}; // the two header tabs
+    RECT rcSkipped = {}; // status-bar link to the unreadable directory details
+
+    // Welcome page only: the drive cards currently on display, parallel to
+    // their rects. Drive metadata is cached when the welcome page opens.
+    std::vector<Drive> driveCards;
+    std::vector<RECT> driveRects;
+
     HWND edit = nullptr;
     WNDPROC origEditProc = nullptr;
     HFONT editFont = nullptr;
     HBRUSH editBrush = nullptr;
+
+    struct Row { const Node* node; std::wstring path; };
+    std::vector<Row> rows;
+    HWND filterEdit = nullptr;
+    WNDPROC origFilterProc = nullptr;
+    std::wstring filter, selectedPath, hoveredPath, notice, pendingPath;
+    const Node* selected = nullptr;
+    const Node* hovered = nullptr;
+    std::vector<std::wstring> history;
+    int historyIndex = -1;
+    bool replayHistory = false, editingAddress = false, sortName = false, ascending = false;
+    bool narrow = false, mobileList = false, dragging = false, tipVisible = false;
+    bool partialView = false, resultIncomplete = false;
+    bool suppressClick = false, fastResult = false;
+    bool keyboardFocus = false;
+    int focusIndex = -1;
+    std::uint32_t unknownSizes=0, orphanRecords=0;
+    int depth = 1;
+    double splitRatio = .58;
+    POINT pointer = {};
+    ULONGLONG scanStarted = 0;
+    std::shared_ptr<ScanResult> completeResult, partialResult;
+    RECT rcHistBack={}, rcHistForward={}, rcAddressEdit={}, rcSource={}, rcProgress={}, rcPreview={};
+    RECT rcOverview={}, rcChartPane={}, rcChartTools={}, rcDepth={}, rcDivider={}, rcDetail={};
+    RECT rcEnter={}, rcLocate={}, rcFilter={}, rcSortName={}, rcSortSize={}, rcListFoot={};
+    RECT rcPrevious={}, rcNext={}, rcShowChart={}, rcShowList={}, rcTheme={}, rcAccounting={}, rcDrive={};
+    // Aggregation owns only minorItems synthetic nodes; data nodes remain in the immutable scan tree.
+    std::deque<Node> groups;
+    std::vector<std::pair<const Node*, std::vector<const Node*>>> groupMembers;
+    std::vector<const Node*> groupFilter;
 
     // metrics, computed from dpi
     int toolbarH = 40, statusH = 22, topPaneW = 300, rowH = 22, topHeaderH = 28;
@@ -386,11 +433,7 @@ inline int S(int v, const ViewerState& s) { return MulDiv(v, s.dpi, 96); }
 
 inline std::wstring joinPath(const std::wstring& base, const std::wstring& name)
 {
-    if (base.empty())
-        return name;
-    if (base.back() == L'\\')
-        return base + name;
-    return base + L"\\" + name;
+    return childPath(base, name);
 }
 
 inline std::wstring nodePath(const ViewerState& s, const Node* n)
@@ -411,6 +454,72 @@ inline std::wstring fileNameOf(const std::wstring& path)
     return slash == std::wstring::npos ? path : path.substr(slash + 1);
 }
 
+// Recompute only on navigation or scan completion, never on paint or resize.
+// Filtering the scan-wide ranking would hide smaller files in a subtree.
+
+inline std::wstring lower(std::wstring v) {
+    for (auto& c : v) c = static_cast<wchar_t>(::towlower(c));
+    return v;
+}
+inline void refreshRows(ViewerState& s) {
+    s.rows.clear(); s.topScroll = 0;
+    if (!s.viewRoot) return;
+    const auto query = lower(s.filter);
+    const auto add = [&](const Node* n, const std::wstring& path) {
+        if (query.empty() || lower(path).find(query) != std::wstring::npos)
+            s.rows.push_back({n, path});
+    };
+    if (s.listFolders) {
+        const auto base = nodePath(s, s.viewRoot);
+        for (const auto& n : s.viewRoot->children)
+            if (s.groupFilter.empty() || std::find(s.groupFilter.begin(),s.groupFilter.end(),&n)!=s.groupFilter.end())
+                add(&n, childPath(base,n.name));
+    } else {
+        for (const auto& f : s.largest) {
+            const Node* n = s.viewRoot;
+            const auto base = childPath(nodePath(s,s.viewRoot), L"");
+            std::size_t pos = base.size();
+            while(n && pos < f.path.size()) {
+                auto end = f.path.find(L'\\',pos);
+                n = findChild(*n,f.path.substr(pos,end==std::wstring::npos?end:end-pos));
+                if(end==std::wstring::npos) break;
+                pos=end+1;
+            }
+            if(n) add(n,f.path);
+        }
+    }
+    std::stable_sort(s.rows.begin(),s.rows.end(),[&](const auto& a,const auto& b){
+        if(s.sortName) {
+            const auto order=::CompareStringOrdinal(a.node->name.c_str(),-1,b.node->name.c_str(),-1,TRUE);
+            return s.ascending?order==CSTR_LESS_THAN:order==CSTR_GREATER_THAN;
+        }
+        return s.ascending ? a.node->logical<b.node->logical : a.node->logical>b.node->logical;
+    });
+}
+inline void rebuildLists(ViewerState& s) {
+    s.folders.clear(); s.largest.clear(); s.topScroll=0;
+    s.hoverTop=s.hoverFolder=-1;
+    if(!s.viewRoot) return;
+    for(const Node& n:s.viewRoot->children) if(n.dir) s.folders.push_back(&n);
+    if(s.viewRoot==s.tree.get() && !s.rootLargest.empty()) s.largest=s.rootLargest;
+    else if(!s.listFolders) {
+        Ctx ctx;
+        const auto visit=[&](const auto& self,const Node& dir,const std::wstring& path)->void {
+            for(const auto& n:dir.children) {
+                if(n.dir) {
+                    if(ctx.top.size()<kMaxLargest || n.logical>ctx.top.top().logical) self(self,n,childPath(path,n.name));
+                } else considerLarge(ctx,n.logical,path,n.name.c_str());
+            }
+        };
+        visit(visit,*s.viewRoot,nodePath(s,s.viewRoot));
+        while(!ctx.top.empty()){s.largest.push_back(ctx.top.top());ctx.top.pop();}
+        std::sort(s.largest.begin(),s.largest.end(),std::greater<>());
+    }
+    refreshRows(s);
+}
+inline int listCount(const ViewerState& s) { return static_cast<int>(s.rows.size()); }
+
+
 // ---- fonts, layout -----------------------------------------------------------------
 
 inline void ensureDpiAwareness()
@@ -424,12 +533,12 @@ inline void ensureDpiAwareness()
     (void)done;
 }
 
-inline HFONT makeOneFont(int pt, bool bold, int dpi)
+inline HFONT makeOneFont(int pt, bool bold, int dpi, bool zh=false)
 {
     const int px = -MulDiv(pt, dpi, 72);
     return ::CreateFontW(px, 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                         DEFAULT_PITCH | FF_DONTCARE, zh?L"Microsoft YaHei UI":L"Segoe UI");
 }
 
 inline void applyEditFont(ViewerState& s)
@@ -438,7 +547,7 @@ inline void applyEditFont(ViewerState& s)
         return;
     if (s.editFont)
         ::DeleteObject(s.editFont);
-    s.editFont = makeOneFont(10, false, s.dpi);
+    s.editFont = makeOneFont(10, false, s.dpi, s.spec.zh);
     ::SendMessageW(s.edit, WM_SETFONT, reinterpret_cast<WPARAM>(s.editFont), TRUE);
 }
 
@@ -450,89 +559,199 @@ inline void makeFonts(ViewerState& s)
         ::DeleteObject(s.fontBold);
     if (s.fontSmall)
         ::DeleteObject(s.fontSmall);
-    s.font = makeOneFont(9, false, s.dpi);
-    s.fontBold = makeOneFont(9, true, s.dpi);
-    s.fontSmall = makeOneFont(8, false, s.dpi);
+    s.font = makeOneFont(10, false, s.dpi, s.spec.zh);
+    s.fontBold = makeOneFont(11, true, s.dpi, s.spec.zh);
+    s.fontSmall = makeOneFont(9, false, s.dpi, s.spec.zh);
+    if(s.fontHeading)::DeleteObject(s.fontHeading);
+    s.fontHeading=makeOneFont(15,true,s.dpi,s.spec.zh);
     applyEditFont(s);
+    if(s.filterEdit)::SendMessageW(s.filterEdit,WM_SETFONT,reinterpret_cast<WPARAM>(s.font),TRUE);
 }
 
-inline int maxRows(const ViewerState& s)
-{
-    const int h = s.rcTopList.bottom - s.rcTopList.top - s.topHeaderH;
-    return h > 0 ? h / s.rowH : 0;
+
+inline int maxRows(const ViewerState& s) {
+    return std::max(0,static_cast<int>(s.rcTopList.bottom-s.rcTopList.top-s.topHeaderH-S(32,s))/s.rowH);
+}
+inline void computeLayout(ViewerState& s) {
+    ::GetClientRect(s.hwnd,&s.rcClient);
+    const int w=s.rcClient.right,h=s.rcClient.bottom,m=S(16,s),gap=S(6,s),bh=S(32,s);
+    const bool compact=w<S(560,s);
+    s.narrow=w<S(760,s); s.rowH=S(37,s); s.topHeaderH=S(122,s);s.statusH=S(26,s);
+    const int nav=S(52,s), addressY=compact?nav+bh+gap:nav;
+    s.rcHistBack={m,nav,m+bh,nav+bh};
+    s.rcHistForward={m+bh+gap,nav,m+2*bh+gap,nav+bh};
+    s.rcBack={m+2*(bh+gap),nav,m+3*bh+2*gap,nav+bh};
+    s.rcScan={w-m-S(100,s),nav,w-m,nav+bh};
+    s.rcTheme={w-m-S(60,s),S(8,s),w-m,S(38,s)};
+    s.rcEdit={compact?m:s.rcBack.right+gap,addressY,compact?w-m:s.rcScan.left-gap,addressY+bh};
+    s.rcAddressEdit={s.rcEdit.right-S(66,s),addressY,s.rcEdit.right,addressY+bh};
+    s.rcSource={m,s.rcEdit.bottom+S(10,s),w-m,s.rcEdit.bottom+S(40,s)};
+    s.rcDrive={m,s.rcSource.top,m+S(100,s),s.rcSource.bottom};
+    s.rcAccounting={s.rcDrive.right+S(8,s),s.rcSource.top,w-m-S(110,s),s.rcSource.bottom};
+    s.rcSkipped={w-m-S(110,s),s.rcSource.top,w-m,s.rcSource.bottom};
+    int y=s.rcSource.bottom+S(10,s);
+    s.rcProgress={};s.rcPreview={};
+    if(s.scanning) {
+        s.rcProgress={m,y,w-m,y+S(compact?110:92,s)};
+        s.rcPreview={w-m-S(142,s),y+S(10,s),w-m-S(10,s),y+S(38,s)};
+        y=s.rcProgress.bottom+S(10,s);
+    }
+    if(!s.notice.empty()) y+=S(28,s);
+    s.rcOverview={m,y,w-m,y+S(38,s)}; y=s.rcOverview.bottom;
+    s.rcShowChart=s.rcShowList={};
+    if(s.narrow && s.tree) {
+        s.rcShowChart={m,y,m+S(80,s),y+bh};s.rcShowList={m+S(84,s),y,m+S(164,s),y+bh};y+=bh+S(8,s);
+    }
+    s.toolbarH=y;s.rcToolbar={0,0,w,y};
+    s.rcStatus={m,h-s.statusH,w-m,h};
+    const int detailHeight=S(s.narrow?146:108,s);
+    s.rcDetail={m,h-s.statusH-detailHeight,w-m,h-s.statusH-S(8,s)};
+    const int bottom=s.tree?s.rcDetail.top-S(12,s):h-s.statusH-S(10,s);
+    s.rcContent={m,y,w-m,std::max(y+S(80,s),bottom)};
+    s.rcTopList={};s.rcDivider={};s.rcChartPane=s.rcContent;
+    if(s.tree) {
+        if(s.narrow) {
+            if(s.mobileList) {s.rcTopList=s.rcContent;s.rcChartPane={};}
+        } else {
+            const int divider=m+static_cast<int>((w-2*m)*s.splitRatio);
+            s.rcChartPane.right=divider;
+            s.rcDivider={divider,y,divider+S(7,s),s.rcContent.bottom};
+            s.rcTopList={s.rcDivider.right,y,w-m,s.rcContent.bottom};
+        }
+    }
+    s.rcChart=s.rcChartPane;
+    s.rcChart.top+=S(94,s);s.rcChart.bottom-=S(32,s);
+    s.rcChart.left+=S(10,s);s.rcChart.right-=S(10,s);
+    s.rcTreemapBtn=s.rcSunburstBtn=s.rcDepth={};
+    if(s.rcChartPane.right>s.rcChartPane.left) {
+        const int right=s.rcChartPane.right-S(12,s);
+        s.rcSunburstBtn={right-S(54,s),y+S(9,s),right,y+S(38,s)};
+        s.rcTreemapBtn={right-S(112,s),y+S(9,s),right-S(58,s),y+S(38,s)};
+        s.rcDepth={s.rcChartPane.left+S(12,s),y+S(55,s),s.rcChartPane.left+S(122,s),y+S(82,s)};
+    }
+    s.rcListFiles=s.rcListFolders=s.rcFilter=s.rcSortName=s.rcSortSize=s.rcListFoot=s.rcPrevious=s.rcNext={};
+    if(s.rcTopList.right>s.rcTopList.left) {
+        const int left=s.rcTopList.left+S(12,s),right=s.rcTopList.right-S(12,s);
+        s.rcListFolders={left,y+S(9,s),left+S(70,s),y+S(38,s)};
+        s.rcListFiles={left+S(74,s),y+S(9,s),left+S(158,s),y+S(38,s)};
+        s.rcFilter={left,y+S(58,s),right,y+S(86,s)};
+        s.rcSortName={left,y+S(96,s),right-S(140,s),y+S(122,s)};
+        s.rcSortSize={right-S(140,s),y+S(96,s),right,y+S(122,s)};
+        s.rcListFoot={left,s.rcTopList.bottom-S(30,s),right,s.rcTopList.bottom};
+        s.rcNext={right-S(54,s),s.rcListFoot.top,right,s.rcListFoot.bottom};
+        s.rcPrevious={right-S(112,s),s.rcListFoot.top,right-S(58,s),s.rcListFoot.bottom};
+    }
+    const int actionY=s.narrow?s.rcDetail.bottom-S(38,s):s.rcDetail.top+S(12,s);
+    const int actionX=s.narrow?s.rcDetail.left+S(12,s):s.rcDetail.right-S(232,s);
+    s.rcEnter={actionX,actionY,actionX+S(100,s),actionY+bh};
+    s.rcLocate={actionX+S(106,s),actionY,actionX+S(220,s),actionY+bh};
+    if(s.edit) {
+        ::MoveWindow(s.edit,s.rcEdit.left+1,s.rcEdit.top+1,s.rcEdit.right-s.rcEdit.left-2,bh-2,TRUE);
+        ::ShowWindow(s.edit,(!s.tree||s.editingAddress)?SW_SHOW:SW_HIDE);
+    }
+    if(s.filterEdit) {
+        ::MoveWindow(s.filterEdit,s.rcFilter.left+1,s.rcFilter.top+1,std::max(0L,s.rcFilter.right-s.rcFilter.left-2),S(28,s)-2,TRUE);
+        ::ShowWindow(s.filterEdit,s.rcFilter.right>s.rcFilter.left?SW_SHOW:SW_HIDE);
+    }
+}
+struct FocusTarget { RECT rect; HWND child = nullptr; bool list = false; };
+inline std::vector<FocusTarget> focusTargets(const ViewerState& s) {
+    std::vector<FocusTarget> targets;
+    const auto add=[&](const RECT& r,bool enabled=true,HWND child=nullptr,bool list=false) {
+        if(enabled&&r.right>r.left&&r.bottom>r.top)targets.push_back({r,child,list});
+    };
+    add(s.rcHistBack,s.historyIndex>0);
+    add(s.rcHistForward,s.historyIndex+1<int(s.history.size()));
+    add(s.rcBack,s.viewRoot&&s.viewRoot!=s.tree.get());
+    if(!s.tree||s.editingAddress)add(s.rcEdit,true,s.edit);
+    else {
+        for(const auto& crumb:s.crumbRects)add(crumb);
+        add(s.rcAddressEdit);
+    }
+    add(s.rcScan);add(s.rcDrive);add(s.rcAccounting);add(s.rcSkipped);add(s.rcTheme);
+    add(s.rcPreview,s.scanning);add(s.rcShowChart);add(s.rcShowList);
+    add(s.rcTreemapBtn,s.tree!=nullptr);add(s.rcSunburstBtn,s.tree!=nullptr);add(s.rcDepth,s.tree!=nullptr);
+    add(s.rcListFolders);add(s.rcListFiles);add(s.rcFilter,true,s.filterEdit);
+    add(s.rcSortName);add(s.rcSortSize);
+    RECT rows=s.rcTopList;rows.top+=s.topHeaderH;rows.bottom=s.rcListFoot.top;
+    add(rows,!s.rows.empty(),nullptr,true);
+    add(s.rcPrevious,s.topScroll>0);add(s.rcNext,s.topScroll+maxRows(s)<listCount(s));
+    add(s.rcEnter,s.selected&&s.selected->dir);add(s.rcLocate,s.selected!=nullptr);
+    for(const auto& drive:s.driveRects)add(drive);
+    return targets;
+}
+inline void cycleFocus(ViewerState& s,int direction) {
+    const auto targets=focusTargets(s);
+    if(targets.empty())return;
+    int index=s.keyboardFocus?s.focusIndex:-1;
+    const auto focused=::GetFocus();
+    for(int i=0;i<int(targets.size());++i)if(targets[i].child&&targets[i].child==focused)index=i;
+    if(index<0)index=direction>0?-1:0;
+    s.focusIndex=(index+direction+int(targets.size()))%int(targets.size());
+    s.keyboardFocus=true;
+    const auto& target=targets[s.focusIndex];
+    ::SetFocus(target.child?target.child:s.hwnd);
+    ::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+inline void drawKeyboardFocus(const ViewerState& s,HDC dc) {
+    if(!s.keyboardFocus||::GetFocus()!=s.hwnd)return;
+    const auto targets=focusTargets(s);
+    if(s.focusIndex<0||s.focusIndex>=int(targets.size())||targets[s.focusIndex].child)return;
+    RECT rect=targets[s.focusIndex].rect;
+    ::InflateRect(&rect,-S(3,s),-S(3,s));
+    ::DrawFocusRect(dc,&rect);
 }
 
-inline void computeLayout(ViewerState& s)
-{
-    ::GetClientRect(s.hwnd, &s.rcClient);
-    const int w = s.rcClient.right, h = s.rcClient.bottom;
-    s.toolbarH = S(40, s);
-    s.statusH = S(22, s);
-    s.topPaneW = S(300, s);
-    s.rowH = S(22, s);
-    s.topHeaderH = S(28, s);
-    s.rcToolbar = {0, 0, w, s.toolbarH};
-    s.rcStatus = {0, h - 2 * s.statusH, w, h};
-    s.rcContent = {0, s.toolbarH, w, h - 2 * s.statusH};
-
-    int x = S(8, s);
-    const int btnY = S(7, s), btnH = S(26, s);
-    s.rcScan = {0, btnY, 0, btnY + btnH};
-    s.rcScan.left = w - S(8, s) - S(72, s);
-    s.rcScan.right = w - S(8, s);
-    s.rcTreemapBtn = {0, btnY, 0, btnY + btnH};
-    s.rcTreemapBtn.right = s.rcScan.left - S(8, s);
-    s.rcTreemapBtn.left = s.rcTreemapBtn.right - S(72, s);
-    s.rcSunburstBtn = s.rcTreemapBtn;
-    s.rcSunburstBtn.right = s.rcTreemapBtn.left - S(4, s);
-    s.rcSunburstBtn.left = s.rcSunburstBtn.right - S(80, s);
-    s.rcBack = s.rcSunburstBtn;
-    s.rcBack.right = s.rcSunburstBtn.left - S(8, s);
-    s.rcBack.left = s.rcBack.right - S(56, s);
-    s.rcEdit = {x, btnY, std::max(x + S(120, s), static_cast<int>(s.rcBack.left) - S(8, s)), btnY + btnH};
-    if (s.edit)
-        ::MoveWindow(s.edit, s.rcEdit.left, s.rcEdit.top, s.rcEdit.right - s.rcEdit.left,
-                     s.rcEdit.bottom - s.rcEdit.top, TRUE);
-
-    const bool hasTop = s.tree && !s.largest.empty();
-    if (hasTop) {
-        s.rcTopList = {w - s.topPaneW, s.rcContent.top, w, s.rcContent.bottom};
-        s.rcChart = {s.rcContent.left, s.rcContent.top, s.rcTopList.left, s.rcContent.bottom};
+inline std::vector<const Node*> visibleChildren(ViewerState& s,const Node& parent,double area) {
+    std::vector<const Node*> shown,minorItems;
+    for(const auto& n:parent.children) {
+        if(!n.logical) continue;
+        if(parent.logical && area*static_cast<double>(n.logical)/parent.logical<S(9,s)*S(9,s)) minorItems.push_back(&n);
+        else shown.push_back(&n);
+    }
+    if(!minorItems.empty()) {
+        s.groups.emplace_back();auto& g=s.groups.back();g.name=(s.spec.zh?L"其他 ":L"Other ")+std::to_wstring(minorItems.size())+(s.spec.zh?L" 项":L" items");
+        for(auto n:minorItems){g.logical+=n->logical;g.files+=n->dir?n->files:1;}
+        shown.push_back(&g);s.groupMembers.push_back({&g,std::move(minorItems)});
+    }
+    return shown;
+}
+inline void relayoutView(ViewerState& s) {
+    s.tiles.clear();s.slices.clear();s.groups.clear();s.groupMembers.clear();
+    s.hoverTile=s.hoverSlice=s.hoverTop=s.hoverCrumb=s.hoverFolder=-1;s.hovered=nullptr;s.hoveredPath.clear();s.tipVisible=false;
+    s.crumbRects.clear();s.crumbNodes.clear();
+    if(!s.tree||!s.viewRoot||s.rcChart.right<=s.rcChart.left||s.rcChart.bottom<=s.rcChart.top) return;
+    const auto base=nodePath(s,s.viewRoot);
+    Rect area{double(s.rcChart.left),double(s.rcChart.top),double(s.rcChart.right-s.rcChart.left),double(s.rcChart.bottom-s.rcChart.top)};
+    auto kids=visibleChildren(s,*s.viewRoot,area.area());
+    if(!s.sunburst) {
+        treemapTiles(*s.viewRoot,area,0,0,s.tiles,base,0,&kids);
+        if(s.depth==2) {
+            const auto parents=s.tiles;
+            s.tiles.clear();
+            for(const auto& t:parents) {
+                s.tiles.push_back(t);
+                if(!t.node->dir||t.rect.h<S(70,s)||t.rect.w<S(55,s)) continue;
+                Rect inside{t.rect.x+2,t.rect.y+S(27,s),t.rect.w-4,t.rect.h-S(29,s)};
+                auto sub=visibleChildren(s,*t.node,inside.area());
+                treemapTiles(*t.node,inside,1,0,s.tiles,t.path,1,&sub);
+            }
+        }
     } else {
-        s.rcTopList = {};
-        s.rcChart = s.rcContent;
+        const double radius=std::min(area.w,area.h)/2-S(8,s),hole=std::max(12.0,radius*.44);
+        if(radius<=hole) return;
+        const double ring=(radius-hole)/s.depth;
+        sunburstSlices(*s.viewRoot,0,0,hole,ring,-3.141592653589793/2,3*3.141592653589793/2,0,0,s.slices,base,0,&kids);
+        if(s.depth==2) {
+            const auto parents=s.slices;
+            for(const auto& sl:parents) if(sl.node->dir) {
+                auto sub=visibleChildren(s,*sl.node,(sl.a1-sl.a0)*radius*ring);
+                sunburstSlices(*sl.node,0,0,hole+ring,ring,sl.a0,sl.a1,1,0,s.slices,sl.path,1,&sub);
+            }
+        }
     }
 }
 
-// Re-runs the active layout for the current view root and chart rect.
-inline void relayoutView(ViewerState& s)
-{
-    s.tiles.clear();
-    s.slices.clear();
-    s.hoverTile = s.hoverSlice = s.hoverTop = s.hoverCrumb = -1;
-    if (!s.tree || !s.viewRoot)
-        return;
-    const std::wstring base = nodePath(s, s.viewRoot);
-    if (!s.sunburst) {
-        const double dpiF = static_cast<double>(s.dpi) / 96.0;
-        const double minArea = 24.0 * dpiF * dpiF;
-        const Rect area {static_cast<double>(s.rcChart.left), static_cast<double>(s.rcChart.top),
-                         static_cast<double>(s.rcChart.right - s.rcChart.left),
-                         static_cast<double>(s.rcChart.bottom - s.rcChart.top)};
-        treemapTiles(*s.viewRoot, area, 0, minArea, s.tiles, base);
-    } else {
-        const double cx = (s.rcChart.left + s.rcChart.right) / 2.0;
-        const double cy = (s.rcChart.top + s.rcChart.bottom) / 2.0;
-        const double rMax =
-            std::min(s.rcChart.right - s.rcChart.left, s.rcChart.bottom - s.rcChart.top) / 2.0 - S(12, s);
-        const double ringW = S(34, s);
-        const double r0 = std::min<double>(S(84, s),
-                                           std::max(rMax - 2 * ringW, static_cast<double>(S(24, s))));
-        if (rMax > r0)
-            sunburstSlices(*s.viewRoot, cx, cy, r0, ringW, -3.14159265358979323846 / 2,
-                           -3.14159265358979323846 / 2 + 6.28318530717958647692, 0, 0.003, s.slices, base);
-    }
-}
 
 // ---- scanning ----------------------------------------------------------------------
 
@@ -542,42 +761,77 @@ inline void joinScanThread(ViewerState& s)
         s.scanThread.join();
 }
 
-inline void scanThreadMain(HWND hwnd, std::wstring prefixedPath)
-{
-    ViewerState& s = state();
-    auto* result = new ScanResult();
-    scanPath(prefixedPath,
-             [hwnd](const ScanProgress& p) {
-                 auto* copy = new ScanProgress(p);
-                 if (!::PostMessageW(hwnd, WM_APP_PROGRESS, 0, reinterpret_cast<LPARAM>(copy)))
-                     delete copy;
-                 return true;
-             },
-             s.cancelFlag, result);
-    if (!::PostMessageW(hwnd, WM_APP_DONE, 0, reinterpret_cast<LPARAM>(result)))
-        delete result;
+
+inline void scanThreadMain(HWND hwnd,std::wstring path,bool fast) {
+    ViewerState& s=state();auto* result=new ScanResult();
+    try {
+        ULONGLONG lastPost=0;
+        std::wstring fallback;
+        const ProgressFn progress=[&](const ScanProgress& p) {
+            if(s.cancelFlag)return false;
+            const auto now=::GetTickCount64();if(now-lastPost<100)return true;lastPost=now;
+            auto* copy=new ScanProgress(p);copy->fallbackReason=fallback;if(!::PostMessageW(hwnd,WM_APP_PROGRESS,0,reinterpret_cast<LPARAM>(copy)))delete copy;return true;
+        };
+        const SnapshotFn snapshot=[hwnd](std::shared_ptr<ScanResult> part) {
+            auto* packet=new std::shared_ptr<ScanResult>(std::move(part));
+            if(!::PostMessageW(hwnd,WM_APP_PARTIAL,0,reinterpret_cast<LPARAM>(packet)))delete packet;
+        };
+        bool ordinary=true;
+        if(fast) {
+            std::wstring reason;
+            const auto outcome=helper::scan(hwnd,path,progress,snapshot,s.cancelFlag,*result,reason);
+            ordinary=outcome==helper::Outcome::Fallback;
+            if(outcome==helper::Outcome::Cancelled)result->cancelled=true;
+            if(ordinary){fallback=reason;ScanProgress pg;pg.current=path;lastPost=0;progress(pg);}
+        }
+        if(ordinary&&!s.cancelFlag)scanPath(path,progress,s.cancelFlag,result,snapshot);
+        else if(s.cancelFlag)result->cancelled=true;
+        result->fallbackReason=fallback;
+    } catch(const std::exception& e){result->error=std::string("Scan failed: ")+e.what();}
+    if(!::PostMessageW(hwnd,WM_APP_DONE,0,reinterpret_cast<LPARAM>(result)))delete result;
 }
 
 inline void startScan(ViewerState& s, const std::wstring& rawPath)
 {
+    if (s.scanning)
+        return;
     std::wstring prefixed;
     const std::wstring display = normalizePath(rawPath, &prefixed);
     if (display.empty()) {
         s.lastScanError = s.spec.zh ? "路径为空，请先输入一个要扫描的路径。"
                                     : "The path is empty; type a path to scan first.";
+        s.driveRects.clear();
+        computeLayout(s);
+        relayoutView(s);
         ::InvalidateRect(s.hwnd, nullptr, FALSE);
         return;
     }
-    if (s.scanning)
-        return;
+
+    bool fast=false;
+    if(mft::eligible(display)) {
+        const int choice=::MessageBoxW(s.hwnd,s.spec.zh?
+            L"快速扫描只读取 NTFS 文件记录，不读取文件内容。\r\n仅独立扫描助手按需申请管理员权限，主界面保持普通权限。\r\n\r\n是：授权快速扫描\r\n否：普通扫描\r\n取消：返回\r\n拒绝 Windows 授权或助手失败时将自动使用普通扫描。":
+            L"Fast scanning reads NTFS metadata only. Only the short-lived helper requests administrator access; this window stays unelevated.\r\n\r\nYes: fast scan\r\nNo: standard scan\r\nCancel: return\r\nDeclining Windows authorization or a helper failure falls back to standard scanning.",
+            s.spec.zh?L"选择扫描方式":L"Choose scan mode",MB_YESNOCANCEL|MB_ICONINFORMATION);
+        if(choice==IDCANCEL)return;fast=choice==IDYES;
+    }
     s.scanning = true;
+    s.scanStarted=::GetTickCount64();s.partialResult.reset();s.partialView=!s.completeResult;
+    s.notice.clear();s.pendingPath.clear();s.editingAddress=false;
+    ::SetTimer(s.hwnd,1,100,nullptr);
     s.cancelled = false;
     s.lastScanError.clear();
     s.cancelFlag = false;
     s.progress = ScanProgress {};
     s.lastPath = display;
+    if(!s.tree)::SetWindowTextW(s.edit, display.c_str());
+    s.driveCards.clear();
+    s.driveRects.clear();
+    s.hoverDrive = -1;
+    computeLayout(s);
+    relayoutView(s);
     joinScanThread(s);
-    s.scanThread = std::thread(scanThreadMain, s.hwnd, prefixed);
+    s.scanThread = std::thread(scanThreadMain, s.hwnd, display,fast);
     ::InvalidateRect(s.hwnd, nullptr, FALSE);
 }
 
@@ -616,21 +870,37 @@ inline void drawTextIn(HDC hdc, const std::wstring& text, RECT r, COLORREF color
 inline void drawButton(ViewerState& s, HDC hdc, const RECT& r, const std::wstring& label, bool active,
                        bool hover)
 {
-    fillWith(hdc, r, active ? s.palette.accentFill
-                            : hover ? s.palette.hover : s.palette.panel);
-    frameWith(hdc, r, active ? s.palette.accentFill : s.palette.border);
-    const COLORREF text = active ? s.palette.accentText : s.palette.text;
+    const bool disabled=(&r==&s.rcHistBack&&s.historyIndex<=0)
+        ||(&r==&s.rcHistForward&&s.historyIndex+1>=int(s.history.size()))
+        ||(&r==&s.rcBack&&(!s.viewRoot||s.viewRoot==s.tree.get()))
+        ||(&r==&s.rcEnter&&(!s.selected||!s.selected->dir))
+        ||(&r==&s.rcLocate&&!s.selected)
+        ||(&r==&s.rcPrevious&&s.topScroll==0)
+        ||(&r==&s.rcNext&&s.topScroll+maxRows(s)>=listCount(s));
+    hover=hover||(!disabled&&inRect(r,s.pointer.x,s.pointer.y));
+    const bool primary=active&&(&r==&s.rcScan||&r==&s.rcEnter);
+    const auto fill=primary?s.palette.accentFill:hover||active?s.palette.hover:s.palette.panel;
+    const auto brush=::CreateSolidBrush(fill);const auto pen=::CreatePen(PS_SOLID,1,active?s.palette.accent:s.palette.border);
+    const auto oldBrush=::SelectObject(hdc,brush),oldPen=::SelectObject(hdc,pen);
+    ::RoundRect(hdc,r.left,r.top,r.right,r.bottom,S(8,s),S(8,s));
+    ::SelectObject(hdc,oldBrush);::SelectObject(hdc,oldPen);::DeleteObject(brush);::DeleteObject(pen);
+    const COLORREF text = disabled?s.palette.muted:primary?s.palette.accentText:active?s.palette.accent:s.palette.text;
     RECT tr = r;
     ::OffsetRect(&tr, 0, 1);
     drawTextIn(hdc, label, tr, text, DT_CENTER | DT_VCENTER);
 }
 
 // The hover status line for one node: kind, size, counts, unreadable entries.
+inline bool sizeUnknown(const Node& n) { return n.skippedChildren && !n.logical; }
+inline std::wstring sizeLabel(const ViewerState& s, const Node& n) {
+    if (sizeUnknown(n)) return s.spec.zh ? L"大小未知" : L"Size unknown";
+    return winshun::wide(formatBytes(n.logical, s.spec.zh));
+}
 inline std::wstring describe(const ViewerState& s, const Node* n)
 {
     const bool zh = s.spec.zh;
     std::wstring t = n->dir ? (zh ? L"文件夹 · " : L"folder · ") : (zh ? L"文件 · " : L"file · ");
-    t += winshun::wide(formatBytes(n->logical, zh));
+    t += sizeLabel(s, *n);
     // The share of the node inside its parent, when it is a child in the
     // displayed tree (the view root itself has no parent there).
     if (s.viewRoot && n != s.viewRoot && s.viewRoot->logical > 0 && n->logical > 0)
@@ -657,7 +927,7 @@ inline void drawTiles(ViewerState& s, HDC hdc)
             continue;
         COLORREF fill =
             t.node->dir ? dirColor(t.depth, s.palette) : fileColor(t.node->name, t.depth, s.palette);
-        if (static_cast<int>(i) == s.hoverTile)
+        if (t.node == s.hovered || t.node == s.selected)
             fill = lighten(fill, s.palette.dark ? 18 : -14);
         fillWith(hdc, r, fill);
         frameWith(hdc, r, s.palette.bg);
@@ -667,7 +937,7 @@ inline void drawTiles(ViewerState& s, HDC hdc)
         if (w >= S(48, s) && h >= S(15, s)) {
             const COLORREF text = tileText(fill);
             drawTextIn(hdc, t.node->name, rr, text, DT_LEFT | DT_END_ELLIPSIS);
-            if (h >= S(28, s)) {
+            if (h >= S(40, s) && !(t.node->dir && s.depth==2 && t.depth==0)) {
                 RECT sr = rr;
                 sr.top += S(14, s);
                 const COLORREF sub = s.palette.dark ? lighten(text, -70) : lighten(text, 70);
@@ -675,7 +945,7 @@ inline void drawTiles(ViewerState& s, HDC hdc)
                            DT_LEFT | DT_END_ELLIPSIS);
             }
         }
-        if (static_cast<int>(i) == s.hoverTile) {
+        if (t.node == s.hovered || t.node == s.selected) {
             frameWith(hdc, r, s.palette.accent);
             RECT r2 = r;
             ::InflateRect(&r2, -1, -1);
@@ -696,10 +966,10 @@ inline void drawSlices(ViewerState& s, HDC hdc)
         const Slice& sl = s.slices[i];
         COLORREF fill =
             sl.dir ? dirColor(sl.depth, s.palette) : fileColor(sl.node->name, sl.depth, s.palette);
-        if (static_cast<int>(i) == s.hoverSlice)
+        if (sl.node == s.hovered || sl.node == s.selected)
             fill = lighten(fill, s.palette.dark ? 22 : -18);
         ::SetDCBrushColor(hdc, fill);
-        ::SetDCPenColor(hdc, s.palette.bg);
+        ::SetDCPenColor(hdc, sl.node==s.selected||sl.node==s.hovered?s.palette.accent:s.palette.panel);
         const int steps = std::max(2, static_cast<int>(std::ceil((sl.a1 - sl.a0) / 0.03)));
         std::vector<POINT> pts;
         pts.reserve(static_cast<std::size_t>(steps) * 2 + 2);
@@ -722,8 +992,10 @@ inline void drawSlices(ViewerState& s, HDC hdc)
     // the center line, the total below.
     const std::wstring name = s.viewRoot ? s.viewRoot->name : std::wstring();
     const std::wstring total = winshun::wide(formatBytes(s.viewRoot ? s.viewRoot->logical : 0, s.spec.zh));
-    const RECT hole {static_cast<LONG>(cx - S(80, s)), static_cast<LONG>(cy - S(26, s)),
-                     static_cast<LONG>(cx + S(80, s)), static_cast<LONG>(cy + S(26, s))};
+    if(s.slices.front().r0<S(32,s))return;
+    const auto inner=std::min<double>(s.slices.front().r0*.8,S(80,s));
+    const RECT hole {static_cast<LONG>(cx - inner), static_cast<LONG>(cy - S(26, s)),
+                     static_cast<LONG>(cx + inner), static_cast<LONG>(cy + S(26, s))};
     RECT nr = hole;
     nr.bottom = static_cast<LONG>(cy);
     RECT tr = hole;
@@ -734,160 +1006,115 @@ inline void drawSlices(ViewerState& s, HDC hdc)
     drawTextIn(hdc, total, tr, s.palette.muted, DT_CENTER | DT_TOP | DT_END_ELLIPSIS);
 }
 
-inline void drawTopList(ViewerState& s, HDC hdc)
-{
-    fillWith(hdc, s.rcTopList, s.palette.panel);
-    frameWith(hdc, s.rcTopList, s.palette.border);
-    RECT hr = s.rcTopList;
-    hr.bottom = hr.top + s.topHeaderH;
-    fillWith(hdc, hr, lighten(s.palette.panel, s.palette.dark ? 8 : -8));
-    const std::wstring title = (s.spec.zh ? L"最大的文件 (" : L"Largest files (")
-                             + winshun::wide(formatCount(s.largest.size())) + L")";
-    RECT tr = hr;
-    ::InflateRect(&tr, -S(10, s), 0);
-    drawTextIn(hdc, title, tr, s.palette.muted, DT_LEFT | DT_VCENTER);
 
-    const int rows = maxRows(s);
-    const int maxScroll = std::max(0, static_cast<int>(s.largest.size()) - rows);
-    s.topScroll = std::clamp(s.topScroll, 0, maxScroll);
-    for (int i = 0; i < rows; ++i) {
-        const std::size_t idx = static_cast<std::size_t>(i + s.topScroll);
-        if (idx >= s.largest.size())
-            break;
-        const LargeFile& f = s.largest[idx];
-        RECT rr = s.rcTopList;
-        rr.top = s.rcTopList.top + s.topHeaderH + i * s.rowH;
-        rr.bottom = rr.top + s.rowH;
-        rr.left += S(8, s);
-        rr.right -= S(8, s);
-        if (static_cast<int>(idx) == s.hoverTop)
-            fillWith(hdc, rr, s.palette.hover);
-        RECT sw = rr;
-        sw.right = sw.left + S(10, s);
-        sw.top += (s.rowH - S(10, s)) / 2;
-        sw.bottom = sw.top + S(10, s);
-        fillWith(hdc, sw, fileColor(fileNameOf(f.path), 0, s.palette));
-        const std::wstring sizeText = winshun::wide(formatBytes(f.logical, s.spec.zh));
-        SIZE sz {};
-        ::GetTextExtentPoint32W(hdc, sizeText.c_str(), static_cast<int>(sizeText.size()), &sz);
-        RECT sizeR = rr;
-        sizeR.left = std::max(sizeR.left + S(16, s), sizeR.right - sz.cx);
-        drawTextIn(hdc, sizeText, sizeR, s.palette.muted, DT_RIGHT | DT_VCENTER);
-        RECT nameR = rr;
-        nameR.left = sw.right + S(6, s);
-        nameR.right = std::max(nameR.left, sizeR.left - S(8, s));
-        drawTextIn(hdc, fileNameOf(f.path), nameR, s.palette.text, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+inline std::wstring share(const ViewerState& s,std::uint64_t bytes) {
+    wchar_t b[40];std::swprintf(b,40,L"%.1f%%",s.viewRoot&&s.viewRoot->logical?100.0*bytes/s.viewRoot->logical:0.0);return b;
+}
+inline void drawTopList(ViewerState& s,HDC dc) {
+    fillWith(dc,s.rcTopList,s.palette.panel);frameWith(dc,s.rcTopList,s.palette.border);
+    fillWith(dc,s.rcFilter,s.palette.input);frameWith(dc,s.rcFilter,s.palette.border);
+    drawButton(s,dc,s.rcListFolders,s.spec.zh?L"当前层":L"Current",s.listFolders,false);
+    drawButton(s,dc,s.rcListFiles,s.spec.zh?L"最大文件":L"Largest",!s.listFolders,false);
+    drawTextIn(dc,(s.spec.zh?L"名称":L"Name")+std::wstring(s.sortName?(s.ascending?L" ↑":L" ↓"):L""),s.rcSortName,s.palette.muted,DT_VCENTER);
+    drawTextIn(dc,(s.spec.zh?L"大小":L"Size")+std::wstring(!s.sortName?(s.ascending?L" ↑":L" ↓"):L"")+L"          %",s.rcSortSize,s.palette.muted,DT_RIGHT|DT_VCENTER);
+    const int count=listCount(s),rows=maxRows(s);s.topScroll=std::clamp(s.topScroll,0,std::max(0,count-rows));
+    for(int i=0;i<rows&&i+s.topScroll<count;++i) {
+        const auto& item=s.rows[i+s.topScroll];const auto* n=item.node;
+        RECT row{s.rcTopList.left+1,s.rcTopList.top+s.topHeaderH+i*s.rowH,s.rcTopList.right-1,s.rcTopList.top+s.topHeaderH+(i+1)*s.rowH};
+        if(s.selected==n) fillWith(dc,row,s.palette.hover);
+        else if(s.hovered==n) fillWith(dc,row,s.palette.bg);
+        fillWith(dc,{row.left,row.bottom-1,row.right,row.bottom},s.palette.border);
+        RECT sw{row.left+S(12,s),row.top+S(15,s),row.left+S(21,s),row.top+S(24,s)};
+        fillWith(dc,sw,n->dir?dirColor(0,s.palette):fileColor(n->name,0,s.palette));
+        RECT name{sw.right+S(8,s),row.top,row.right-S(155,s),row.bottom};
+        drawTextIn(dc,(n->dir?L"› ":L"")+n->name,name,s.selected==n?s.palette.accent:s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+        RECT size{row.right-S(153,s),row.top,row.right-S(68,s),row.bottom};
+        drawTextIn(dc,n->skippedChildren&&n->logical==0?L"—":winshun::wide(formatBytes(n->logical,s.spec.zh)),size,s.palette.text,DT_RIGHT|DT_VCENTER);
+        RECT percent{size.right+S(5,s),row.top,row.right-S(10,s),row.bottom};
+        drawTextIn(dc,n->skippedChildren&&n->logical==0?L"—":share(s,n->logical),percent,s.palette.muted,DT_RIGHT|DT_VCENTER);
     }
+    if(!count) {RECT r=s.rcTopList;r.top+=s.topHeaderH+S(12,s);drawTextIn(dc,s.spec.zh?L"没有匹配的条目":L"No matching items",r,s.palette.muted,DT_CENTER);}
+    RECT foot=s.rcListFoot;foot.right=s.rcPrevious.left-S(6,s);
+    drawTextIn(dc,std::to_wstring(count)+(s.spec.zh?L" 项 · 双击目录进入":L" items · double-click to enter"),foot,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+    drawButton(s,dc,s.rcPrevious,s.spec.zh?L"上一页":L"Prev",false,false);
+    drawButton(s,dc,s.rcNext,s.spec.zh?L"下一页":L"Next",false,false);
+}
+inline void drawBreadcrumb(ViewerState& s,HDC dc) {
+    s.crumbNodes.clear();s.crumbRects.clear();
+    if(!s.tree||s.editingAddress) return;
+    fillWith(dc,s.rcEdit,s.palette.panel);frameWith(dc,s.rcEdit,s.palette.border);
+    std::vector<const Node*> chain{s.tree.get()};for(auto n:s.drill)chain.push_back(n);
+    if(s.viewRoot!=s.tree.get())chain.push_back(s.viewRoot);
+    const int available=s.rcAddressEdit.left-s.rcEdit.left-S(10,s);
+    auto needed=[&](const std::vector<const Node*>& nodes){int total=0;for(auto n:nodes){SIZE z{};::GetTextExtentPoint32W(dc,n->name.c_str(),int(n->name.size()),&z);total+=std::min<int>(z.cx+S(22,s),S(150,s));}return total;};
+    bool collapsed=false;
+    while(chain.size()>3 && needed(chain)>available) {chain.erase(chain.begin()+1);collapsed=true;}
+    int x=s.rcEdit.left+S(5,s);
+    for(std::size_t i=0;i<chain.size();++i) {
+        const auto n=chain[i];const std::wstring label=(collapsed&&i==1?L"… › ":i>0?L"› ":L"")+n->name;
+        SIZE z{};::GetTextExtentPoint32W(dc,label.c_str(),int(label.size()),&z);
+        const int reserve=int(chain.size()-i-1)*S(55,s);
+        const int width=std::min<int>({z.cx+S(22,s),S(190,s),std::max<int>(S(25,s),s.rcAddressEdit.left-x-reserve)});
+        RECT r{x,s.rcEdit.top,x+width,s.rcEdit.bottom};
+        drawTextIn(dc,label,r,n==s.viewRoot?s.palette.accent:s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+        s.crumbNodes.push_back(n);s.crumbRects.push_back(r);x+=width;
+    }
+    drawTextIn(dc,s.spec.zh?L"编辑路径":L"Edit path",s.rcAddressEdit,s.palette.muted,DT_CENTER|DT_VCENTER);
+}
+inline void drawStatusRows(ViewerState& s,HDC dc) {
+    if(s.tree&&s.viewRoot) {
+        fillWith(dc,s.rcDetail,s.palette.panel);frameWith(dc,s.rcDetail,s.palette.border);
+        const Node* n=s.selected?s.selected:s.viewRoot;
+        const auto path=s.selected?s.selectedPath:nodePath(s,s.viewRoot);
+        RECT line=s.rcDetail;::InflateRect(&line,-S(12,s),-S(8,s));
+        if(!s.narrow)line.right=s.rcEnter.left-S(12,s);
+        line.bottom=line.top+S(24,s);
+        drawTextIn(dc,(s.selected?(s.spec.zh?L"已选中 · ":L"Selected · "):(s.spec.zh?L"当前目录 · ":L"Current · "))+n->name,line,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+        line.top+=S(26,s);line.bottom+=S(26,s);line.right=s.rcDetail.right-S(12,s);
+        drawTextIn(dc,path,line,s.palette.muted,DT_VCENTER|DT_PATH_ELLIPSIS);
+        line.top+=S(25,s);line.bottom+=S(25,s);
+        drawTextIn(dc,sizeLabel(s,*n)+(sizeUnknown(*n)?L"":(s.spec.zh?L" 逻辑大小 · ":L" logical · ")+share(s,n->logical))+L" · "+winshun::wide(formatCount(n->dir?n->files:1))+(s.spec.zh?L" 个文件":L" files"),line,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+        drawButton(s,dc,s.rcEnter,s.spec.zh?L"进入文件夹":L"Enter folder",s.selected&&s.selected->dir,false);
+        drawButton(s,dc,s.rcLocate,s.spec.zh?L"定位到所在目录":L"Locate parent",false,false);
+    }
+    std::wstring status=s.hovered?s.hoveredPath+(s.spec.zh?L" · ":L" · ")+describe(s,s.hovered):s.selected?s.selectedPath:(s.spec.zh?L"悬停查看完整路径；单击后详情保持":L"Hover for path; click to keep details");
+    RECT r=s.rcStatus;
+    if(!s.narrow)r.right-=S(180,s);
+    drawTextIn(dc,status,r,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+    if(!s.narrow){r.left=r.right;r.right=s.rcStatus.right;drawTextIn(dc,L"Alt+←  /  Alt+→    Ctrl+L",r,s.palette.muted,DT_RIGHT|DT_VCENTER);}
+}
+inline void drawProgressBox(ViewerState& s,HDC dc) {
+    if(!s.scanning)return;
+    fillWith(dc,s.rcProgress,s.palette.hover);frameWith(dc,s.rcProgress,s.palette.border);
+    RECT r=s.rcProgress;::InflateRect(&r,-S(12,s),-S(8,s));r.right=s.rcPreview.left-S(8,s);r.bottom=r.top+S(26,s);
+    drawTextIn(dc,s.progress.fast?(s.spec.zh?L"NTFS 快速扫描 · 读取 MFT":L"NTFS fast scan · reading MFT"):(s.spec.zh?L"普通扫描 · 正在枚举目录":L"Standard scan · enumerating"),r,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+    drawButton(s,dc,s.rcPreview,s.partialView?(s.spec.zh?L"查看上次完成结果":L"Previous result"):(s.spec.zh?L"查看本轮已发现":L"View partial result"),false,false);
+    r.top+=S(30,s);r.bottom+=S(30,s);r.right=s.rcProgress.right-S(12,s);
+    drawTextIn(dc,winshun::wide(formatCount(s.progress.files))+(s.spec.zh?L" 个文件 · ":L" files · ")+winshun::wide(formatBytes(s.progress.bytes,s.spec.zh))+L" · "+std::to_wstring((::GetTickCount64()-s.scanStarted)/1000)+L" s",r,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+    r.top+=S(24,s);r.bottom+=S(24,s);
+    drawTextIn(dc,s.progress.current,r,s.palette.muted,DT_VCENTER|DT_PATH_ELLIPSIS);
+    RECT track{s.rcProgress.left+S(12,s),s.rcProgress.bottom-S(5,s),s.rcProgress.right-S(12,s),s.rcProgress.bottom-S(2,s)};
+    fillWith(dc,track,s.palette.border);const int span=(track.right-track.left)/5;
+    track.left+=int((::GetTickCount64()/10)%800)*(track.right-track.left-span)/800;track.right=track.left+span;fillWith(dc,track,s.palette.accent);
+}
+inline void drawTooltip(ViewerState& s,HDC dc) {
+    if(!s.tipVisible||!s.hovered)return;
+    const int width=std::min<int>(S(340,s),s.rcClient.right-S(20,s));
+    RECT measure{0,0,width-S(24,s),0};
+    ::DrawTextW(dc,s.hoveredPath.c_str(),-1,&measure,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX|DT_EDITCONTROL);
+    const int pathHeight=std::min<int>(measure.bottom,S(130,s)),height=pathHeight+S(100,s);
+    const int x=std::clamp<int>(s.pointer.x+S(15,s),S(8,s),std::max<int>(S(8,s),s.rcClient.right-width-S(8,s)));
+    const int y=std::clamp<int>(s.pointer.y+S(20,s),S(8,s),std::max<int>(S(8,s),s.rcClient.bottom-height-S(8,s)));
+    RECT box{x,y,x+width,y+height};fillWith(dc,box,s.palette.panel);frameWith(dc,box,s.palette.border);
+    RECT r{x+S(12,s),y+S(10,s),x+width-S(12,s),y+S(32,s)};
+    drawTextIn(dc,s.hovered->name,r,s.palette.text,DT_END_ELLIPSIS);
+    r.top+=S(27,s);r.bottom=r.top+pathHeight;::SetTextColor(dc,s.palette.muted);
+    ::DrawTextW(dc,s.hoveredPath.c_str(),-1,&r,DT_WORDBREAK|DT_NOPREFIX|DT_EDITCONTROL);
+    r.top=r.bottom+S(8,s);r.bottom=r.top+S(20,s);
+    drawTextIn(dc,(s.hovered->dir?(s.spec.zh?L"文件夹 · ":L"Folder · "):(s.spec.zh?L"文件 · ":L"File · "))+sizeLabel(s,*s.hovered)+(sizeUnknown(*s.hovered)?L"":L" · "+share(s,s.hovered->logical)),r,s.palette.text,DT_END_ELLIPSIS);
+    r.top+=S(24,s);r.bottom+=S(24,s);drawTextIn(dc,s.spec.zh?L"单击固定详情 · 双击进入文件夹":L"Click to select · double-click folders",r,s.palette.muted,DT_END_ELLIPSIS);
 }
 
-inline void drawStatusRows(ViewerState& s, HDC hdc)
-{
-    const int top = s.rcStatus.top;
-    RECT row1 = {0, top, s.rcClient.right, top + s.statusH};
-    RECT row2 = {0, top + s.statusH, s.rcClient.right, s.rcStatus.bottom};
-    frameWith(hdc, {0, top, s.rcClient.right, top + 1}, s.palette.border);
-    fillWith(hdc, row1, s.palette.panel);
-    fillWith(hdc, row2, s.palette.panel);
-
-    // Breadcrumb: the scan root, then every drilled level. Segments are
-    // clickable; their rects are rebuilt here on every frame.
-    s.crumbRects.clear();
-    s.crumbNodes.clear();
-    int x = S(8, s);
-    const auto addSeg = [&](const Node* n, const std::wstring& label) {
-        if (x > row1.right - S(160, s))
-            return;
-        SIZE sz {};
-        ::GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
-        RECT r = {x, row1.top, x + sz.cx + S(4, s), row1.bottom};
-        const bool hover = static_cast<int>(s.crumbRects.size()) == s.hoverCrumb;
-        drawTextIn(hdc, label, r, hover ? s.palette.accent : s.palette.text, DT_LEFT | DT_VCENTER);
-        s.crumbRects.push_back(r);
-        s.crumbNodes.push_back(n);
-        x = r.right;
-    };
-    if (s.tree) {
-        addSeg(s.tree.get(), s.tree->name);
-        for (const Node* d : s.drill)
-            addSeg(d, L"\\" + d->name);
-        if (s.viewRoot && s.viewRoot != s.tree.get())
-            addSeg(s.viewRoot, L"\\" + s.viewRoot->name);
-    }
-
-    // Hover info: whatever the pointer is over, else the current view root.
-    const Node* infoNode = s.viewRoot;
-    if (s.hoverTile >= 0 && s.hoverTile < static_cast<int>(s.tiles.size()))
-        infoNode = s.tiles[static_cast<std::size_t>(s.hoverTile)].node;
-    else if (s.hoverSlice >= 0 && s.hoverSlice < static_cast<int>(s.slices.size()))
-        infoNode = s.slices[static_cast<std::size_t>(s.hoverSlice)].node;
-    RECT ir = row1;
-    ir.right -= S(8, s);
-    if (infoNode)
-        drawTextIn(hdc, describe(s, infoNode), ir, s.palette.muted, DT_RIGHT | DT_VCENTER | DT_END_ELLIPSIS);
-
-    // Row 2: what was scanned; on the right, progress or totals.
-    const bool zh = s.spec.zh;
-    std::wstring left;
-    if (s.tree) {
-        left = zh ? L"已扫 " : L"scanned ";
-        left += winshun::wide(formatCount(s.files)) + (zh ? L" 个文件 · " : L" files · ");
-        left += winshun::wide(formatCount(s.dirs)) + (zh ? L" 个文件夹" : L" folders");
-        if (s.skippedDirs > 0)
-            left += (zh ? L" · 跳过 " : L" · skipped ") + winshun::wide(formatCount(s.skippedDirs))
-                  + (zh ? L" 个目录" : L" dirs");
-        if (s.skippedLinks > 0)
-            left += (zh ? L" · " : L" · ") + winshun::wide(formatCount(s.skippedLinks))
-                  + (zh ? L" 条链接未跟随" : L" links not followed");
-        left += (zh ? L" · 耗时 " : L" · took ") + std::to_wstring(s.elapsedMs) + L" ms";
-    } else {
-        left = zh ? L"输入一个路径（如 C:\\）后回车开始扫描" : L"Type a path (e.g. C:\\) and press Enter to scan";
-    }
-    RECT lr = row2;
-    ::InflateRect(&lr, -S(8, s), 0);
-    drawTextIn(hdc, left, lr, s.palette.muted, DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-
-    std::wstring right;
-    COLORREF rightColor = s.palette.muted;
-    if (s.scanning) {
-        right = (zh ? L"正在扫描… " : L"scanning… ") + winshun::wide(formatBytes(s.progress.bytes, zh))
-              + (zh ? L" · " : L" · ") + winshun::wide(formatCount(s.progress.files))
-              + (zh ? L" 个文件" : L" files");
-        rightColor = s.palette.accent;
-    } else if (s.cancelled) {
-        right = zh ? L"已取消 · 显示的是上次完成的数据" : L"cancelled · showing the last completed scan";
-        rightColor = s.palette.danger;
-    } else if (s.tree) {
-        right = (zh ? L"逻辑 " : L"logical ") + winshun::wide(formatBytes(s.tree->logical, zh))
-              + (zh ? L" · 按簇近似 " : L" · ~on disk ") + winshun::wide(formatBytes(s.tree->allocApprox, zh));
-    }
-    RECT rr2 = row2;
-    rr2.right -= S(8, s);
-    drawTextIn(hdc, right, rr2, rightColor, DT_RIGHT | DT_VCENTER | DT_END_ELLIPSIS);
-}
-
-inline void drawProgressBox(ViewerState& s, HDC hdc)
-{
-    const int w = S(430, s), h = S(96, s);
-    RECT box = {(s.rcChart.left + s.rcChart.right - w) / 2, (s.rcChart.top + s.rcChart.bottom - h) / 2, 0, 0};
-    box.right = box.left + w;
-    box.bottom = box.top + h;
-    fillWith(hdc, box, s.palette.panel);
-    frameWith(hdc, box, s.palette.accent);
-    RECT tr = box;
-    ::InflateRect(&tr, -S(16, s), -S(10, s));
-    const bool zh = s.spec.zh;
-    drawTextIn(hdc, zh ? L"正在扫描…" : L"Scanning…", tr, s.palette.text, DT_LEFT);
-    RECT line = tr;
-    line.top += S(22, s);
-    const std::wstring l2 = winshun::wide(formatBytes(s.progress.bytes, zh)) + (zh ? L" · " : L" · ")
-                          + winshun::wide(formatCount(s.progress.files)) + (zh ? L" 个文件 · " : L" files · ")
-                          + winshun::wide(formatCount(s.progress.dirs)) + (zh ? L" 个文件夹" : L" folders");
-    drawTextIn(hdc, l2, line, s.palette.muted, DT_LEFT);
-    RECT cur = tr;
-    cur.top += S(44, s);
-    cur.bottom = box.bottom - S(10, s);
-    drawTextIn(hdc, s.progress.current, cur, s.palette.muted, DT_LEFT | DT_END_ELLIPSIS);
-}
 
 inline void drawWelcome(ViewerState& s, HDC hdc)
 {
@@ -900,23 +1127,59 @@ inline void drawWelcome(ViewerState& s, HDC hdc)
     drawTextIn(hdc, zh ? L"磁盘透视 Disk View" : L"Disk View", tr, s.palette.text, DT_LEFT);
     ::SelectObject(hdc, old);
 
-    const wchar_t* lines[] = {
-        zh ? L"在上方输入一个路径（如 C:\\ 或 D:\\projects），回车开始扫描。"
-           : L"Type a path above (e.g. C:\\ or D:\\projects) and press Enter to scan.",
-        zh ? L"扫描只读取目录条目，不打开任何文件；junction 与符号链接只计数、不跟随。"
-           : L"Scanning reads directory entries only; junctions and symlinks are counted, never followed.",
-        zh ? L"方块图：面积≈占用大小，点击方块进入文件夹，Backspace 返回上级，F5 重新扫描，Ctrl+V 切换视图。"
-           : L"Treemap: area ≈ size. Click a tile to enter a folder, Backspace goes up, F5 rescans, Ctrl+V switches views.",
-        zh ? L"无法读取的目录会计入统计，不会被当作空目录。"
-           : L"Unreadable directories are counted and listed; they are never treated as empty.",
-    };
-    int y = r.top + S(48, s);
-    for (const wchar_t* line : lines) {
-        RECT lr = r;
-        lr.top = y;
-        lr.bottom = y + S(20, s);
-        drawTextIn(hdc, line, lr, s.palette.muted, DT_LEFT);
-        y += S(24, s);
+    RECT hr = r;
+    hr.top = r.top + S(36, s);
+    hr.bottom = hr.top + S(18, s);
+    drawTextIn(hdc, zh ? L"输入任意路径回车扫描；或选一个盘开始。单击选中、双击进入；Backspace 返回，Ctrl+L 编辑路径。"
+                       : L"Type a path and press Enter, or pick a drive. Double-click a folder to enter, "
+                         L"Backspace goes up, Ctrl+L edits the path.",
+               hr, s.palette.muted, DT_LEFT);
+
+    // One card per fixed drive: letter, a usage bar, and the numbers. Clicking
+    // a card scans that drive. The rects live in the state for hit-testing.
+    s.driveRects.clear();
+    const int cardW = std::min<int>(S(290, s), r.right - r.left), cardH = S(64, s), gap = S(12, s);
+    int x = r.left, y = hr.bottom + S(20, s);
+    for (std::size_t i = 0; i < s.driveCards.size(); ++i) {
+        const Drive& d = s.driveCards[i];
+        if (x + cardW > r.right) {
+            x = r.left;
+            y += cardH + gap;
+        }
+        if (y + cardH > r.bottom)
+            break;
+        const RECT card {x, y, x + cardW, y + cardH};
+        fillWith(hdc, card, s.palette.panel);
+        frameWith(hdc, card, s.hoverDrive >= 0 && static_cast<int>(i) == s.hoverDrive
+                                 ? s.palette.accent
+                                 : s.palette.border);
+        RECT cr = card;
+        ::InflateRect(&cr, -S(10, s), -S(8, s));
+        // "C:  818 GB / 1.8 TB · 43%"
+        RECT lr = cr;
+        lr.bottom = lr.top + S(16, s);
+        const std::wstring label = std::wstring(1, d.letter) + L":";
+        const std::wstring numbers = winshun::wide(formatBytes(d.used(), zh)) + L" / "
+                                     + winshun::wide(formatBytes(d.total, zh)) + L" · "
+                                     + std::to_wstring(d.total > 0 ? d.used() * 100 / d.total : 0) + L"%";
+        old = ::SelectObject(hdc, s.fontBold);
+        drawTextIn(hdc, label, lr, s.palette.text, DT_LEFT);
+        ::SelectObject(hdc, old);
+        RECT nr = lr;
+        nr.left = cr.left + S(30, s);
+        drawTextIn(hdc, numbers, nr, s.palette.muted, DT_RIGHT);
+        // The usage bar: filled part in the accent, the rest a border colour.
+        RECT bar = cr;
+        bar.top = lr.bottom + S(8, s);
+        bar.bottom = bar.top + S(10, s);
+        RECT fill = bar;
+        const unsigned percent = d.total > 0 ? static_cast<unsigned>(d.used() * 100 / d.total) : 0;
+        fill.right = bar.left + (bar.right - bar.left) * std::min(percent, 100u) / 100;
+        fillWith(hdc, bar, s.palette.border);
+        if (fill.right > fill.left)
+            fillWith(hdc, fill, percent >= 90 ? s.palette.danger : s.palette.accent);
+        s.driveRects.push_back(card);
+        x += cardW + gap;
     }
 }
 
@@ -936,58 +1199,54 @@ inline void drawScanError(ViewerState& s, HDC hdc)
     ::DrawTextW(hdc, winshun::wide(s.lastScanError).c_str(), -1, &er, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 }
 
-inline void paintAll(ViewerState& s, HDC hdc, const RECT& client)
-{
-    HGDIOBJ oldFont = ::SelectObject(hdc, s.font);
-    fillWith(hdc, client, s.palette.bg);
 
-    // toolbar
-    fillWith(hdc, s.rcToolbar, s.palette.panel);
-    frameWith(hdc, {s.rcToolbar.left, s.rcToolbar.bottom - 1, s.rcToolbar.right, s.rcToolbar.bottom},
-              s.palette.border);
-    drawButton(s, hdc, s.rcScan, s.scanning ? (s.spec.zh ? L"停止" : L"Stop") : (s.spec.zh ? L"扫描" : L"Scan"),
-               s.scanning, s.hoverScan);
-    drawButton(s, hdc, s.rcBack, s.spec.zh ? L"上级" : L"Up", false, s.hoverBack);
-    drawButton(s, hdc, s.rcTreemapBtn, s.spec.zh ? L"方块" : L"Treemap", !s.sunburst,
-               s.hoverTreemapBtn && s.sunburst);
-    drawButton(s, hdc, s.rcSunburstBtn, s.spec.zh ? L"圆盘" : L"Sunburst", s.sunburst,
-               s.hoverSunburstBtn && !s.sunburst);
-
-    // chart
-    if (s.tree) {
-        if (!s.sunburst && !s.tiles.empty())
-            drawTiles(s, hdc);
-        else if (s.sunburst && !s.slices.empty())
-            drawSlices(s, hdc);
-        else {
-            RECT r = s.rcChart;
-            ::InflateRect(&r, -S(24, s), -S(24, s));
-            drawTextIn(hdc, s.spec.zh ? L"这个文件夹为空（或所有条目都太小，无法画出）。"
-                                      : L"This folder is empty (or every entry is too small to draw).",
-                       r, s.palette.muted, DT_LEFT);
+inline void paintAll(ViewerState& s,HDC dc,const RECT& client) {
+    s.driveRects.clear();const auto old=::SelectObject(dc,s.font);fillWith(dc,client,s.palette.bg);
+    fillWith(dc,{0,0,client.right,S(44,s)},s.palette.panel);
+    drawTextIn(dc,L"◩  Disk View  "+std::wstring(s.spec.zh?L"磁盘透视":L""),{S(16,s),0,s.rcTheme.left-S(10,s),S(44,s)},s.palette.text,DT_VCENTER);
+    drawButton(s,dc,s.rcTheme,s.palette.dark?(s.spec.zh?L"浅色":L"Light"):(s.spec.zh?L"深色":L"Dark"),false,false);
+    drawButton(s,dc,s.rcHistBack,L"←",false,false);drawButton(s,dc,s.rcHistForward,L"→",false,false);drawButton(s,dc,s.rcBack,L"↑",false,false);
+    drawButton(s,dc,s.rcScan,s.scanning?(s.spec.zh?L"取消扫描":L"Cancel"):(s.pendingPath.empty()?(s.spec.zh?L"重新扫描":L"Scan"):(s.spec.zh?L"扫描此路径":L"Scan path")),!s.scanning,s.hoverScan);
+    drawBreadcrumb(s,dc);
+    drawButton(s,dc,s.rcDrive,s.tree?s.tree->name.substr(0,2)+L" ▾":(s.spec.zh?L"选择磁盘 ▾":L"Drive ▾"),false,false);
+    const std::wstring source=s.resultIncomplete?(s.spec.zh?L"本轮未完成结果":L"Incomplete result"):s.scanning?(s.spec.zh?L"上次完整快照":L"Previous snapshot"):(s.spec.zh?L"完整快照":L"Complete snapshot");
+    drawTextIn(dc,(s.tree?source+(s.fastResult?L" · MFT · ":(s.spec.zh?L" · 普通 · ":L" · Standard · ")):L"")+(s.spec.zh?L"逻辑大小 ⓘ":L"Logical size ⓘ"),s.rcAccounting,s.resultIncomplete?s.palette.danger:s.palette.accent,DT_VCENTER|DT_END_ELLIPSIS);
+    drawTextIn(dc,std::to_wstring(s.skippedDirs+s.unknownSizes+s.orphanRecords+(!s.lastScanError.empty()?1:0))+(s.spec.zh?L" 个扫描问题":L" scan issues"),s.rcSkipped,s.palette.accent,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
+    drawProgressBox(s,dc);
+    if(!s.notice.empty()){RECT r=s.rcOverview;r.top-=S(28,s);r.bottom=r.top+S(24,s);drawTextIn(dc,s.notice,r,s.palette.danger,DT_VCENTER|DT_END_ELLIPSIS);}
+    if(s.tree&&s.viewRoot) {
+        const auto f=::SelectObject(dc,s.fontHeading);
+        drawTextIn(dc,s.viewRoot->name+L"   "+winshun::wide(formatBytes(s.viewRoot->logical,s.spec.zh))+(s.resultIncomplete?(s.spec.zh?L" · 当前已发现":L" · discovered so far"):L""),s.rcOverview,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);::SelectObject(dc,f);
+        if(s.narrow){drawButton(s,dc,s.rcShowChart,s.spec.zh?L"空间图":L"Chart",!s.mobileList,false);drawButton(s,dc,s.rcShowList,s.spec.zh?L"目录列表":L"List",s.mobileList,false);}
+        if(s.rcChartPane.right>s.rcChartPane.left) {
+            fillWith(dc,s.rcChartPane,s.palette.panel);frameWith(dc,s.rcChartPane,s.palette.border);
+            RECT title=s.rcChartPane;title.left+=S(12,s);title.bottom=title.top+S(48,s);title.right=s.rcTreemapBtn.left-S(8,s);
+            drawTextIn(dc,s.spec.zh?L"空间分布":L"Space distribution",title,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+            drawButton(s,dc,s.rcTreemapBtn,s.spec.zh?L"方块":L"Tiles",!s.sunburst,false);drawButton(s,dc,s.rcSunburstBtn,s.spec.zh?L"圆盘":L"Rings",s.sunburst,false);
+            drawButton(s,dc,s.rcDepth,s.depth==1?(s.spec.zh?L"展开：当前一层":L"Depth: 1"):(s.spec.zh?L"展开：两层":L"Depth: 2"),false,false);
+            RECT hint{s.rcDepth.right+S(10,s),s.rcDepth.top,s.rcChartPane.right-S(12,s),s.rcDepth.bottom};
+            drawTextIn(dc,s.spec.zh?L"单击选中 · 双击进入":L"Click select · double-click enter",hint,s.palette.muted,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
+            const int saved=::SaveDC(dc);::IntersectClipRect(dc,s.rcChart.left,s.rcChart.top,s.rcChart.right,s.rcChart.bottom);
+            if(s.sunburst)drawSlices(s,dc);else drawTiles(s,dc);
+            if(!s.viewRoot->logical)drawTextIn(dc,s.spec.zh?L"暂无可绘制大小，请查看列表":L"No sized entries; use the list",s.rcChart,s.palette.muted,DT_CENTER|DT_VCENTER);
+            ::RestoreDC(dc,saved);
+            RECT legend{s.rcChartPane.left+S(12,s),s.rcChartPane.bottom-S(28,s),s.rcChartPane.right-S(12,s),s.rcChartPane.bottom};
+            drawTextIn(dc,s.spec.zh?L"文件夹  ·  文档  ·  视频  ·  压缩包  ·  其他":L"Folders · Documents · Media · Archives · Other",legend,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
         }
-    } else if (s.scanning) {
-        drawProgressBox(s, hdc);
-    } else if (!s.lastScanError.empty()) {
-        drawScanError(s, hdc);
-    } else {
-        drawWelcome(s, hdc);
-    }
-
-    if (s.rcTopList.right > s.rcTopList.left)
-        drawTopList(s, hdc);
-
-    if (s.scanning && s.tree)
-        drawProgressBox(s, hdc);
-
-    drawStatusRows(s, hdc);
-    ::SelectObject(hdc, oldFont);
+        if(s.rcDivider.right>s.rcDivider.left)fillWith(dc,s.rcDivider,s.palette.border);
+        if(s.rcTopList.right>s.rcTopList.left)drawTopList(s,dc);
+    } else if(!s.lastScanError.empty())drawScanError(s,dc);
+    else if(!s.scanning)drawWelcome(s,dc);
+    drawStatusRows(s,dc);drawKeyboardFocus(s,dc);drawTooltip(s,dc);::SelectObject(dc,old);
 }
+
 
 // ---- hit testing --------------------------------------------------------------------
 
 inline int hitTile(const ViewerState& s, int x, int y)
 {
+    if (!inRect(s.rcChart, x, y))
+        return -1;
     // Children are appended after their parent, so the reverse scan finds the
     // innermost (topmost) tile first.
     for (std::size_t i = s.tiles.size(); i-- > 0;)
@@ -998,7 +1257,7 @@ inline int hitTile(const ViewerState& s, int x, int y)
 
 inline int hitSlice(const ViewerState& s, int x, int y)
 {
-    if (s.slices.empty())
+    if (!inRect(s.rcChart, x, y) || s.slices.empty())
         return -1;
     const double cx = (s.rcChart.left + s.rcChart.right) / 2.0;
     const double cy = (s.rcChart.top + s.rcChart.bottom) / 2.0;
@@ -1024,7 +1283,7 @@ inline int hitTop(const ViewerState& s, int x, int y)
     if (row < 0 || row >= maxRows(s))
         return -1;
     const int idx = row + s.topScroll;
-    return idx >= 0 && idx < static_cast<int>(s.largest.size()) ? idx : -1;
+    return idx >= 0 && idx < listCount(s) ? idx : -1;
 }
 
 inline int hitCrumb(const ViewerState& s, int x, int y)
@@ -1035,11 +1294,24 @@ inline int hitCrumb(const ViewerState& s, int x, int y)
     return -1;
 }
 
+inline int hitDrive(const ViewerState& s, int x, int y)
+{
+    if (s.tree || s.scanning || !s.lastScanError.empty())
+        return -1;
+    for (std::size_t i = 0; i < s.driveRects.size(); ++i)
+        if (inRect(s.driveRects[i], x, y))
+            return static_cast<int>(i);
+    return -1;
+}
+
 inline bool anyClickable(const ViewerState& s, int x, int y)
 {
+    for(const auto* r:{&s.rcHistBack,&s.rcHistForward,&s.rcAddressEdit,&s.rcDrive,&s.rcAccounting,&s.rcTheme,&s.rcPreview,&s.rcDepth,&s.rcShowChart,&s.rcShowList,&s.rcEnter,&s.rcLocate,&s.rcSortName,&s.rcSortSize,&s.rcPrevious,&s.rcNext})if(inRect(*r,x,y))return true;
     return inRect(s.rcScan, x, y) || inRect(s.rcBack, x, y) || inRect(s.rcTreemapBtn, x, y)
            || inRect(s.rcSunburstBtn, x, y) || hitTop(s, x, y) >= 0 || hitCrumb(s, x, y) >= 0
-           || hitTile(s, x, y) >= 0 || hitSlice(s, x, y) >= 0;
+           || inRect(s.rcListFiles, x, y) || inRect(s.rcListFolders, x, y)
+           || inRect(s.rcSkipped, x, y)
+           || hitTile(s, x, y) >= 0 || hitSlice(s, x, y) >= 0 || hitDrive(s, x, y) >= 0;
 }
 
 // ---- navigation ---------------------------------------------------------------------
@@ -1049,94 +1321,119 @@ inline bool anyClickable(const ViewerState& s, int x, int y)
 // exist in the tree.
 inline const Node* descend(ViewerState& s, const std::wstring& path, std::vector<const Node*>* chain)
 {
+    if (chain)
+        chain->clear();
     if (!s.tree)
         return nullptr;
-    if (path == s.tree->name)
+    if (lower(path) == lower(s.tree->name))
         return s.tree.get();
-    if (path.rfind(s.tree->name + L"\\", 0) != 0)
+    const std::wstring prefix = joinPath(s.tree->name, L"");
+    if (lower(path).rfind(lower(prefix), 0) != 0)
         return nullptr;
     const Node* n = s.tree.get();
-    std::size_t pos = s.tree->name.size() + 1;
+    std::size_t pos = prefix.size();
+    std::vector<const Node*> found;
     for (;;) {
         const std::size_t slash = path.find(L'\\', pos);
         const std::size_t end = slash == std::wstring::npos ? path.size() : slash;
-        n = findChild(*n, path.substr(pos, end - pos));
+        const auto part=lower(path.substr(pos,end-pos));
+        const Node* foundNode=nullptr;
+        for(const auto& child:n->children)if(lower(child.name)==part){foundNode=&child;break;}
+        n=foundNode;
         if (!n)
             return nullptr;
-        if (chain)
-            chain->push_back(n);
-        if (slash == std::wstring::npos)
+        found.push_back(n);
+        if (slash == std::wstring::npos) {
+            if (chain)
+                *chain = std::move(found);
             return n;
+        }
         pos = slash + 1;
     }
 }
 
-inline void drillDown(ViewerState& s, const Node* child)
-{
-    if (!child || !child->dir || !s.viewRoot)
-        return;
-    s.drill.push_back(s.viewRoot);
-    s.viewRoot = child;
-    relayoutView(s);
-    ::InvalidateRect(s.hwnd, nullptr, FALSE);
-}
 
-inline void goUp(ViewerState& s)
-{
-    if (s.drill.empty())
-        return;
-    s.viewRoot = s.drill.back();
-    s.drill.pop_back();
-    relayoutView(s);
-    ::InvalidateRect(s.hwnd, nullptr, FALSE);
+inline void clearHover(ViewerState& s) {
+    s.hovered=nullptr;s.hoveredPath.clear();s.tipVisible=false;
+    s.hoverTile=s.hoverSlice=s.hoverTop=s.hoverFolder=-1;if(s.hwnd)::KillTimer(s.hwnd,2);
 }
-
-inline void drillTo(ViewerState& s, int idx)
-{
-    if (idx < 0 || idx >= static_cast<int>(s.crumbNodes.size()))
-        return;
-    s.viewRoot = s.crumbNodes[static_cast<std::size_t>(idx)];
-    if (idx == 0)
-        s.drill.clear();
-    else
-        s.drill.assign(s.crumbNodes.begin() + 1, s.crumbNodes.begin() + idx);
-    relayoutView(s);
-    ::InvalidateRect(s.hwnd, nullptr, FALSE);
-}
-
-inline void setViewMode(ViewerState& s, bool sunburst)
-{
-    if (s.sunburst == sunburst)
-        return;
-    s.sunburst = sunburst;
-    saveConfigNow(s);
-    relayoutView(s);
-    ::InvalidateRect(s.hwnd, nullptr, FALSE);
-}
-
-inline void updateHover(ViewerState& s, int x, int y)
-{
-    const int t = s.sunburst ? -1 : hitTile(s, x, y);
-    const int sl = s.sunburst ? hitSlice(s, x, y) : -1;
-    const int top = hitTop(s, x, y);
-    const int crumb = hitCrumb(s, x, y);
-    const bool scan = inRect(s.rcScan, x, y);
-    const bool back = inRect(s.rcBack, x, y);
-    const bool tm = inRect(s.rcTreemapBtn, x, y);
-    const bool sb = inRect(s.rcSunburstBtn, x, y);
-    if (t != s.hoverTile || sl != s.hoverSlice || top != s.hoverTop || crumb != s.hoverCrumb
-        || scan != s.hoverScan || back != s.hoverBack || tm != s.hoverTreemapBtn || sb != s.hoverSunburstBtn) {
-        s.hoverTile = t;
-        s.hoverSlice = sl;
-        s.hoverTop = top;
-        s.hoverCrumb = crumb;
-        s.hoverScan = scan;
-        s.hoverBack = back;
-        s.hoverTreemapBtn = tm;
-        s.hoverSunburstBtn = sb;
-        ::InvalidateRect(s.hwnd, nullptr, FALSE);
+inline bool navigateTo(ViewerState& s,const std::wstring& path) {
+    std::vector<const Node*> chain;const Node* folder=descend(s,path,&chain);
+    if(!folder||!folder->dir)return false;
+    if(!chain.empty())chain.pop_back();s.drill=std::move(chain);s.viewRoot=folder;
+    s.selected=nullptr;s.selectedPath.clear();s.filter.clear();s.groupFilter.clear();
+    if(s.filterEdit)::SetWindowTextW(s.filterEdit,L"");
+    const auto canonical=nodePath(s,folder);
+    if(!s.replayHistory&&(s.historyIndex<0||s.history[s.historyIndex]!=canonical)) {
+        s.history.resize(static_cast<std::size_t>(s.historyIndex+1));s.history.push_back(canonical);s.historyIndex=int(s.history.size())-1;
     }
+    if(s.edit)::SetWindowTextW(s.edit,canonical.c_str());
+    s.editingAddress=false;rebuildLists(s);relayoutView(s);
+    if(s.hwnd){computeLayout(s);::InvalidateRect(s.hwnd,nullptr,FALSE);}return true;
 }
+inline void goUp(ViewerState& s) {
+    if(!s.viewRoot||s.viewRoot==s.tree.get())return;
+    const auto path=nodePath(s,s.viewRoot);const auto slash=path.find_last_of(L'\\');
+    navigateTo(s,slash<s.tree->name.size()?s.tree->name:path.substr(0,slash));
+}
+inline void historyStep(ViewerState& s,int step) {
+    const int next=s.historyIndex+step;if(next<0||next>=int(s.history.size()))return;
+    const auto path=s.history[next];s.replayHistory=true;
+    if(navigateTo(s,path))s.historyIndex=next;s.replayHistory=false;
+}
+inline void drillTo(ViewerState& s,int index) {
+    if(index<0||index>=int(s.crumbNodes.size()))return;
+    const Node* target=s.crumbNodes[index];
+    std::wstring path=s.tree->name;
+    if(target!=s.tree.get()) {
+        for(auto n:s.drill){path=childPath(path,n->name);if(n==target)break;}
+        if(target==s.viewRoot)path=nodePath(s,target);
+    }
+    navigateTo(s,path);
+}
+inline void setViewMode(ViewerState& s,bool sunburst){s.sunburst=sunburst;relayoutView(s);if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);}
+inline void setListMode(ViewerState& s,bool folders){s.listFolders=folders;s.groupFilter.clear();clearHover(s);rebuildLists(s);if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);}
+inline void selectNode(ViewerState& s,const Node* n,const std::wstring& path) {
+    for(const auto& group:s.groupMembers)if(group.first==n) {
+        // Navigation rebuilds the synthetic groups. Copy members and parent
+        // path first so a second-level group cannot leave dangling pointers.
+        auto members=group.second;
+        const auto slash=path.find_last_of(L'\\');
+        const auto parent=slash<s.tree->name.size()?s.tree->name:path.substr(0,slash);
+        if(!navigateTo(s,parent))return;
+        s.groupFilter=std::move(members);s.listFolders=true;s.mobileList=true;s.filter.clear();
+        if(s.filterEdit)::SetWindowTextW(s.filterEdit,L"");
+        refreshRows(s);computeLayout(s);relayoutView(s);clearHover(s);
+        if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);
+        return;
+    }
+    s.selected=n;s.selectedPath=path;if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+inline bool openListRow(ViewerState& s,int index) {
+    if(index<0||index>=listCount(s))return false;const auto item=s.rows[index];
+    if(item.node->dir)return navigateTo(s,item.path);
+    selectNode(s,item.node,item.path);return true;
+}
+inline void locateSelected(ViewerState& s) {
+    if(!s.selected)return;const auto path=s.selectedPath;const auto slash=path.find_last_of(L'\\');
+    const auto parent=slash<s.tree->name.size()?s.tree->name:path.substr(0,slash);
+    if(navigateTo(s,parent)){selectNode(s,descend(s,path,nullptr),path);s.mobileList=false;computeLayout(s);relayoutView(s);}
+}
+inline void updateHover(ViewerState& s,int x,int y) {
+    s.pointer={x,y};s.hoverTile=s.sunburst?-1:hitTile(s,x,y);s.hoverSlice=s.sunburst?hitSlice(s,x,y):-1;
+    const int row=hitTop(s,x,y);s.hoverTop=s.listFolders?-1:row;s.hoverFolder=s.listFolders?row:-1;
+    s.hoverCrumb=hitCrumb(s,x,y);s.hoverDrive=hitDrive(s,x,y);
+    const Node* n=nullptr;std::wstring path;
+    if(s.hoverTile>=0){const auto& t=s.tiles[s.hoverTile];n=t.node;path=t.path;}
+    else if(s.hoverSlice>=0){const auto& t=s.slices[s.hoverSlice];n=t.node;path=t.path;}
+    else if(row>=0){n=s.rows[row].node;path=s.rows[row].path;}
+    if(n!=s.hovered||path!=s.hoveredPath) {
+        s.hovered=n;s.hoveredPath=path;s.tipVisible=false;
+        if(s.hwnd){::KillTimer(s.hwnd,2);if(n)::SetTimer(s.hwnd,2,250,nullptr);}
+    }
+    if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+
 
 // ---- message handling ---------------------------------------------------------------
 
@@ -1151,18 +1448,133 @@ inline std::wstring editText(HWND edit)
     return text;
 }
 
-inline LRESULT CALLBACK editProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-    ViewerState& s = state();
-    if (msg == WM_KEYDOWN && (wp == VK_RETURN || wp == VK_ESCAPE)) {
-        if (wp == VK_RETURN)
-            startScan(s, editText(hwnd));
-        else
-            ::PostMessageW(s.hwnd, WM_CLOSE, 0, 0);
-        return 0;
-    }
-    return ::CallWindowProcW(s.origEditProc, hwnd, msg, wp, lp);
+
+inline void editAddress(ViewerState& s) {
+    s.editingAddress=true;
+    if(s.viewRoot)::SetWindowTextW(s.edit,nodePath(s,s.viewRoot).c_str());
+    computeLayout(s);::SetFocus(s.edit);::SendMessageW(s.edit,EM_SETSEL,0,-1);
 }
+inline void submitAddress(ViewerState& s) {
+    const auto path=normalizePath(editText(s.edit),nullptr);
+    if(path.empty()){s.notice=s.spec.zh?L"请输入有效路径":L"Enter a valid path";return;}
+    if(navigateTo(s,path)){s.pendingPath.clear();s.notice.clear();::SetFocus(s.hwnd);}
+    else if(!s.tree)startScan(s,path);
+    else {s.pendingPath=path;s.notice=s.spec.zh?L"该路径尚未索引；点击“扫描此路径”开始。":L"Path not indexed; choose Scan this path.";}
+    computeLayout(s);relayoutView(s);::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+inline void adoptResult(ViewerState& s,const std::shared_ptr<ScanResult>& r,bool incomplete) {
+    const auto previousRoot=s.tree?s.tree->name:std::wstring();
+    const auto path=s.viewRoot?nodePath(s,s.viewRoot):std::wstring();
+    const auto selection=s.selectedPath,query=s.filter;const int scroll=s.topScroll;
+    s.selected=nullptr;s.hovered=nullptr;s.viewRoot=nullptr;s.drill.clear();s.groupFilter.clear();
+    s.tiles.clear();s.slices.clear();s.groups.clear();s.crumbNodes.clear();
+    s.tree=std::shared_ptr<Node>(r,&r->root);s.viewRoot=s.tree.get();s.resultIncomplete=incomplete;
+    s.fastResult=r->fast;s.unknownSizes=r->unknownSizes;s.orphanRecords=r->orphanRecords;
+    s.rootLargest=r->largest;s.skippedList=r->skippedList;s.files=r->files;s.dirs=r->dirs;
+    s.skippedDirs=r->skippedDirs;s.skippedLinks=r->skippedLinks;s.elapsedMs=r->elapsedMs;
+    s.replayHistory=true;
+    if(!navigateTo(s,path))navigateTo(s,s.tree->name);
+    s.replayHistory=false;
+    if(s.history.empty() || lower(previousRoot)!=lower(s.tree->name)){s.history={nodePath(s,s.viewRoot)};s.historyIndex=0;}
+    s.selected=descend(s,selection,nullptr);s.selectedPath=s.selected?selection:L"";
+    s.filter=query;if(s.filterEdit)::SetWindowTextW(s.filterEdit,query.c_str());refreshRows(s);s.topScroll=scroll;
+    computeLayout(s);relayoutView(s);
+}
+inline void showIssues(ViewerState& s) {
+    std::wstring text;
+    if(!s.lastScanError.empty())text+=(s.spec.zh?L"本次扫描失败：\r\n":L"Latest scan failed:\r\n")+winshun::wide(s.lastScanError)+L"\r\n\r\n";
+    for(const auto& dir:s.skippedList)text+=dir.path+L"  ("+std::to_wstring(dir.error)+L")\r\n";
+    if(s.skippedDirs>s.skippedList.size())text+=(s.spec.zh?L"另有未列出目录：":L"More directories: ")+std::to_wstring(s.skippedDirs-s.skippedList.size());
+    if(text.empty())text=s.spec.zh?L"没有记录到读取失败的目录。":L"No directory read errors recorded.";
+    if(s.unknownSizes)text+=L"\r\n"+std::to_wstring(s.unknownSizes)+(s.spec.zh?L" 个文件大小未知。":L" unknown file sizes.");
+    if(s.orphanRecords)text+=L"\r\n"+std::to_wstring(s.orphanRecords)+(s.spec.zh?L" 条记录未能归属目录（包含未跟随的链接和扫描期间变更）。":L" unlinked records (including reparse targets and concurrent changes).");
+    if(s.skippedLinks)text+=L"\r\n"+std::to_wstring(s.skippedLinks)+(s.spec.zh?L" 条重解析链接未跟随。":L" reparse links were not followed.");
+    ::MessageBoxW(s.hwnd,text.c_str(),s.spec.zh?L"扫描覆盖范围":L"Scan coverage",MB_OK|MB_ICONINFORMATION);
+}
+inline void chooseDrive(ViewerState& s) {
+    auto drives=listFixedDrives();HMENU menu=::CreatePopupMenu();
+    for(std::size_t i=0;i<drives.size();++i)::AppendMenuW(menu,MF_STRING,100+i,drives[i].root.c_str());
+    POINT pt{s.rcDrive.left,s.rcDrive.bottom};::ClientToScreen(s.hwnd,&pt);
+    const int choice=::TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,pt.x,pt.y,0,s.hwnd,nullptr);::DestroyMenu(menu);
+    if(choice>=100&&choice<100+int(drives.size()))startScan(s,drives[choice-100].root);
+}
+inline void activateAt(ViewerState& s,int x,int y,bool twice=false) {
+    if(twice) {
+        const int row=hitTop(s,x,y);if(row>=0){openListRow(s,row);return;}
+        const int hit=s.sunburst?hitSlice(s,x,y):hitTile(s,x,y);
+        if(hit>=0){const auto* n=s.sunburst?s.slices[hit].node:s.tiles[hit].node;const auto path=s.sunburst?s.slices[hit].path:s.tiles[hit].path;if(n->dir)navigateTo(s,path);}
+        return;
+    }
+    if(inRect(s.rcScan,x,y)) {if(s.scanning)s.cancelFlag=true;else startScan(s,!s.pendingPath.empty()?s.pendingPath:!s.lastPath.empty()?s.lastPath:editText(s.edit));return;}
+    if(inRect(s.rcHistBack,x,y)){historyStep(s,-1);return;}
+    if(inRect(s.rcHistForward,x,y)){historyStep(s,1);return;}
+    if(inRect(s.rcBack,x,y)){goUp(s);return;}
+    if(inRect(s.rcAddressEdit,x,y)){editAddress(s);return;}
+    if(inRect(s.rcDrive,x,y)){chooseDrive(s);return;}
+    if(inRect(s.rcTheme,x,y)) {
+        s.palette=s.palette.dark?lightPalette():darkPalette();if(s.editBrush){::DeleteObject(s.editBrush);s.editBrush=nullptr;}
+        if(s.filterEdit)::InvalidateRect(s.filterEdit,nullptr,TRUE);if(s.edit)::InvalidateRect(s.edit,nullptr,TRUE);
+    } else if(inRect(s.rcSkipped,x,y)){showIssues(s);return;}
+    else if(inRect(s.rcAccounting,x,y)) {
+        ::MessageBoxW(s.hwnd,s.spec.zh?L"图表按逻辑大小绘制（1024 进制）。\r\n按簇取整只是占用空间近似值：稀疏、压缩文件及硬链接会影响结果。\r\n无法读取的区域和系统元数据可能未计入，因此文件合计不等于磁盘已用空间。\r\n局部结果占比只以本轮已发现的条目为基准。":L"Charts show logical bytes (base 1024).\r\nCluster-rounded allocation is approximate; sparse files, compression and hard links affect totals.\r\nUnreadable areas and filesystem metadata may be absent.\r\nPartial-result shares use discovered entries only.",s.spec.zh?L"容量统计口径":L"Size accounting",MB_OK|MB_ICONINFORMATION);return;
+    } else if(inRect(s.rcPreview,x,y)&&s.scanning) {
+        if(s.partialView&&s.completeResult){s.partialView=false;adoptResult(s,s.completeResult,false);}
+        else if(s.partialResult){s.partialView=true;adoptResult(s,s.partialResult,true);}
+        else s.notice=s.spec.zh?L"正在准备本轮局部结果…":L"Preparing partial results…";
+    } else if(inRect(s.rcTreemapBtn,x,y)){setViewMode(s,false);return;}
+    else if(inRect(s.rcSunburstBtn,x,y)){setViewMode(s,true);return;}
+    else if(inRect(s.rcDepth,x,y)){s.depth=s.depth==1?2:1;relayoutView(s);}
+    else if(inRect(s.rcListFiles,x,y)||inRect(s.rcListFolders,x,y)){setListMode(s,inRect(s.rcListFolders,x,y));return;}
+    else if(inRect(s.rcShowChart,x,y)||inRect(s.rcShowList,x,y)){s.mobileList=inRect(s.rcShowList,x,y);computeLayout(s);relayoutView(s);}
+    else if(inRect(s.rcEnter,x,y)){if(s.selected&&s.selected->dir)navigateTo(s,s.selectedPath);return;}
+    else if(inRect(s.rcLocate,x,y)){locateSelected(s);return;}
+    else if(inRect(s.rcSortName,x,y)||inRect(s.rcSortSize,x,y)) {
+        const bool name=inRect(s.rcSortName,x,y);s.ascending=s.sortName==name?!s.ascending:name;s.sortName=name;clearHover(s);refreshRows(s);
+    } else if(inRect(s.rcPrevious,x,y)||inRect(s.rcNext,x,y)) {
+        s.topScroll=std::clamp(s.topScroll+(inRect(s.rcNext,x,y)?1:-1)*std::max(1,maxRows(s)),0,std::max(0,listCount(s)-maxRows(s)));clearHover(s);
+    } else if(const int crumb=hitCrumb(s,x,y);crumb>=0){drillTo(s,crumb);return;}
+    else if(const int drive=hitDrive(s,x,y);drive>=0){startScan(s,s.driveCards[drive].root);return;}
+    else if(const int row=hitTop(s,x,y);row>=0){const auto item=s.rows[row];selectNode(s,item.node,item.path);return;}
+    else {
+        const int hit=s.sunburst?hitSlice(s,x,y):hitTile(s,x,y);
+        if(hit>=0){const auto* n=s.sunburst?s.slices[hit].node:s.tiles[hit].node;const auto path=s.sunburst?s.slices[hit].path:s.tiles[hit].path;selectNode(s,n,path);return;}
+    }
+    ::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+inline LRESULT CALLBACK editProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
+    ViewerState& s=state();
+    if(msg==WM_CHAR&&(wp==VK_TAB||wp==VK_RETURN||wp==VK_ESCAPE))return 0;
+    if(msg==WM_KEYDOWN) {
+        if(wp==VK_TAB){cycleFocus(s,(::GetKeyState(VK_SHIFT)&0x8000)?-1:1);return 0;}
+        if(wp==VK_RETURN){submitAddress(s);return 0;}
+        if(wp==VK_ESCAPE){s.editingAddress=false;s.pendingPath.clear();s.notice.clear();if(s.viewRoot)::SetWindowTextW(s.edit,nodePath(s,s.viewRoot).c_str());computeLayout(s);::SetFocus(s.hwnd);::InvalidateRect(s.hwnd,nullptr,FALSE);return 0;}
+        if(wp==VK_F5){if(!s.scanning)startScan(s,s.lastPath);return 0;}
+    }
+    return ::CallWindowProcW(s.origEditProc,hwnd,msg,wp,lp);
+}
+inline LRESULT CALLBACK filterProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
+    auto& s=state();
+    if(msg==WM_PAINT||msg==WM_PRINT||msg==WM_PRINTCLIENT) {
+        const auto result=::CallWindowProcW(s.origFilterProc,hwnd,msg,wp,lp);
+        if(::GetWindowTextLengthW(hwnd)==0) {
+            const auto dc=msg==WM_PAINT?::GetDC(hwnd):reinterpret_cast<HDC>(wp);
+            const int saved=::SaveDC(dc);
+            RECT r{};::GetClientRect(hwnd,&r);r.left+=S(6,s);
+            ::SelectObject(dc,s.font);::SetBkMode(dc,TRANSPARENT);
+            drawTextIn(dc,s.spec.zh?L"筛选列表，图表保持完整":L"Filter list; chart stays complete",r,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+            ::RestoreDC(dc,saved);
+            if(msg==WM_PAINT)::ReleaseDC(hwnd,dc);
+        }
+        return result;
+    }
+    if(msg==WM_CHAR&&(wp==VK_TAB||wp==VK_RETURN||wp==VK_ESCAPE))return 0;
+    if(msg==WM_KEYDOWN&&wp==VK_TAB){cycleFocus(s,(::GetKeyState(VK_SHIFT)&0x8000)?-1:1);return 0;}
+    if(msg==WM_KEYDOWN&&wp==VK_RETURN){::SetFocus(s.hwnd);return 0;}
+    if(msg==WM_KEYDOWN&&wp==VK_ESCAPE){::SetWindowTextW(hwnd,L"");::SetFocus(s.hwnd);return 0;}
+    if(msg==WM_KEYDOWN&&wp=='L'&&(::GetKeyState(VK_CONTROL)&0x8000)){editAddress(s);return 0;}
+    return ::CallWindowProcW(s.origFilterProc,hwnd,msg,wp,lp);
+}
+
 
 inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -1196,116 +1608,90 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         relayoutView(s);
         ::InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+
+    case WM_TIMER:
+        if(wp==2){::KillTimer(hwnd,2);s.tipVisible=s.hovered!=nullptr;}
+        ::InvalidateRect(hwnd,nullptr,FALSE);return 0;
+    case WM_COMMAND:
+        if(reinterpret_cast<HWND>(lp)==s.filterEdit&&HIWORD(wp)==EN_CHANGE) {
+            s.filter=editText(s.filterEdit);clearHover(s);refreshRows(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;
+        }
+        break;
     case WM_MOUSEMOVE: {
-        TRACKMOUSEEVENT tme {sizeof tme, TME_LEAVE, hwnd, 0};
-        ::TrackMouseEvent(&tme);
-        updateHover(s, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-        return 0;
+        const int x=GET_X_LPARAM(lp),y=GET_Y_LPARAM(lp);
+        if(s.dragging){s.splitRatio=std::clamp(double(x-S(16,s))/std::max(1L,s.rcClient.right-S(32,s)),.38,.69);computeLayout(s);relayoutView(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+        TRACKMOUSEEVENT track{sizeof track,TME_LEAVE,hwnd,0};::TrackMouseEvent(&track);updateHover(s,x,y);return 0;
     }
-    case WM_MOUSELEAVE:
-        s.hoverTile = s.hoverSlice = s.hoverTop = s.hoverCrumb = -1;
-        s.hoverScan = s.hoverBack = s.hoverTreemapBtn = s.hoverSunburstBtn = false;
-        ::InvalidateRect(hwnd, nullptr, FALSE);
-        return 0;
-    case WM_LBUTTONUP: {
-        const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-        if (inRect(s.rcScan, x, y)) {
-            if (s.scanning)
-                s.cancelFlag = true; // the DONE message will finish the state change
-            else
-                startScan(s, editText(s.edit));
-            return 0;
-        }
-        if (inRect(s.rcBack, x, y)) {
-            goUp(s);
-            return 0;
-        }
-        if (inRect(s.rcTreemapBtn, x, y)) {
-            setViewMode(s, false);
-            return 0;
-        }
-        if (inRect(s.rcSunburstBtn, x, y)) {
-            setViewMode(s, true);
-            return 0;
-        }
-        const int c = hitCrumb(s, x, y);
-        if (c >= 0) {
-            drillTo(s, c);
-            return 0;
-        }
-        if (!s.tree)
-            return 0;
-        const int t = s.sunburst ? hitSlice(s, x, y) : hitTile(s, x, y);
-        if (t >= 0) {
-            const Node* n = s.sunburst ? s.slices[static_cast<std::size_t>(t)].node
-                                       : s.tiles[static_cast<std::size_t>(t)].node;
-            if (n && n->dir)
-                drillDown(s, n);
-            return 0;
-        }
-        const int topIdx = hitTop(s, x, y);
-        if (topIdx >= 0) {
-            // A file row: show the folder that contains it.
-            const std::wstring& p = s.largest[static_cast<std::size_t>(topIdx)].path;
-            const std::size_t slash = p.find_last_of(L'\\');
-            if (slash != std::wstring::npos) {
-                std::vector<const Node*> chain;
-                if (const Node* folder = descend(s, p.substr(0, slash), &chain)) {
-                    s.drill.assign(chain.begin(), chain.end() - 1);
-                    s.viewRoot = folder;
-                    relayoutView(s);
-                    ::InvalidateRect(hwnd, nullptr, FALSE);
-                }
-            }
-            return 0;
-        }
-        return 0;
-    }
+    case WM_MOUSELEAVE:clearHover(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;
+    case WM_LBUTTONDOWN:
+        s.keyboardFocus=false;
+        if(inRect(s.rcDivider,GET_X_LPARAM(lp),GET_Y_LPARAM(lp))){s.dragging=true;clearHover(s);::SetCapture(hwnd);}return 0;
+    case WM_CAPTURECHANGED:s.dragging=false;return 0;
+    case WM_LBUTTONDBLCLK:
+        s.suppressClick=true;activateAt(s,GET_X_LPARAM(lp),GET_Y_LPARAM(lp),true);return 0;
+    case WM_LBUTTONUP:
+        s.keyboardFocus=false;
+        if(s.suppressClick){s.suppressClick=false;return 0;}
+        if(s.dragging){s.dragging=false;::ReleaseCapture();return 0;}
+        ::SetFocus(hwnd);activateAt(s,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));return 0;
+
+
     case WM_MOUSEWHEEL: {
         if (s.rcTopList.right <= s.rcTopList.left)
             return 0;
         POINT p {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ::ScreenToClient(hwnd, &p);
-        if (p.x < s.rcTopList.left)
+        if (!inRect(s.rcTopList, p.x, p.y))
             return 0;
         const int rows = maxRows(s);
-        const int maxScroll = std::max(0, static_cast<int>(s.largest.size()) - rows);
+        const int maxScroll = std::max(0, listCount(s) - rows);
         const int delta = GET_WHEEL_DELTA_WPARAM(wp);
         s.topScroll = std::clamp(s.topScroll - (delta / WHEEL_DELTA) * 3, 0, maxScroll);
+        updateHover(s, p.x, p.y);
         ::InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
+
+    case WM_SYSKEYDOWN:
+        if(wp==VK_LEFT){historyStep(s,-1);return 0;}
+        if(wp==VK_RIGHT){historyStep(s,1);return 0;}
+        if(wp==VK_UP){goUp(s);return 0;}
+        break;
     case WM_KEYDOWN:
-        if (wp == VK_ESCAPE) {
-            ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
-            return 0;
+        if(wp==VK_TAB){cycleFocus(s,(::GetKeyState(VK_SHIFT)&0x8000)?-1:1);return 0;}
+        if((wp==VK_SPACE||wp==VK_RETURN)&&s.keyboardFocus) {
+            const auto targets=focusTargets(s);
+            if(s.focusIndex>=0&&s.focusIndex<int(targets.size())) {
+                const auto target=targets[s.focusIndex];
+                if(!target.child&&!target.list){activateAt(s,(target.rect.left+target.rect.right)/2,(target.rect.top+target.rect.bottom)/2);return 0;}
+            }
         }
-        if (wp == VK_BACK) {
-            goUp(s);
-            return 0;
-        }
-        if (wp == VK_F5) {
-            if (!s.scanning)
-                startScan(s, s.lastPath);
-            return 0;
-        }
-        if (wp == 'V' && (::GetKeyState(VK_CONTROL) & 0x8000)) {
-            setViewMode(s, !s.sunburst);
-            return 0;
+        if(wp=='L'&&(::GetKeyState(VK_CONTROL)&0x8000)){editAddress(s);return 0;}
+        if(wp=='F'&&(::GetKeyState(VK_CONTROL)&0x8000)){s.mobileList=true;computeLayout(s);::SetFocus(s.filterEdit);return 0;}
+        if(wp==VK_ESCAPE){clearHover(s);s.selected=nullptr;s.selectedPath.clear();::InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+        if(wp==VK_BACK){goUp(s);return 0;}
+        if(wp==VK_F5){if(!s.scanning)startScan(s,s.lastPath);return 0;}
+        if(wp==VK_RETURN&&s.selected&&s.selected->dir){navigateTo(s,s.selectedPath);return 0;}
+        if(wp==VK_UP||wp==VK_DOWN) {
+            int index=-1;for(int i=0;i<listCount(s);++i)if(s.rows[i].node==s.selected)index=i;
+            index=std::clamp(index+(wp==VK_DOWN?1:-1),0,std::max(0,listCount(s)-1));
+            if(listCount(s)){selectNode(s,s.rows[index].node,s.rows[index].path);if(index<s.topScroll)s.topScroll=index;if(index>=s.topScroll+maxRows(s))s.topScroll=index-std::max(1,maxRows(s))+1;}return 0;
         }
         break;
+
+
     case WM_SETCURSOR:
         if (LOWORD(lp) == HTCLIENT) {
             const DWORD pos = ::GetMessagePos();
             POINT p {GET_X_LPARAM(pos), GET_Y_LPARAM(pos)};
             ::ScreenToClient(hwnd, &p);
-            ::SetCursor(anyClickable(s, p.x, p.y) ? ::LoadCursorW(nullptr, IDC_HAND)
+            ::SetCursor(inRect(s.rcDivider,p.x,p.y) ? ::LoadCursorW(nullptr,IDC_SIZEWE) : anyClickable(s, p.x, p.y) ? ::LoadCursorW(nullptr, IDC_HAND)
                                                   : ::LoadCursorW(nullptr, IDC_ARROW));
             return TRUE;
         }
         break;
     case WM_CTLCOLOREDIT:
-        if (reinterpret_cast<HWND>(lp) == s.edit) {
+        if (reinterpret_cast<HWND>(lp) == s.edit || reinterpret_cast<HWND>(lp) == s.filterEdit) {
             const COLORREF back = s.palette.input;
             if (!s.editBrush)
                 s.editBrush = ::CreateSolidBrush(back);
@@ -1316,15 +1702,28 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_DPICHANGED: {
         s.dpi = HIWORD(wp);
+        s.windowIcons.update(hwnd, s.dpi);
         makeFonts(s);
         const RECT* sug = reinterpret_cast<const RECT*>(lp);
         ::SetWindowPos(hwnd, nullptr, sug->left, sug->top, sug->right - sug->left, sug->bottom - sug->top,
                        SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
     }
+    case WM_PRINTCLIENT: {
+        // PrintWindow (and other requesters) want the current frame on the
+        // DC they hand over; draw the same thing we would into the window.
+        ViewerState& st = s;
+        if (!st.hwnd)
+            return 0;
+        RECT client;
+        ::GetClientRect(hwnd, &client);
+        ::SetBkMode(reinterpret_cast<HDC>(wp), TRANSPARENT);
+        paintAll(st, reinterpret_cast<HDC>(wp), client);
+        return 0;
+    }
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
-        mmi->ptMinTrackSize = {S(680, s), S(460, s)};
+        mmi->ptMinTrackSize = {S(360, s), S(680, s)};
         return 0;
     }
     case WM_APP_APPEARANCE: {
@@ -1346,50 +1745,60 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ::InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
+    case WM_APP_START_SCAN:
+        startScan(s,s.spec.initialPath);return 0;
     case WM_APP_PROGRESS:
         if (lp) {
             s.progress = *reinterpret_cast<ScanProgress*>(lp);
+            if(!s.progress.fallbackReason.empty()) {
+                const auto notice=(s.spec.zh?L"已回退普通扫描：":L"Using standard scan: ")+s.progress.fallbackReason;
+                if(notice!=s.notice){s.notice=notice;computeLayout(s);relayoutView(s);}
+            }
             delete reinterpret_cast<ScanProgress*>(lp);
             ::InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
-    case WM_APP_DONE:
-        joinScanThread(s);
-        if (lp) {
-            auto* r = reinterpret_cast<ScanResult*>(lp);
-            s.scanning = false;
-            s.cancelled = r->cancelled;
-            // The breadcrumb may point into the old tree; drop it before that
-            // tree can be replaced.
-            s.crumbRects.clear();
-            s.crumbNodes.clear();
-            s.hoverTile = s.hoverSlice = s.hoverTop = s.hoverCrumb = -1;
-            if (!r->error.empty()) {
-                s.lastScanError = r->error; // the previous tree stays on display
-            } else if (r->cancelled) {
-                s.lastScanError.clear(); // partial data would misreport; keep the old scan
-            } else {
-                s.tree = std::make_shared<Node>(std::move(r->root));
-                s.largest = std::move(r->largest);
-                s.skippedList = std::move(r->skippedList);
-                s.files = r->files;
-                s.dirs = r->dirs;
-                s.skippedDirs = r->skippedDirs;
-                s.skippedLinks = r->skippedLinks;
-                s.elapsedMs = r->elapsedMs;
-                s.lastScanError.clear();
-                s.viewRoot = s.tree.get();
-                s.drill.clear();
-                s.topScroll = 0;
-                saveConfigNow(s);
-            }
-            delete r;
-            computeLayout(s);
-            relayoutView(s);
-            ::InvalidateRect(hwnd, nullptr, FALSE);
+
+    case WM_APP_PARTIAL:
+        if(lp) {
+            std::unique_ptr<std::shared_ptr<ScanResult>> packet(reinterpret_cast<std::shared_ptr<ScanResult>*>(lp));
+            if(s.scanning){s.partialResult=*packet;if(s.partialView||!s.tree)adoptResult(s,s.partialResult,true);::InvalidateRect(hwnd,nullptr,FALSE);}
         }
         return 0;
+    case WM_APP_DONE:
+        joinScanThread(s);
+        if(lp) {
+            std::shared_ptr<ScanResult> r(reinterpret_cast<ScanResult*>(lp));
+            s.scanning=false;::KillTimer(hwnd,1);s.cancelled=r->cancelled;clearHover(s);
+            if(!r->error.empty()||r->cancelled) {
+                s.lastScanError=r->error;
+                if(s.completeResult){adoptResult(s,s.completeResult,false);s.notice=r->cancelled?(s.spec.zh?L"扫描已取消，已保留上次完成结果。":L"Cancelled; previous result retained."):(s.spec.zh?L"更新失败，已保留上次完成结果。点击重新扫描重试。":L"Update failed; previous result retained.");}
+                else if(s.partialResult && r->root.name.empty()){adoptResult(s,s.partialResult,true);s.notice=r->cancelled?(s.spec.zh?L"扫描已取消，仅保留已发现结果。":L"Cancelled; partial result retained."):(s.spec.zh?L"扫描失败，仅保留已发现结果。问题详情可查看失败原因。":L"Scan failed; partial result retained. See scan issues.");}
+                else if(!r->root.name.empty()&&r->root.files){s.partialResult=r;adoptResult(s,r,true);s.notice=s.spec.zh?L"扫描未完成，仅保留本轮已发现的局部结果。":L"Incomplete scan; discovered entries retained.";}
+                else {s.notice=winshun::wide(r->error);if(r->cancelled)s.notice=s.spec.zh?L"扫描已取消。":L"Scan cancelled.";}
+            } else {
+                s.completeResult=r;s.partialResult.reset();s.partialView=false;s.lastScanError.clear();
+                adoptResult(s,r,false);s.notice=r->fallbackReason.empty()?L"":(s.spec.zh?L"本次使用普通扫描：":L"Standard scan used: ")+r->fallbackReason;saveConfigNow(s);
+            }
+            if(!s.tree&&s.lastScanError.empty())s.driveCards=listFixedDrives();
+            computeLayout(s);relayoutView(s);::InvalidateRect(hwnd,nullptr,FALSE);
+        }
+        return 0;
+
+
     case WM_CLOSE:
+        s.cancelFlag = true;
+        joinScanThread(s);
+        {
+            MSG stale;
+            while (::PeekMessageW(&stale, hwnd, WM_APP_PROGRESS, WM_APP_PARTIAL, PM_REMOVE)) {
+                if (stale.message == WM_APP_PROGRESS)
+                    delete reinterpret_cast<ScanProgress*>(stale.lParam);
+                else if (stale.message == WM_APP_DONE)
+                    delete reinterpret_cast<ScanResult*>(stale.lParam);
+                else if(stale.message==WM_APP_PARTIAL) delete reinterpret_cast<std::shared_ptr<ScanResult>*>(stale.lParam);
+            }
+        }
         ::DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
@@ -1416,10 +1825,24 @@ inline void threadMain(ViewerSpec spec)
     // saved file keeps only the last scanned path.
     s.sunburst = s.spec.defaultSunburst;
     const ViewConfig cfg = loadViewConfig(s.spec.dataDir);
+    s.lastPath = cfg.lastPath;
+    s.lastScanError.clear();
+    s.cancelled = false;
+    s.cancelFlag = false;
+    s.listFolders = true;
+    s.history.clear();s.historyIndex=-1;s.selected=nullptr;s.selectedPath.clear();s.filter.clear();s.notice.clear();s.pendingPath.clear();
+    s.completeResult.reset();s.partialResult.reset();s.partialView=false;s.resultIncomplete=false;
+    s.depth=1;s.splitRatio=.58;s.editingAddress=false;s.mobileList=false;s.groupFilter.clear();s.rows.clear();
+    s.keyboardFocus=false;s.focusIndex=-1;
+    s.topScroll = 0;
+    s.hoverDrive = s.hoverFolder = -1;
+    s.hoverScan = s.hoverBack = s.hoverTreemapBtn = s.hoverSunburstBtn = false;
+    s.driveCards = listFixedDrives();
     makeFonts(s);
 
     WNDCLASSEXW wc {};
     wc.cbSize = sizeof wc;
+    wc.style=CS_DBLCLKS;
     wc.lpfnWndProc = wndProc;
     wc.hInstance = ::GetModuleHandleW(nullptr);
     wc.hCursor = nullptr;
@@ -1439,6 +1862,7 @@ inline void threadMain(ViewerSpec spec)
         s.cv.notify_all();
         return;
     }
+    s.windowIcons.update(s.hwnd);
     computeLayout(s);
 
     s.edit = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", nullptr,
@@ -1447,16 +1871,22 @@ inline void threadMain(ViewerSpec spec)
                                s.hwnd, nullptr, wc.hInstance, nullptr);
     s.origEditProc = reinterpret_cast<WNDPROC>(
         ::SetWindowLongPtrW(s.edit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(editProc)));
-    applyEditFont(s);
+    s.filterEdit=::CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL,0,0,100,28,s.hwnd,reinterpret_cast<HMENU>(101),wc.hInstance,nullptr);
+    s.origFilterProc=reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(s.filterEdit,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(filterProc)));
+    applyEditFont(s);::SendMessageW(s.filterEdit,WM_SETFONT,reinterpret_cast<WPARAM>(s.font),TRUE);
+    computeLayout(s);
 
     const std::wstring seed = !s.spec.initialPath.empty() ? s.spec.initialPath : cfg.lastPath;
     ::SetWindowTextW(s.edit, seed.c_str());
     ::SendMessageW(s.edit, EM_SETSEL, seed.size(), seed.size());
 
     if (!s.spec.initialPath.empty())
-        startScan(s, s.spec.initialPath);
+        ::PostMessageW(s.hwnd,WM_APP_START_SCAN,0,0);
 
     ::ShowWindow(s.hwnd, SW_SHOW);
+    // A launcher may hide the console via STARTUPINFO. Windows applies that
+    // flag to the first ShowWindow call too; explicitly reveal our GUI after it.
+    if(!::IsWindowVisible(s.hwnd))::ShowWindow(s.hwnd,SW_SHOWNORMAL);
     ::SetForegroundWindow(s.hwnd);
 
     {
@@ -1471,13 +1901,20 @@ inline void threadMain(ViewerSpec spec)
         ::DispatchMessageW(&msg);
     }
 
+    s.windowIcons.clear();
+
     // Teardown: stop the scan first so the thread never posts into a dead
     // window, then release everything the GUI thread created.
     s.cancelFlag = true;
     joinScanThread(s);
     MSG stale;
-    while (::PeekMessageW(&stale, s.hwnd, WM_APP_PROGRESS, WM_APP_DONE, PM_REMOVE))
-        delete reinterpret_cast<void*>(stale.lParam);
+    while (::PeekMessageW(&stale, s.hwnd, WM_APP_PROGRESS, WM_APP_PARTIAL, PM_REMOVE)) {
+        if (stale.message == WM_APP_PROGRESS)
+            delete reinterpret_cast<ScanProgress*>(stale.lParam);
+        else if (stale.message == WM_APP_DONE)
+            delete reinterpret_cast<ScanResult*>(stale.lParam);
+                else if(stale.message==WM_APP_PARTIAL) delete reinterpret_cast<std::shared_ptr<ScanResult>*>(stale.lParam);
+    }
 
     if (s.editBrush) {
         ::DeleteObject(s.editBrush);
@@ -1499,7 +1936,9 @@ inline void threadMain(ViewerSpec spec)
         ::DeleteObject(s.fontSmall);
         s.fontSmall = nullptr;
     }
+    s.filterEdit=nullptr;s.origFilterProc=nullptr;s.completeResult.reset();s.partialResult.reset();s.rows.clear();s.groups.clear();
     s.edit = nullptr;
+    if(s.fontHeading){::DeleteObject(s.fontHeading);s.fontHeading=nullptr;}
     s.origEditProc = nullptr;
     s.tree.reset();
     s.viewRoot = nullptr;
@@ -1507,9 +1946,13 @@ inline void threadMain(ViewerSpec spec)
     s.tiles.clear();
     s.slices.clear();
     s.largest.clear();
+    s.rootLargest.clear();
+    s.folders.clear();
     s.skippedList.clear();
     s.crumbRects.clear();
     s.crumbNodes.clear();
+    s.driveCards.clear();
+    s.driveRects.clear();
     s.scanning = false;
     ::UnregisterClassW(L"WinShunDiskViewWindow", ::GetModuleHandleW(nullptr));
 

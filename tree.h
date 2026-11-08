@@ -36,6 +36,11 @@ struct Node {
 
 // ---- shared view helpers --------------------------------------------------------
 
+inline std::wstring childPath(const std::wstring& base, const std::wstring& name)
+{
+    return base.empty() ? name : base + (base.back() == L'\\' ? L"" : L"\\") + name;
+}
+
 inline const Node* findChild(const Node& node, const std::wstring& name)
 {
     for (const Node& c : node.children)
@@ -149,16 +154,17 @@ inline double rowWorstExtra(const std::vector<double>& areas, double side, doubl
 // the display path of `node` itself; every tile carries its full path.
 inline void treemapTiles(const Node& node, const Rect& area, int depth, double minArea,
                          std::vector<Tile>& out, std::wstring basePath = {},
-                         int maxDepth = 24)
+                         int maxDepth = 24, const std::vector<const Node*>* visible = nullptr)
 {
     if (depth > maxDepth || node.children.empty() || area.w <= 0 || area.h <= 0)
         return;
     std::vector<const Node*> kids;
     kids.reserve(node.children.size());
-    for (const Node& c : node.children)
-        kids.push_back(&c);
-    std::stable_sort(kids.begin(), kids.end(),
-                     [](const Node* a, const Node* b) { return a->logical > b->logical; });
+    if (visible) kids = *visible;
+    else for (const Node& c : node.children) kids.push_back(&c);
+    const auto larger = [](const Node* a, const Node* b) { return a->logical > b->logical; };
+    if (!std::is_sorted(kids.begin(), kids.end(), larger))
+        std::stable_sort(kids.begin(), kids.end(), larger);
     const double total = node.logical > 0 ? static_cast<double>(node.logical) : 0;
     if (total <= 0)
         return;
@@ -184,7 +190,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
             for (std::size_t i = 0; i < row.size(); ++i) {
                 const double hh = rowAreas[i] / t;
                 Rect r {x, cy, t, hh};
-                Tile tile {r, row[i], depth, basePath.empty() ? row[i]->name : basePath + L"\\" + row[i]->name};
+                Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
                 out.push_back(std::move(tile));
                 if (row[i]->dir && hh > 0 && t > 0)
                     treemapTiles(*row[i], Rect {x + 1, cy + 1, std::max(0.0, t - 2), std::max(0.0, hh - 2)},
@@ -199,7 +205,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
             for (std::size_t i = 0; i < row.size(); ++i) {
                 const double ww = rowAreas[i] / t;
                 Rect r {cx, y, ww, t};
-                Tile tile {r, row[i], depth, basePath.empty() ? row[i]->name : basePath + L"\\" + row[i]->name};
+                Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
                 out.push_back(std::move(tile));
                 if (row[i]->dir && ww > 0 && t > 0)
                     treemapTiles(*row[i], Rect {cx + 1, y + 1, std::max(0.0, ww - 2), std::max(0.0, t - 2)},
@@ -257,7 +263,7 @@ struct Slice {
 inline void sunburstSlices(const Node& node, double cx, double cy, double r0, double ringWidth,
                            double a0, double a1, int depth, double minAngle,
                            std::vector<Slice>& out, std::wstring basePath = {},
-                           int maxDepth = 16)
+                           int maxDepth = 16, const std::vector<const Node*>* visible = nullptr)
 {
     if (depth > maxDepth || node.children.empty())
         return;
@@ -266,10 +272,11 @@ inline void sunburstSlices(const Node& node, double cx, double cy, double r0, do
         return;
     std::vector<const Node*> kids;
     kids.reserve(node.children.size());
-    for (const Node& c : node.children)
-        kids.push_back(&c);
-    std::stable_sort(kids.begin(), kids.end(),
-                     [](const Node* a, const Node* b) { return a->logical > b->logical; });
+    if (visible) kids = *visible;
+    else for (const Node& c : node.children) kids.push_back(&c);
+    const auto larger = [](const Node* a, const Node* b) { return a->logical > b->logical; };
+    if (!std::is_sorted(kids.begin(), kids.end(), larger))
+        std::stable_sort(kids.begin(), kids.end(), larger);
     double a = a0;
     const double r1 = r0 + ringWidth;
     for (const Node* kid : kids) {
@@ -286,7 +293,7 @@ inline void sunburstSlices(const Node& node, double cx, double cy, double r0, do
         s.r0 = r0;
         s.r1 = r1;
         s.dir = kid->dir;
-        s.path = basePath.empty() ? kid->name : basePath + L"\\" + kid->name;
+        s.path = childPath(basePath, kid->name);
         out.push_back(std::move(s));
         if (kid->dir)
             sunburstSlices(*kid, cx, cy, r1, ringWidth, a, a + span, depth + 1, minAngle, out,

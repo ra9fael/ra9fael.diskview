@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Disk View · 导航与操作原型</title>
+<style>body{margin:0;padding:16px;background:light-dark(#edf1f6,#111721);font-family:"Segoe UI",sans-serif}main{max-width:1200px;margin:0 auto}@media(max-width:440px){body{padding:8px}}</style>
+</head><body><main>
+<div id="diskview-next" data-pane="chart" aria-label="Disk View 导航与操作改进原型">
+<style>
+#diskview-next{--bg:light-dark(#f4f7fb,#171d27);--panel:light-dark(#fff,#222a36);--text:light-dark(#203047,#edf2fa);--sub:light-dark(#596a80,#b7c5d8);--line:light-dark(#dbe3ee,#435168);--soft:light-dark(#eaf2fd,#2e4562);--accent:light-dark(#085bb5,#9cc9ff);--on:light-dark(#fff,#142d49);--button:light-dark(#0968cd,#a2cdff);--warn:light-dark(#805116,#ffda9b);--warnbg:light-dark(#fff4dd,#3c3222);--good:light-dark(#146744,#96d9b9);--green:light-dark(#d8eae4,#32564c);--purple:light-dark(#e9e0f4,#4b3e5e);--blue:light-dark(#dce9f8,#304e70);--gold:light-dark(#efe6d1,#5c5139);--gray:light-dark(#e5e9ef,#3b4655);font:13px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif;color:var(--text);color-scheme:light dark;width:100%;position:relative;text-align:left}
+#diskview-next *{box-sizing:border-box}#diskview-next [hidden]{display:none!important}
+#diskview-next button,#diskview-next input,#diskview-next select{font:inherit;color:inherit}
+#diskview-next button{cursor:var(--cursor-interaction,pointer)}#diskview-next button:disabled{cursor:default;opacity:.45}
+#diskview-next button:focus-visible,#diskview-next input:focus-visible,#diskview-next select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#diskview-next button{border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:6px 10px;min-height:32px}
+#diskview-next button:hover:not(:disabled){background:var(--soft)}
+#diskview-next button[aria-pressed=true],#diskview-next .primary{background:var(--button);color:var(--on);border-color:transparent}
+#diskview-next button[aria-pressed=true]:hover,#diskview-next .primary:hover{background:var(--button);color:var(--on)}
+#diskview-next .plain{border-color:transparent;background:transparent}
+#diskview-next .app{background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+#diskview-next .titlebar{display:flex;align-items:center;gap:9px;background:var(--panel);padding:10px 14px;flex-wrap:wrap}
+#diskview-next .brand{font-size:15px;font-weight:600}
+#diskview-next .badge{font-size:11px;background:var(--soft);color:var(--accent);border-radius:5px;padding:3px 7px;white-space:nowrap}
+#diskview-next .spacer{flex:1}#diskview-next .muted{color:var(--sub)}#diskview-next .tiny{font-size:11px}
+#diskview-next .navline{display:flex;gap:6px;align-items:center;padding:12px 14px 6px;flex-wrap:wrap}
+#diskview-next .history{display:flex;gap:4px}
+#diskview-next .address{display:flex;gap:2px;align-items:center;flex:1;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 5px}
+#diskview-next .crumbs{display:flex;align-items:center;min-width:0;flex:1;overflow:hidden}
+#diskview-next .crumbs button{border:0;background:transparent;white-space:nowrap;max-width:180px;text-overflow:ellipsis;overflow:hidden;padding:4px 6px;min-height:28px}
+#diskview-next .crumbs button:last-child{color:var(--accent)}
+#diskview-next .crumbs span{color:var(--sub)}
+#diskview-next input,#diskview-next select{background:var(--panel);border:1px solid var(--line);padding:7px 9px;border-radius:5px;min-width:0}
+#diskview-next #nx-address{width:100%;border:0}
+#diskview-next .meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:3px 14px 10px;color:var(--sub);font-size:12px}
+#diskview-next .meta button{font-size:12px;min-height:26px;padding:3px 7px}
+#diskview-next .heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:5px 14px 12px}
+#diskview-next .heading h1{font-size:21px;line-height:1.3;margin:0;overflow-wrap:anywhere}
+#diskview-next .heading .back-parent{font-weight:600;background:var(--soft);color:var(--accent);border-color:var(--line);min-height:38px}
+#diskview-next .heading small{color:var(--sub);font-weight:400;font-size:12px}
+#diskview-next .banner{margin:0 14px 10px;border-left:3px solid var(--warn);padding:9px 11px;background:var(--warnbg);color:var(--warn);display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+#diskview-next .banner span{flex:1;min-width:180px}
+#diskview-next .progressbox{margin:0 14px 12px;padding:12px;background:var(--soft);border-radius:7px}
+#diskview-next .progressline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#diskview-next .phases{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+#diskview-next .phase{font-size:11px;color:var(--sub);padding:3px 7px;background:var(--panel);border-radius:4px}
+#diskview-next .phase.active{color:var(--accent);font-weight:600}
+#diskview-next .track{height:4px;background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:2px;margin-top:10px;overflow:hidden}
+#diskview-next .track span{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+#diskview-next .mobile{display:none;gap:6px;padding:0 14px 10px}
+#diskview-next .main{display:grid;grid-template-columns:minmax(0,var(--split,57%)) 6px minmax(0,1fr);margin:0 14px;gap:0;align-items:stretch}
+#diskview-next .pane{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+#diskview-next .paneheader{padding:10px 12px;display:flex;gap:5px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+#diskview-next .paneheader strong{font-weight:600}
+#diskview-next .paneheader button{padding:4px 8px}
+#diskview-next .focus-label{font-size:11px;color:var(--sub)}
+#diskview-next .charttools{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:9px 11px}
+#diskview-next .charttools select{padding:5px;font-size:12px}
+#diskview-next .charttools button{min-width:30px;padding:3px 8px}
+#diskview-next .stage{height:355px;position:relative;overflow:hidden;margin:0 10px 6px;background:var(--bg);border-radius:5px;touch-action:none}
+#diskview-next .scene{position:absolute;inset:0;transform-origin:50% 50%;will-change:transform}
+#diskview-next .scene.drag{cursor:grabbing}
+#diskview-next .tile{position:absolute;border:2px solid var(--panel);background:var(--tile);padding:6px;text-align:left;overflow:hidden;border-radius:0;display:flex;align-items:flex-start;flex-direction:column;justify-content:flex-start;min-height:0}
+#diskview-next .tile:hover,#diskview-next .tile.selected{color:var(--text);background:var(--tile)!important;box-shadow:inset 0 0 0 2px var(--accent)}
+#diskview-next .sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#diskview-next .tile span{white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+#diskview-next .tile small{color:var(--sub);font-size:11px}
+#diskview-next .sun{width:100%;height:100%;display:block}
+#diskview-next .sun path{fill:var(--tile);stroke:var(--panel);stroke-width:1;cursor:pointer}
+#diskview-next .sun path.selected,#diskview-next .sun path:hover{stroke:var(--accent);stroke-width:2}
+#diskview-next .arc-label{position:absolute;transform:translate(-50%,-50%);background:transparent;border:0;padding:1px 4px;min-height:24px;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+#diskview-next .arc-label:hover,#diskview-next .arc-label.selected{background:var(--soft)}
+#diskview-next .arc-label[aria-pressed=true],#diskview-next .arc-label[aria-pressed=true]:hover{background:var(--soft);color:var(--text)}
+#diskview-next .sun-parent{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:114px;border:0;background:transparent;padding:5px;display:flex;flex-direction:column;align-items:center}
+#diskview-next .sun-parent span{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#diskview-next .sun-parent small{font-size:11px;color:var(--sub)}
+#diskview-next .chartnav{display:flex;align-items:center;gap:8px;margin:2px 11px 6px;color:var(--sub);font-size:11px;flex-wrap:wrap}
+#diskview-next .panpad{display:flex;gap:2px;padding:3px;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+#diskview-next .panpad button{width:28px}
+#diskview-next .panpad button{padding:0;min-height:27px;border:0}
+#diskview-next .panpad button:first-child{grid-column:2}
+#diskview-next .panpad [data-pan=up]{grid-area:1/2}#diskview-next .panpad [data-pan=left]{grid-area:2/1}#diskview-next .panpad .pan-center{grid-area:2/2}#diskview-next .panpad [data-pan=right]{grid-area:2/3}#diskview-next .panpad [data-pan=down]{grid-area:3/2}
+#diskview-next .panpad .pan-center{font-size:11px}
+#diskview-next .legend{padding:5px 11px 9px;display:flex;gap:11px;align-items:center;font-size:11px;color:var(--sub);flex-wrap:wrap}
+#diskview-next .legend i{display:inline-block;width:8px;height:8px;background:var(--tile);margin-right:4px}
+#diskview-next .splitter{cursor:col-resize;background:transparent}
+#diskview-next .listtools{display:flex;gap:5px;padding:10px 11px}
+#diskview-next .listtools input{width:100%;font-size:12px}
+#diskview-next .filetable{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}
+#diskview-next .filetable th{font-weight:400;color:var(--sub);text-align:left;border-bottom:1px solid var(--line);padding:4px 9px}
+#diskview-next .filetable th:nth-child(2){width:80px;text-align:right}
+#diskview-next .filetable th:nth-child(3){width:54px;text-align:right}
+#diskview-next .filetable th button{border:0;background:transparent;padding:0;min-height:25px;font-size:12px}
+#diskview-next .filetable td{border-bottom:1px solid var(--line);height:38px}
+#diskview-next .filetable td:not(:first-child){text-align:right;padding-right:9px;font-variant-numeric:tabular-nums}
+#diskview-next .rowbutton{display:flex;align-items:center;gap:7px;width:100%;min-width:0;text-align:left;border:0;border-radius:0;background:transparent;padding:7px 10px}
+#diskview-next .rowbutton span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#diskview-next .rowbutton i{width:8px;height:8px;flex:none;background:var(--tile)}
+#diskview-next tr.selected{background:var(--soft)}
+#diskview-next .parentrow button{color:var(--accent);background:var(--soft);font-weight:600}
+#diskview-next .listfoot{padding:9px 10px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;color:var(--sub);font-size:11px}
+#diskview-next .listfoot button{font-size:11px;min-height:27px;padding:3px 7px}
+#diskview-next .details{margin:11px 14px 0;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+#diskview-next .detailbody{flex:1;min-width:180px}
+#diskview-next .detailbody strong{font-weight:600;overflow-wrap:anywhere}
+#diskview-next .detailpath{color:var(--sub);font-size:12px;margin:3px 0;overflow-wrap:anywhere}
+#diskview-next .detailactions{display:flex;gap:5px;flex-wrap:wrap;max-width:240px}
+#diskview-next .status{display:flex;gap:10px;align-items:center;padding:8px 14px;color:var(--sub);font-size:11px;min-height:34px}
+#diskview-next .status #nx-status{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#diskview-next .helpstrip{padding:0 14px 10px;display:flex;gap:12px;align-items:center;color:var(--sub);font-size:11px;flex-wrap:wrap}
+#diskview-next kbd{font:11px "Segoe UI",sans-serif;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:1px 4px;white-space:nowrap;color:var(--sub)}
+#diskview-next .demo{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:11px 10px 4px;color:var(--sub);font-size:12px;background:var(--bg)}
+#diskview-next .demo button{padding:4px 8px;min-height:28px;font-size:12px}
+#diskview-next .toast{min-height:23px;padding:6px 10px;color:var(--accent);font-size:12px;background:var(--bg)}
+#diskview-next .tip{position:absolute;z-index:20;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:10px;width:310px;max-width:calc(100% - 20px);box-shadow:0 6px 24px #0002}
+#diskview-next .tip strong{font-weight:600;overflow-wrap:anywhere}
+#diskview-next .tip p{margin:4px 0;color:var(--sub);overflow-wrap:anywhere;font-size:12px}
+#diskview-next .menu{position:absolute;z-index:40;width:264px;max-width:calc(100% - 16px);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 40px #0003;padding:5px}
+#diskview-next .menu .menuhead{padding:5px 9px;color:var(--sub);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#diskview-next .menu button{display:flex;gap:12px;align-items:center;width:100%;text-align:left;border:0;border-radius:4px;background:transparent;padding:6px 9px}
+#diskview-next .menu button span{flex:1}
+#diskview-next .menu hr{border:0;border-top:1px solid var(--line);margin:4px}
+#diskview-next .menu .danger{color:var(--warn)}
+#diskview-next .shade{position:absolute;inset:0;z-index:50;background:#101d3059;display:flex;justify-content:center;align-items:flex-start;padding:60px 14px 24px}
+#diskview-next .dialog{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;max-width:100%;width:590px;box-shadow:0 15px 45px #0003}
+#diskview-next .dialoghead{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+#diskview-next .dialog h2{font-size:18px;font-weight:600;margin:0;flex:1}
+#diskview-next .dialog h3{font-size:13px;font-weight:600;margin:14px 0 6px}
+#diskview-next .dialog p{margin:8px 0;color:var(--sub);overflow-wrap:anywhere}
+#diskview-next .fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#diskview-next .fields label{display:flex;gap:5px;flex-direction:column;font-size:12px;min-width:0}
+#diskview-next .fields select{width:100%;max-width:100%}
+#diskview-next .fields label.full{grid-column:1/-1}
+#diskview-next .dialogactions{display:flex;gap:7px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
+#diskview-next .notice{background:var(--soft);padding:9px 11px;border-radius:6px;color:var(--sub);font-size:12px}
+#diskview-next .keygrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;font-size:12px}
+#diskview-next .keygrid div{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)}
+#diskview-next .commands{display:flex;flex-direction:column;margin-top:10px}
+#diskview-next .commands button{display:flex;align-items:center;gap:9px;text-align:left;border:0}
+#diskview-next .commands button span{flex:1;min-width:0;overflow-wrap:anywhere}
+#diskview-next .commands button small{max-width:65%;overflow-wrap:anywhere}
+#diskview-next .inspector{margin:0 14px 11px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:7px}
+#diskview-next .inspector .inspecthead{display:flex;align-items:center;gap:8px;font-weight:600}
+#diskview-next .inspector p{font-size:12px;color:var(--sub);margin:6px 0}
+#diskview-next .inspector table{width:100%;border-collapse:collapse;font-size:12px}
+#diskview-next .inspector td{padding:5px 8px;border-bottom:1px solid var(--line)}
+#diskview-next .workers{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
+#diskview-next .workers span{background:var(--soft);border-radius:3px;padding:3px 8px;font-size:11px;color:var(--accent)}
+#diskview-next .copybox{width:100%;margin-top:10px}
+@media(max-width:760px){#diskview-next .main{display:block}#diskview-next .splitter{display:none}#diskview-next .mobile{display:flex}#diskview-next[data-pane=chart] .listpane{display:none}#diskview-next[data-pane=list] .chartpane{display:none}#diskview-next .stage{height:345px}#diskview-next .heading h1{font-size:18px}#diskview-next .detailactions{max-width:none}#diskview-next .status .keyhint{display:none}}
+@media(max-width:440px){#diskview-next .navline .address{order:3;flex-basis:100%}#diskview-next .brand-sub{display:none}#diskview-next .titlebar{padding:10px}#diskview-next .titlebar .badge{font-size:11px}#diskview-next .titlebar button{padding:4px 6px}#diskview-next .heading{gap:7px}#diskview-next .heading .back-parent{width:100%;text-align:left}#diskview-next .heading .spacer{display:none}#diskview-next .main,#diskview-next .details{margin-left:10px;margin-right:10px}#diskview-next .stage{height:310px}#diskview-next .keygrid,#diskview-next .fields{grid-template-columns:1fr}#diskview-next .shade{padding:25px 8px}#diskview-next .dialog{padding:14px}#diskview-next .meta{gap:5px}#diskview-next .legend{gap:7px}#diskview-next .filetable th:nth-child(2){width:67px}#diskview-next .filetable th:nth-child(3){width:43px}#diskview-next .crumbs button{max-width:110px}#diskview-next .helpstrip{gap:7px}}
+@media(prefers-reduced-motion:reduce){#diskview-next .track span{transition:none}}
+</style>
+<div class="app">
+ <header class="titlebar"><span class="brand">◩ Disk View</span><span class="brand-sub muted">磁盘透视</span><span class="badge">交互模拟 · 合成数据</span><span class="spacer"></span><button id="nx-command" aria-label="打开命令面板 Ctrl+K">⌘ 操作</button><button id="nx-help" aria-label="快捷键帮助 F1">快捷键</button><button id="nx-theme">深色</button></header>
+ <nav class="navline" aria-label="目录导航"><div class="history"><button id="nx-back" aria-label="后退 Alt+Left" title="后退 Alt+←">←</button><button id="nx-forward" aria-label="前进 Alt+Right" title="前进 Alt+→">→</button></div><div class="address"><div id="nx-crumbs" class="crumbs"></div><input id="nx-address" aria-label="目录地址" hidden><button id="nx-edit" class="plain" aria-label="编辑路径 Ctrl+L">编辑</button></div><button id="nx-rescan" class="primary">扫描设置</button></nav>
+ <div class="meta"><span id="nx-source">完整结果 · NTFS 快速 / MFT</span><button id="nx-account" class="plain">逻辑大小 ⓘ</button><span class="spacer"></span><button id="nx-diagnostics" class="plain">扫描诊断</button><button id="nx-issues" class="plain">0 个读取问题</button></div>
+ <div id="nx-banner" class="banner" hidden><span></span><button id="nx-error-detail">查看原因</button></div>
+ <section id="nx-inspector" class="inspector" hidden aria-label="信息面板"></section>
+ <section id="nx-progress" class="progressbox" hidden aria-label="扫描进度"><div class="progressline"><strong id="nx-engine"></strong><span class="spacer"></span><button id="nx-partial">查看本轮已发现</button><button id="nx-pause">暂停</button><button id="nx-cancel">取消</button></div><div class="progressline" style="margin-top:7px"><span id="nx-discovered" class="muted"></span><span class="spacer"></span><span id="nx-pool" class="tiny muted"></span></div><div id="nx-phases" class="phases"></div><div class="track"><span id="nx-meter"></span></div></section>
+ <div class="heading"><button id="nx-parent" class="back-parent">↑ 返回 Downloads</button><div><h1 id="nx-heading">cern soc group</h1><small id="nx-total"></small></div><span class="spacer"></span><button id="nx-ancestors" class="plain">全部上级 ▾</button></div>
+ <div class="mobile"><button id="nx-show-chart" aria-pressed="true">空间图</button><button id="nx-show-list" aria-pressed="false">目录列表</button></div>
+ <div class="main">
+  <section class="pane chartpane" aria-label="空间图"><div class="paneheader"><strong>空间分布</strong><span id="nx-focus-chart" class="focus-label">方向键选择</span><span class="spacer"></span><button id="nx-tiles" aria-pressed="true">方块</button><button id="nx-rings" aria-pressed="false">圆盘</button></div>
+   <div class="charttools"><label class="tiny muted">层级 <select id="nx-depth" aria-label="显示层级"><option value="1">当前一层</option><option value="2">两层</option></select></label><span class="spacer"></span><button id="nx-zoom-out" aria-label="缩小图表">−</button><span id="nx-zoom" class="tiny">100%</span><button id="nx-zoom-in" aria-label="放大图表">＋</button><button id="nx-fit">适合窗口</button></div>
+   <div id="nx-stage" class="stage" aria-label="可缩放和四向平移的空间图"><div id="nx-scene" class="scene"></div></div><div class="chartnav"><span>平移</span><div class="panpad" aria-label="四向平移，放大后可用"><button data-pan="up" aria-label="向上平移">↑</button><button data-pan="left" aria-label="向左平移">←</button><button id="nx-pan-home" class="pan-center" aria-label="平移归中">归中</button><button data-pan="right" aria-label="向右平移">→</button><button data-pan="down" aria-label="向下平移" style="grid-column:2">↓</button></div></div>
+   <div class="legend"><span style="--tile:var(--green)"><i></i>目录</span><span style="--tile:var(--purple)"><i></i>视频</span><span style="--tile:var(--blue)"><i></i>文档</span><span style="--tile:var(--gold)"><i></i>压缩包</span><span class="spacer"></span><span>＋ 放大 · 空格拖动</span></div>
+  </section>
+  <div id="nx-divider" class="splitter" aria-label="拖动调整两栏宽度"></div>
+  <section class="pane listpane" aria-label="目录列表"><div class="paneheader"><button id="nx-current" aria-pressed="true">当前层</button><button id="nx-largest" aria-pressed="false">最大文件</button><span class="spacer"></span><span id="nx-focus-list" class="focus-label">↑↓ 选中 · → 进入</span></div><div class="listtools"><input id="nx-filter" aria-label="筛选当前列表" placeholder="筛选当前列表 · Ctrl+F"><button id="nx-clear" aria-label="清空筛选">×</button></div><table class="filetable"><thead><tr><th><button id="nx-sort-name">名称</button></th><th><button id="nx-sort-size">大小 ↓</button></th><th>占比</th></tr></thead><tbody id="nx-rows"></tbody></table><div class="listfoot"><span id="nx-list-count"></span><span class="spacer"></span><button id="nx-prev">上一页</button><button id="nx-next">下一页</button></div></section>
+ </div>
+ <section class="details" aria-label="选中项详情"><div class="detailbody"><strong id="nx-detail-name">选择一个条目</strong><div id="nx-detail-path" class="detailpath"></div><div id="nx-detail-size" class="tiny"></div></div><div class="detailactions"><button id="nx-enter">进入目录</button><button id="nx-locate">定位父目录</button><button id="nx-more">更多操作 ⋯</button></div></section>
+ <footer class="status"><span id="nx-status">单击选择，右键操作；双击目录进入。</span><span class="keyhint">F6 切换图表 / 列表</span></footer>
+ <div class="helpstrip"><span><kbd>Alt</kbd>＋<kbd>↑</kbd> 返回父级</span><span><kbd>Backspace</kbd> 返回父级</span><span><kbd>Shift</kbd>＋<kbd>F10</kbd> 右键菜单</span><span><kbd>F1</kbd> 快捷键</span></div>
+</div>
+<div class="demo"><span>演示场景</span><button id="nx-demo-deep">深层目录</button><button id="nx-demo-root">整盘总览</button><button id="nx-demo-error">失败 / 未完成</button><button id="nx-demo-reset">重置演示</button><span class="spacer"></span><span class="tiny">不读取本机磁盘，不执行真实文件操作。</span></div>
+<div id="nx-toast" class="toast" aria-live="polite"></div>
+<div id="nx-tip" class="tip" hidden></div>
+<div id="nx-menu" class="menu" role="menu" aria-label="条目操作" hidden></div>
+<div id="nx-shade" class="shade" hidden><section id="nx-dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="nx-dialog-title"><div class="dialoghead"><h2 id="nx-dialog-title"></h2><button id="nx-dialog-close" aria-label="关闭对话框">×</button></div><div id="nx-dialog-body"></div></section></div>
+<script>
+(() => {
+ const root=document.getElementById('diskview-next');if(!root)return;
+ const $=id=>root.querySelector('#nx-'+id),all=sel=>Array.from(root.querySelectorAll(sel));
+ const GiB=1024**3,MiB=1024**2;
+ const file=(id,name,gb,kind='file')=>({id,name,bytes:Math.round(gb*GiB),kind,children:null});
+ const folder=(id,name,children,protectedItem=false)=>({id,name,children,protectedItem});
+ const data=folder('root','C:\\',[
+  folder('users','Users',[folder('renfei','renfei',[
+   folder('downloads','Downloads',[
+    folder('cern','cern soc group',[file('video-a','OPEN-VIDEO-2022-144-001-1080p.mp4',1.3,'video'),file('video-b','OPEN-VIDEO-2021-134-004-720p.mp4',924/1024,'video'),file('video-c','OPEN-VIDEO-2021-134-005.mp4',527/1024,'video'),file('pdf-a','Cosimulation.pdf',11.9/1024,'doc'),file('pdf-b','2023-10-05-SoC_CMS_DAQ_ZYNQ.pdf',9.9/1024,'doc'),file('pdf-c','FPGA-SoC workshop CERN.pdf',8/1024,'doc')]),
+    folder('models','AI models',[file('model-a','language-model.gguf',24),file('model-b','vision-model.safetensors',12)]),
+    file('vm','Windows-development.vhdx',28,'archive'),file('archive','SDK-offline-packages.zip',12,'archive'),file('iso','Ubuntu.iso',5.9,'archive'),
+    folder('installers','Installers',Array.from({length:14},(_,i)=>file('installer-'+i,'Setup-'+String(i+1).padStart(2,'0')+'.exe',.8-i*.04))),
+    folder('screens','Screenshots',[file('screen-a','design-review.png',.04),file('screen-b','desktop-capture.png',.02)])
+   ]),
+   folder('projects','Projects',[folder('diskview','Disk View',[file('build','build-cache.zip',8,'archive'),file('sources','sources.tar',.4,'archive')]),folder('research','Research',[file('dataset','dataset.parquet',46),file('notes','实验记录.pdf',.025,'doc')])]),
+   folder('videos','Videos',[file('movie-a','project-recording.mov',84,'video'),file('movie-b','course-archive.mp4',32,'video')]),
+   folder('documents','Documents',[file('paper','paper-attachments.zip',2,'archive'),file('books','reading-list.pdf',.3,'doc')])
+  ])]),
+  folder('windows','Windows',[file('system-a','System components',46),file('system-b','Update cache',17)],true),
+  folder('games','Games',[folder('game-a','Space Simulator',[file('assets-a','assets.pak',114)]),folder('game-b','City Builder',[file('assets-b','worlds.pak',58)])]),
+  folder('programs','Program Files',[file('program-a','Creative suite',34),file('program-b','Developer tools',29)],true),
+  folder('backup','Backups',[file('backup-a','system-backup.img',120,'archive'),file('backup-b','photos-backup.zip',26,'archive')]),
+  file('pagefile','pagefile.sys',16),file('hiberfile','hiberfil.sys',12)
+ ]);
+ const nodes=new Map();function index(n,p){n.parent=p||null;n.path=p?p.path+(p.path.endsWith('\\')?'':'\\')+n.name:n.name;nodes.set(n.id,n);if(n.children)n.children.forEach(c=>index(c,n));}index(data);
+ const s={current:'cern',selected:'video-a',chart:'tiles',depth:1,list:'current',sort:'size',asc:false,query:'',page:0,focus:'chart',zoom:1,px:0,py:0,history:['cern'],historyIndex:0,pane:'chart',dark:null,trash:new Set(),excluded:new Set(),scan:null,source:'complete',failure:false,layout:[],menuNode:null,dialogReturn:null,clipboard:'',undo:[],pending:null,lastMode:'NTFS 快速 / MFT',scanFolder:null};
+ const sampleFiles=Array.from(nodes.values()).filter(n=>!n.children);
+ let partialIds=new Set(sampleFiles.slice(0,3).map(n=>n.id));
+ const size=n=>s.trash.has(n.id)?0:n.children?n.children.reduce((a,c)=>a+size(c),0):s.source==='partial'&&!partialIds.has(n.id)?0:n.bytes;
+ const count=n=>s.trash.has(n.id)?0:n.children?n.children.reduce((a,c)=>a+count(c),0):s.source==='partial'&&!partialIds.has(n.id)?0:1;
+ const fmt=b=>b>=GiB?(b/GiB).toFixed(1)+' GB':b>=MiB?(b/MiB).toFixed(1)+' MB':Math.round(b/1024)+' KB';
+ const cur=()=>nodes.get(s.current),sel=()=>nodes.get(s.selected)||cur();
+ const kids=n=>(n.children||[]).filter(c=>!s.trash.has(c.id)&&(s.source!=='partial'||size(c)>0));
+ const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const color=n=>n.children?'var(--green)':n.kind==='video'?'var(--purple)':n.kind==='doc'?'var(--blue)':n.kind==='archive'?'var(--gold)':'var(--gray)';
+ const share=n=>size(cur())?(size(n)/size(cur())*100).toFixed(1)+'%':'—';
+ function toast(t){$('toast').textContent=t;}
+ let applyingState=false,lastSavedPrivate='';
+ function remember(){if(applyingState)return;const snapshot={modelContent:{currentPath:cur().path,view:s.chart,focus:s.focus,ordinaryConcurrency:s.pending?.threads||'auto'},privateContent:{current:s.current,selected:s.selected,chart:s.chart,depth:s.depth,pane:s.pane,dark:s.dark}};lastSavedPrivate=JSON.stringify(snapshot.privateContent);try{window.openai?.setWidgetState?.(snapshot)?.catch(()=>{});}catch{}}
+ function restore(value){const p=value?.privateContent;if(!p)return;if(nodes.has(p.current))s.current=p.current;if(nodes.has(p.selected))s.selected=p.selected;if(['tiles','rings'].includes(p.chart))s.chart=p.chart;if([1,2].includes(p.depth))s.depth=p.depth;if(['chart','list'].includes(p.pane))s.pane=p.pane;if(typeof p.dark==='boolean')s.dark=p.dark;s.history=[s.current];s.historyIndex=0;}
+ restore(window.openai?.widgetState);
+ function ancestors(n){const a=[];while(n){a.unshift(n);n=n.parent;}return a;}
+ function flatten(n){return kids(n).flatMap(c=>c.children?flatten(c):[c]);}
+ function rows(){let a=s.list==='current'?kids(cur()):flatten(cur()).sort((a,b)=>size(b)-size(a)).slice(0,1000);if(s.query)a=a.filter(n=>n.path.toLowerCase().includes(s.query.toLowerCase()));return a.sort((a,b)=>(s.sort==='name'?a.name.localeCompare(b.name):size(a)-size(b))*(s.asc?1:-1));}
+ function go(id,replay=false){const n=nodes.get(id);if(!n?.children||s.trash.has(id))return;s.current=id;s.selected=kids(n)[0]?.id||null;s.query='';s.page=0;s.zoom=1;s.px=s.py=0;$('filter').value='';if(!replay&&s.history[s.historyIndex]!==id){s.history=s.history.slice(0,s.historyIndex+1);s.history.push(id);s.historyIndex=s.history.length-1;}closeMenu();hideTip();render();remember();}
+ function parent(){if(cur().parent){const previous=s.current;go(cur().parent.id);focusItem(previous,s.focus);toast('已返回父级：'+cur().path);}}
+ function history(step){const i=s.historyIndex+step;if(i<0||i>=s.history.length)return;s.historyIndex=i;go(s.history[i],true);focusArea(s.focus);}
+ function focusItem(id,area=s.focus){s.focus=area;s.selected=id;if(area==='list'){const r=rows(),i=r.findIndex(n=>n.id===id);if(i>=0)s.page=Math.floor(i/7);renderRows();}updateSelection();const target=root.querySelector((area==='list'?'#nx-rows':'#nx-scene')+' button[data-node="'+id+'"]');target?.focus({preventScroll:true});}
+ function select(id){if(!nodes.has(id))return;s.selected=id;updateSelection();remember();}
+ function enter(){const n=sel();if(n.children){go(n.id);focusArea(s.focus);}else toast('已选中文件。可通过右键查看属性或定位目录。');}
+ function locate(){const n=sel();if(n.parent){go(n.parent.id);s.list='current';select(n.id);renderRows();focusItem(n.id,'list');toast('已定位：'+n.path);}}
+ function focusArea(area){s.focus=area;s.pane=area;applyPane();const target=area==='chart'?(s.layout.find(x=>x.id===s.selected)?.id||s.layout[0]?.id):(rows().find(n=>n.id===s.selected)?.id||rows()[0]?.id);if(target)focusItem(target,area);else $(area==='chart'?'tiles':'filter').focus();}
+ function applyPane(){root.dataset.pane=s.pane;$('show-chart').setAttribute('aria-pressed',s.pane==='chart');$('show-list').setAttribute('aria-pressed',s.pane==='list');$('focus-chart').textContent=s.focus==='chart'?'● 焦点 · ↑↓←→ 选择':'方向键选择';$('focus-list').textContent=s.focus==='list'?'● 焦点 · ↑↓ 选中':'↑↓ 选中 · → 进入';}
+ function renderBreadcrumb(){let a=ancestors(cur());const limit=root.clientWidth<600?3:6;if(a.length>limit)a=[a[0],null,...a.slice(-(limit-1))];$('crumbs').innerHTML=a.map((n,i)=>(i?'<span>›</span>':'')+(n?'<button data-go="'+n.id+'" title="'+esc(n.path)+'">'+esc(n.name)+'</button>':'<button data-ancestors="true" aria-label="展开全部祖先目录">…</button>')).join('');$('back').disabled=s.historyIndex===0;$('forward').disabled=s.historyIndex>=s.history.length-1;$('parent').disabled=!cur().parent;$('parent').textContent=cur().parent?'↑ 返回 '+cur().parent.name:'已在扫描根 C:\\';$('ancestors').disabled=!cur().parent;}
+ function partition(list,x,y,w,h,out,depth=0){if(!list.length)return;if(list.length===1){out.push({id:list[0].id,n:list[0],x,y,w,h,depth});return;}const total=list.reduce((a,n)=>a+size(n),0);let acc=0,k=0;for(;k<list.length-1;k++){acc+=size(list[k]);if(acc>=total/2)break;}k++;const ratio=total?acc/total:k/list.length;if(w>=h){partition(list.slice(0,k),x,y,w*ratio,h,out,depth);partition(list.slice(k),x+w*ratio,y,w*(1-ratio),h,out,depth);}else{partition(list.slice(0,k),x,y,w,h*ratio,out,depth);partition(list.slice(k),x,y+h*ratio,w,h*(1-ratio),out,depth);}}
+ function arc(cx,cy,r0,r1,a0,a1){const point=(r,a)=>[cx+Math.cos(a)*r,cy+Math.sin(a)*r];const a=point(r1,a0),b=point(r1,a1),c=point(r0,a1),d=point(r0,a0),large=a1-a0>Math.PI?1:0;return 'M '+a.join(' ')+' A '+r1+' '+r1+' 0 '+large+' 1 '+b.join(' ')+' L '+c.join(' ')+' A '+r0+' '+r0+' 0 '+large+' 0 '+d.join(' ')+' Z';}
+ function renderChart(){
+  const stage=$('stage'),w=stage.clientWidth,h=stage.clientHeight;if(!w)return;const scene=$('scene'),focused=scene.contains(document.activeElement)?document.activeElement.dataset.node:null;s.layout=[];const list=kids(cur()).sort((a,b)=>size(b)-size(a)).filter(n=>size(n)>0);
+  if(s.chart==='tiles'){
+   partition(list,0,0,w,h,s.layout);if(s.depth===2){const parents=s.layout.slice();for(const p of parents)if(p.n.children&&p.w>80&&p.h>85)partition(kids(p.n),p.x+3,p.y+28,p.w-6,p.h-31,s.layout,1);}
+   scene.innerHTML=s.layout.map(r=>'<button class="tile" data-node="'+r.id+'" data-area="chart" aria-label="选择 '+esc(r.n.name)+'" style="--tile:'+color(r.n)+';left:'+r.x+'px;top:'+r.y+'px;width:'+Math.max(0,r.w)+'px;height:'+Math.max(0,r.h)+'px"><span>'+esc(r.n.name)+'</span>'+(r.w>55&&r.h>48?'<small>'+fmt(size(r.n))+'</small>':'')+'</button>').join('');
+  }else{
+   const cx=w/2,cy=h/2,R=Math.min(w,h)*.45,hole=R*.43,band=(R-hole)/s.depth;let paths='',labels='';
+   const ring=(ns,r0,r1,start,end,depth)=>{const total=ns.reduce((a,n)=>a+size(n),0);let a=start;ns.forEach(n=>{const b=a+(total?size(n)/total:0)*(end-start),safe=Math.min(b,a+Math.PI*2-.00001);if(b>a){const mid=(a+b)/2,mr=(r0+r1)/2,x=cx+Math.cos(mid)*mr,y=cy+Math.sin(mid)*mr;s.layout.push({id:n.id,n,x:x-16,y:y-16,w:32,h:32,depth});paths+='<path data-node="'+n.id+'" data-area="chart" style="--tile:'+color(n)+'" d="'+arc(cx,cy,r0,r1,a,safe)+'"><title>'+esc(n.name)+' · '+fmt(size(n))+'</title></path>';if(b-a>.30)labels+='<button class="arc-label" data-node="'+n.id+'" data-area="chart" style="left:'+x+'px;top:'+y+'px;max-width:'+Math.min(110,(r1-r0)*.88)+'px" aria-label="选择 '+esc(n.name)+'">'+esc(n.children?n.name:fmt(size(n)))+'</button>';if(s.depth===2&&depth===0&&n.children)ring(kids(n),r1,r1+band,a,b,1);}a=b;});};
+   ring(list,hole,hole+band,-Math.PI/2,Math.PI*1.5,0);
+   scene.innerHTML='<svg class="sun" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="以逻辑大小为占比的平滑圆盘；中心返回父级">'+paths+'</svg>'+labels+'<button class="sun-parent" id="nx-center-parent" '+(!cur().parent?'disabled':'')+' aria-label="圆盘中心返回父级"><span>'+(cur().parent?'↑ 返回上一级':'扫描根')+'</span><small>'+esc(cur().parent?.name||cur().name)+'</small></button>';
+  }
+  if(!list.length)scene.innerHTML='<div class="muted" style="padding:24px">此目录没有可绘制的条目。</div>';
+  if(s.chart==='rings')for(const r of s.layout)if(!scene.querySelector('button[data-node="'+r.id+'"]'))scene.insertAdjacentHTML('beforeend','<button class="sr" data-node="'+r.id+'" data-area="chart" aria-label="选择 '+esc(r.n.name)+'">'+esc(r.n.name)+'</button>');
+  $('tiles').setAttribute('aria-pressed',s.chart==='tiles');$('rings').setAttribute('aria-pressed',s.chart==='rings');transform();updateSelection();if(focused)scene.querySelector('button[data-node="'+focused+'"]')?.focus({preventScroll:true});
+ }
+ function transform(){const w=$('stage').clientWidth,h=$('stage').clientHeight;s.px=Math.max(-(s.zoom-1)*w/2,Math.min((s.zoom-1)*w/2,s.px));s.py=Math.max(-(s.zoom-1)*h/2,Math.min((s.zoom-1)*h/2,s.py));$('scene').style.transform='translate('+s.px+'px,'+s.py+'px) scale('+s.zoom+')';$('zoom').textContent=Math.round(s.zoom*100)+'%';$('zoom-out').disabled=s.zoom<=1;$('zoom-in').disabled=s.zoom>=4;all('[data-pan]').forEach(b=>b.disabled=s.zoom<=1);$('pan-home').disabled=s.zoom<=1;}
+ function zoom(delta){s.zoom=Math.max(1,Math.min(4,s.zoom+delta));transform();hideTip();toast('图表缩放 '+Math.round(s.zoom*100)+'%；放大后可用四向按钮或空格拖动。');}
+ function pan(dx,dy){s.px-=dx;s.py-=dy;transform();hideTip();}
+ function renderRows(){const list=rows();s.page=Math.min(s.page,Math.max(0,Math.ceil(list.length/7)-1));const page=list.slice(s.page*7,s.page*7+7);$('rows').innerHTML=(cur().parent?'<tr class="parentrow"><td colspan="3"><button class="rowbutton" data-parent="true">↑ .. 返回 '+esc(cur().parent.name)+'</button></td></tr>':'')+page.map(n=>'<tr data-row="'+n.id+'"><td><button class="rowbutton" data-node="'+n.id+'" data-area="list" aria-label="选择 '+esc(n.name)+'"><i style="--tile:'+color(n)+'"></i><span>'+(n.children?'› ':'')+esc(n.name)+'</span></button></td><td>'+fmt(size(n))+'</td><td>'+share(n)+'</td></tr>').join('')+(!list.length?'<tr><td colspan="3" class="muted" style="padding:15px">没有匹配条目</td></tr>':'');$('list-count').textContent=list.length+' 项 · '+(s.page+1)+' / '+Math.max(1,Math.ceil(list.length/7));$('prev').disabled=s.page===0;$('next').disabled=(s.page+1)*7>=list.length;$('current').setAttribute('aria-pressed',s.list==='current');$('largest').setAttribute('aria-pressed',s.list==='largest');$('sort-name').textContent='名称'+(s.sort==='name'?(s.asc?' ↑':' ↓'):'');$('sort-size').textContent='大小'+(s.sort==='size'?(s.asc?' ↑':' ↓'):'');updateSelection();}
+ function updateSelection(){const n=sel();all('[data-node]').forEach(e=>{e.classList.toggle('selected',e.dataset.node===s.selected);if(e.tagName==='BUTTON')e.setAttribute('aria-pressed',e.dataset.node===s.selected);});all('[data-row]').forEach(e=>e.classList.toggle('selected',e.dataset.row===s.selected));$('detail-name').textContent=(s.selected?'已选中 · ':'当前目录 · ')+n.name;$('detail-path').textContent=n.path;$('detail-size').textContent=fmt(size(n))+' 逻辑大小 · '+count(n)+' 个文件'+(s.excluded.has(n.id)?' · 下轮扫描将排除':'');$('enter').disabled=!n.children||n.id===s.current;$('locate').disabled=!n.parent;$('status').textContent=n.path;applyPane();}
+ function render(){if(s.dark!==null)root.style.colorScheme=s.dark?'dark':'light';$('theme').textContent=(s.dark??matchMedia('(prefers-color-scheme: dark)').matches)?'浅色':'深色';$('depth').value=String(s.depth);renderBreadcrumb();$('heading').textContent=cur().name;$('total').textContent=fmt(size(cur()))+' · '+count(cur())+' 个文件'+(s.source==='partial'?' · 本轮已发现':'');$('source').textContent=s.source==='partial'?'本轮未完成 · 覆盖范围尚未确定':s.scan?'上次完整结果 · 更新中':'完整结果 · '+s.lastMode;$('issues').textContent=s.failure?'1 个读取问题':'0 个读取问题';$('banner').hidden=!s.failure;if(s.failure)$('banner').querySelector('span').textContent=s.source==='partial'?'本轮扫描失败，仅展示已发现数据；等待关联的条目未计入读取错误。':'本轮扫描失败，已保留上次完整结果。';renderRows();renderChart();applyPane();}
+ let tipTimer=null;
+ function hideTip(){clearTimeout(tipTimer);$('tip').hidden=true;}
+ function showTip(n,x,y){hideTip();$('status').textContent=n.path;tipTimer=setTimeout(()=>{const box=$('tip');box.innerHTML='<strong>'+esc(n.name)+'</strong><p>'+esc(n.path)+'</p><div>'+fmt(size(n))+' · '+share(n)+'</div><p>单击选中 · 右键操作'+(n.children?' · 双击进入':'')+'</p>';box.hidden=false;place(box,x+12,y+16);},250);}
+ function place(el,x,y){const r=root.getBoundingClientRect(),w=el.offsetWidth,h=el.offsetHeight;el.style.left=Math.max(8,Math.min(r.width-w-8,x-r.left))+'px';el.style.top=Math.max(8,Math.min(root.offsetHeight-h-8,y-r.top))+'px';}
+ function closeMenu(){if(!$('menu').hidden){$('menu').hidden=true;s.menuNode=null;}}
+ const isProtected=n=>ancestors(n).some(a=>a.protectedItem)||['pagefile','hiberfile'].includes(n.id)||!n.parent;
+ function openMenu(n,x,y){hideTip();select(n.id);s.menuNode=n.id;const protectedItem=isProtected(n);
+  $('menu').innerHTML='<div class="menuhead">'+esc(n.name)+'</div>'+[
+   ['enter',n.children?'进入目录':'查看文件',n.children?'Enter':'',false],
+   ['parent','返回当前目录的父级','Alt+↑',!cur().parent],
+   ['locate','定位到所在目录','',!n.parent],
+   ['explorer','在资源管理器中显示','',false],
+   ['copy','复制完整路径','Ctrl+C',false],
+   ['properties','属性','Alt+Enter',false],
+   ['rescan','重新扫描此目录','',false],
+   ['exclude',s.excluded.has(n.id)?'取消下轮排除':'下轮扫描排除此项','',!n.parent],
+   ['trash','移至回收站…','Delete',protectedItem]
+  ].map((a,i)=>(i===4||i===6||i===8?'<hr>':'')+'<button role="menuitem" data-command="'+a[0]+'" '+(a[3]?'disabled':'')+' class="'+(a[0]==='trash'?'danger':'')+'"><span>'+a[1]+'</span>'+(a[2]?'<kbd>'+a[2]+'</kbd>':'')+'</button>').join('');
+  const el=$('menu');el.hidden=false;place(el,x,y);el.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
+ }
+ function showDialog(title,html){const active=document.activeElement;if($('shade').hidden)s.dialogReturn=active&&!$('menu').contains(active)?active:null;closeMenu();hideTip();$('dialog-title').textContent=title;$('dialog-body').innerHTML=html;$('shade').hidden=false;root.scrollIntoView({block:'start',behavior:'instant'});($('dialog-body').querySelector('input,select,button')||$('dialog-close')).focus({preventScroll:true});}
+ function closeDialog(){if($('shade').hidden)return;$('shade').hidden=true;$('dialog-body').innerHTML='';if(s.dialogReturn?.isConnected&&s.dialogReturn.getClientRects().length)s.dialogReturn.focus({preventScroll:true});else focusArea(s.focus);}
+ function inspector(title,html){const el=$('inspector');el.innerHTML='<div class="inspecthead">'+esc(title)+'<span class="spacer"></span><button data-close-inspector="true" aria-label="关闭信息面板">×</button></div>'+html;el.hidden=false;}
+ function accounting(){inspector('容量统计口径','<p>图表使用逻辑大小（1024 进制）。硬链接按路径计数；目录重解析点不跟随。近似占用不等于稀疏、压缩文件的实际占用。</p><p>磁盘已用空间、文件合计与未读取区域分别记录；局部结果的占比只以当前已发现内容计算。</p>');}
+ function issues(){inspector('读取问题与覆盖范围','<table><tr><td>确认读取失败</td><td>'+(s.failure?'1 项（模拟）':'0 项')+'</td></tr><tr><td>本轮等待关联</td><td>'+(s.source==='partial'?'尚未完成，单独统计':'无')+'</td></tr><tr><td>下轮主动排除</td><td>'+s.excluded.size+' 项</td></tr></table>'+(s.failure?'<p>演示原因：扫描助手意外退出。此信息是模拟场景，不能据此推断你截图中的真实失败原因。</p><button data-retry="true">重新扫描</button>':'<p>扫描中的暂未关联条目不等同于读取失败；仅在扫描结束后核对未解决项。</p>'));}
+ function diagnostics(){inspector('扫描诊断','<table><tr><td>快速路径</td><td>NTFS / MFT · 保留现有快速引擎</td></tr><tr><td>普通扫描</td><td>受控目录队列 · 自动调整并发上限</td></tr><tr><td>界面发布</td><td>后台合并变更 · 按批更新</td></tr><tr><td>结果状态</td><td>'+ (s.source==='partial'?'未完成':'完整结果')+'</td></tr></table><p>真实版记录读取、解析、汇总、发布的分别耗时，以及峰值内存、取消延迟；本原型不生成性能结论。</p>');}
+ const keyHelp=[['↑ ↓ ← →','图表中选择邻近条目'],['↑ ↓','列表上一项 / 下一项'],['← / →','列表返回父级 / 进入目录'],['Enter','进入选中目录'],['Alt+↑ / Backspace','返回父级'],['Alt+← / Alt+→','后退 / 前进'],['F6 / Shift+F6','切换图表与列表焦点'],['Shift+F10','条目右键菜单'],['Ctrl+L','编辑目录地址'],['Ctrl+F','筛选当前列表'],['Ctrl+K','全部操作'],['Ctrl+C','复制选中路径'],['Alt+Enter','选中项属性'],['F5','重新扫描'],['+ / − / 0','图表缩放 / 适合窗口'],['Space + 拖动','平移放大的图表'],['Delete','移至回收站前确认'],['Esc','关闭菜单 / 退出编辑']];
+ function help(){showDialog('快捷键与焦点','<p>先点击图表或列表，方向键随所在区域工作。输入框中的方向键和退格键保留文本编辑含义。</p><div class="keygrid">'+keyHelp.map(k=>'<div><span>'+k[1]+'</span><kbd>'+k[0]+'</kbd></div>').join('')+'</div><div class="dialogactions"><button data-close-dialog="true">知道了</button></div>');}
+ const commands=[['parent','返回父级','Alt+↑'],['enter','进入选中目录','Enter'],['locate','定位到所在目录',''],['copy','复制完整路径','Ctrl+C'],['properties','属性','Alt+Enter'],['rescan','扫描设置','F5'],['focus-chart','聚焦空间图','F6'],['focus-list','聚焦目录列表','F6'],['fit','适合窗口','0'],['help','快捷键帮助','F1']];
+ function commandPalette(){showDialog('全部操作','<input id="nx-command-query" class="copybox" placeholder="搜索操作，例如：返回、属性、扫描" aria-label="搜索操作"><div id="nx-command-results" class="commands"></div>');renderCommands('');}
+ function renderCommands(q){$('command-results').innerHTML=commands.filter(c=>c[1].includes(q)||c[2].toLowerCase().includes(q.toLowerCase())).map(c=>'<button data-command="'+c[0]+'"><span>'+c[1]+'</span><kbd>'+c[2]+'</kbd></button>').join('');}
+ function copyPath(){s.clipboard=sel().path;showDialog('已复制到演示剪贴板','<p>演示剪贴板只在此原型中保存。</p><input class="copybox" aria-label="演示剪贴板" readonly value="'+esc(s.clipboard)+'"><div class="dialogactions"><button data-close-dialog="true">完成</button></div>');}
+ function properties(){const n=sel();showDialog('属性 · '+n.name,'<p>'+esc(n.path)+'</p><table class="filetable"><tr><td>类型</td><td colspan="2">'+(n.children?'文件夹':'文件')+'</td></tr><tr><td>逻辑大小</td><td colspan="2">'+fmt(size(n))+'</td></tr><tr><td>包含文件</td><td colspan="2">'+count(n)+'</td></tr><tr><td>数据来源</td><td colspan="2">合成演示数据</td></tr></table><div class="dialogactions"><button data-close-dialog="true">关闭</button></div>');}
+ function recycle(){const n=sel();if(isProtected(n)){toast('系统项在此方案中禁止直接清理。');return;}showDialog('移至回收站？','<p>'+esc(n.path)+'</p><div class="notice">'+fmt(size(n))+' · '+count(n)+' 个文件。此操作只修改演示数据，可撤销。</div><div class="dialogactions"><button data-close-dialog="true">取消</button><button class="primary" data-confirm-trash="'+n.id+'">模拟移至回收站</button></div>');}
+ function perform(command){const n=sel();closeMenu();if(!$('shade').hidden&&!['copy','properties','trash','help'].includes(command))closeDialog();switch(command){case 'parent':parent();break;case 'enter':if(n.children)enter();else showDialog('查看文件','<p>真实版将使用系统默认程序打开：</p><p>'+esc(n.path)+'</p><div class="notice">原型不启动外部程序。</div><div class="dialogactions"><button data-close-dialog="true">关闭</button></div>');break;case 'locate':locate();break;case 'copy':copyPath();break;case 'properties':properties();break;case 'explorer':showDialog('在资源管理器中显示','<p>定位到 '+esc(n.parent?.path||n.path)+' 并选中 '+esc(n.name)+'</p><div class="dialogactions"><button data-close-dialog="true">关闭演示</button></div>');break;case 'rescan':scanSettings(n.children?n.path:n.parent?.path);break;case 'exclude':s.excluded.has(n.id)?s.excluded.delete(n.id):s.excluded.add(n.id);updateSelection();toast('已更新下轮排除范围；当前快照保持原有统计。');break;case 'trash':recycle();break;case 'focus-chart':focusArea('chart');break;case 'focus-list':focusArea('list');break;case 'fit':s.zoom=1;s.px=s.py=0;transform();break;case 'help':help();break;}}
+ function scanSettings(scope){s.scanFolder=Array.from(nodes.values()).find(n=>n.children&&n.path===scope)||cur();const p=s.pending||{mode:'auto',media:'ssd',threads:'auto'};showDialog('扫描设置','<div class="fields"><label class="full">扫描范围<select id="nx-scope"><option value="root">C:\\ 整盘</option><option value="folder">目录 '+esc(s.scanFolder.path)+'</option></select></label><label>扫描方式<select id="nx-mode"><option value="auto">自动选择（推荐）</option><option value="mft">NTFS 快速扫描</option><option value="ordinary">普通目录扫描</option></select></label><label>介质策略<select id="nx-media"><option value="ssd">SSD / NVMe</option><option value="hdd">机械硬盘</option><option value="network">网络目录</option></select></label><label>普通扫描并发上限<select id="nx-threads"><option value="auto">自动</option><option>1</option><option>2</option><option>4</option><option>8</option></select></label><label>界面优先<select id="nx-publish"><option>平衡（推荐）</option><option>更少预览更新</option></select></label></div><div id="nx-strategy" class="notice" style="margin-top:12px"></div><p class="tiny">线程数只改变本原型显示的调度方案，不改变演示速度，也不代表实际加速倍数。MFT 仅扫描助手按需授权，拒绝后回退普通扫描。</p><div class="dialogactions"><button data-close-dialog="true">取消</button><button id="nx-start-standard">模拟拒绝授权</button><button id="nx-start" class="primary">开始模拟扫描</button></div>');
+  $('scope').value=scope&&scope!==data.path?'folder':'root';$('mode').value=p.mode;$('media').value=p.media;$('threads').value=p.threads;updateStrategy();
+ }
+ function strategy(){const scope=$('scope').value,mode=$('mode').value,media=$('media').value,threads=$('threads').value;const fast=scope==='root'&&media!=='network'&&mode!=='ordinary';const auto=media==='hdd'?1:media==='network'?2:4;return{scope,scopePath:scope==='root'?data.path:s.scanFolder.path,publish:$('publish').selectedIndex,mode,media,threads,fast,workers:fast?1:threads==='auto'?auto:Number(threads)};}
+ function updateStrategy(){const p=strategy();$('strategy').textContent=p.fast?'本次：NTFS / MFT 快速路径。无需通过盲目增加读取线程优化已确认很快的扫描。':'本次：普通扫描，最多 '+p.workers+' 个目录任务并发。'+(p.media==='hdd'?'机械盘默认串行，避免寻道放大。':p.media==='network'?'网络路径从低并发开始，按延迟回退。':'SSD 从小规模并发开始，测量后调整。');$('start-standard').disabled=!p.fast;}
+ let scanTimer=null;
+ function startScan(refused=false){let p=strategy();s.pending={mode:p.mode,media:p.media,threads:p.threads};if(refused){p.fast=false;p.workers=p.threads==='auto'?(p.media==='ssd'?4:1):Number(p.threads);}closeDialog();s.failure=false;s.source='complete';s.scan={...p,tick:0,paused:false,refused};partialIds=new Set();$('pause').textContent='暂停';$('partial').textContent='查看本轮已发现';$('progress').hidden=false;scanTick(true);clearInterval(scanTimer);scanTimer=setInterval(()=>scanTick(false),360);render();remember();}
+ function scanTick(initial){if(!s.scan||s.scan.paused)return;const scan=s.scan;if(!initial)scan.tick++;const phase=Math.min(3,Math.floor(scan.tick/5)),labels=scan.fast?['读取记录','解析元数据','汇总目录','发布结果']:['枚举目录','合并条目','汇总大小','发布结果'];$('engine').textContent=(scan.fast?'NTFS 快速 / MFT':'普通扫描')+' · '+labels[phase]+(scan.refused?' · 已拒绝授权，自动回退':'');partialIds=new Set(sampleFiles.slice(0,Math.max(1,Math.ceil((scan.tick+1)/21*sampleFiles.length))).map(n=>n.id));$('discovered').textContent='已发现 '+partialIds.size+' 个示例文件 · '+(s.source==='partial'?'正在看本轮未完成结果':'仍可浏览上次完整结果');$('pool').textContent=scan.fast?'顺序读取 · 后台汇总':'最多 '+scan.workers+' 个目录任务';$('progress').setAttribute('aria-label','扫描进度：'+scan.scopePath);if(s.source==='partial'&&scan.tick%(scan.publish?10:5)===0){if(!kids(cur()).some(n=>n.id===s.selected))s.selected=kids(cur())[0]?.id||null;render();}$('phases').innerHTML=labels.map((x,i)=>'<span class="phase '+(i===phase?'active':'')+'">'+(i<phase?'✓ ':'')+x+'</span>').join('');$('meter').style.width=Math.min(100,(scan.tick+1)*5)+'%';if(scan.tick>=20){clearInterval(scanTimer);s.lastMode=scan.fast?'NTFS 快速 / MFT':'普通扫描';s.scan=null;s.source='complete';$('progress').hidden=true;render();toast('模拟扫描完成；结果已发布。演示耗时不代表本机速度。');}}
+ function cancelScan(){if(!s.scan)return;clearInterval(scanTimer);s.scan=null;s.source='complete';$('progress').hidden=true;render();toast('扫描已取消，保留上次完整结果；当前浏览位置保持。');}
+ function showAncestors(){const a=ancestors(cur()).slice(0,-1).reverse();showDialog('返回上级目录','<div class="commands">'+a.map(n=>'<button data-go="'+n.id+'"><span>↑ '+esc(n.name)+'</span><small class="muted">'+esc(n.path)+'</small></button>').join('')+'</div>');}
+ function editAddress(){$('crumbs').hidden=true;$('address').hidden=false;$('address').value=cur().path;$('address').focus();$('address').select();}
+ function closeAddress(){$('address').hidden=true;$('crumbs').hidden=false;}
+ function submitAddress(){const value=$('address').value.trim().replace(/\//g,'\\').replace(/\\$/,'').toLowerCase();const n=Array.from(nodes.values()).find(n=>n.children&&n.path.replace(/\\$/,'').toLowerCase()===value);if(n){closeAddress();go(n.id);focusArea('chart');}else{toast('此路径未在演示索引中。可在扫描设置里选择范围。');}}
+ function direction(key,area){if(area==='list'){if(key==='ArrowLeft'){parent();focusArea('list');return;}if(key==='ArrowRight'){enter();return;}const list=rows();let i=list.findIndex(n=>n.id===s.selected);i=Math.max(0,Math.min(list.length-1,i+(key==='ArrowDown'?1:-1)));if(list[i])focusItem(list[i].id,'list');return;}const currentDepth=s.layout.find(r=>r.id===s.selected)?.depth||0;const list=s.layout.filter(r=>r.depth===currentDepth);if(!list.length)return;const a=list.find(r=>r.id===s.selected)||list[0],ax=a.x+a.w/2,ay=a.y+a.h/2;const dx=key==='ArrowLeft'?-1:key==='ArrowRight'?1:0,dy=key==='ArrowUp'?-1:key==='ArrowDown'?1:0;const candidates=list.filter(r=>r.id!==a.id).map(r=>{const vx=r.x+r.w/2-ax,vy=r.y+r.h/2-ay,along=vx*dx+vy*dy,across=Math.abs(vx*dy-vy*dx);return{r,along,score:along+across*2.5};}).filter(x=>x.along>1).sort((a,b)=>a.score-b.score);focusItem(candidates[0]?.r.id||a.id,'chart');}
+ let space=false,drag=null,suppressClick=false;
+ root.addEventListener('click',e=>{
+  if(suppressClick){suppressClick=false;e.preventDefault();return;}
+  const mark=e.target.closest('[data-node]');if(mark&&mark.tagName!=='BUTTON'){focusItem(mark.dataset.node,mark.dataset.area||s.focus);return;}
+  const button=e.target.closest('button');if(!button)return;
+  if(button.disabled)return;
+  if(button.dataset.node){s.focus=button.dataset.area||s.focus;select(button.dataset.node);return;}
+  if(button.dataset.go){closeDialog();go(button.dataset.go);return;}
+  if(button.dataset.parent||button.id==='nx-center-parent'){parent();return;}
+  if(button.dataset.command){perform(button.dataset.command);return;}
+  if(button.dataset.pan){const v={up:[0,-65],down:[0,65],left:[-65,0],right:[65,0]}[button.dataset.pan];pan(...v);return;}
+  if(button.dataset.closeDialog){closeDialog();return;}
+  if(button.dataset.closeInspector){$('inspector').hidden=true;return;}
+  if(button.dataset.ancestors){showAncestors();return;}
+  if(button.dataset.retry){scanSettings();return;}
+  if(button.dataset.confirmTrash){const id=button.dataset.confirmTrash;s.trash.add(id);s.undo.push(id);closeDialog();if(s.current===id)go(nodes.get(id).parent.id);s.selected=kids(cur())[0]?.id||null;render();$('toast').innerHTML='已模拟移入回收站。 <button id="nx-undo">撤销</button>';return;}
+  switch(button.id){
+   case'nx-back':history(-1);break;case'nx-forward':history(1);break;case'nx-parent':parent();break;case'nx-ancestors':showAncestors();break;case'nx-edit':editAddress();break;
+   case'nx-help':help();break;case'nx-command':commandPalette();break;case'nx-theme':s.dark=!(s.dark??matchMedia('(prefers-color-scheme: dark)').matches);render();remember();break;
+   case'nx-tiles':s.chart='tiles';s.zoom=1;s.px=s.py=0;renderChart();remember();break;case'nx-rings':s.chart='rings';s.zoom=1;s.px=s.py=0;renderChart();remember();break;
+   case'nx-zoom-in':zoom(.25);break;case'nx-zoom-out':zoom(-.25);break;case'nx-fit':s.zoom=1;s.px=s.py=0;transform();break;case'nx-pan-home':s.px=s.py=0;transform();break;
+   case'nx-current':s.list='current';s.page=0;renderRows();break;case'nx-largest':s.list='largest';s.page=0;renderRows();break;
+   case'nx-sort-name':s.asc=s.sort==='name'?!s.asc:true;s.sort='name';renderRows();break;case'nx-sort-size':s.asc=s.sort==='size'?!s.asc:false;s.sort='size';renderRows();break;
+   case'nx-prev':s.page--;renderRows();break;case'nx-next':s.page++;renderRows();break;case'nx-clear':s.query='';$('filter').value='';renderRows();break;
+   case'nx-show-chart':s.pane='chart';applyPane();renderChart();break;case'nx-show-list':s.pane='list';applyPane();break;
+   case'nx-enter':enter();break;case'nx-locate':locate();break;case'nx-more':{const r=button.getBoundingClientRect();openMenu(sel(),r.right-260,r.top-350);break;}
+   case'nx-rescan':scanSettings();break;case'nx-start':startScan();break;case'nx-start-standard':startScan(true);break;
+   case'nx-pause':if(s.scan){s.scan.paused=!s.scan.paused;button.textContent=s.scan.paused?'继续':'暂停';toast(s.scan.paused?'扫描已暂停，仍可浏览结果。':'扫描继续。');}break;
+   case'nx-cancel':cancelScan();break;case'nx-partial':s.source=s.source==='partial'?'complete':'partial';if(!kids(cur()).some(n=>n.id===s.selected))s.selected=kids(cur())[0]?.id||null;button.textContent=s.source==='partial'?'查看上次完整结果':'查看本轮已发现';render();break;
+   case'nx-account':accounting();break;case'nx-issues':case'nx-error-detail':issues();break;case'nx-diagnostics':diagnostics();break;case'nx-dialog-close':closeDialog();break;
+   case'nx-demo-deep':go('cern');break;case'nx-demo-root':go('root');break;
+   case'nx-demo-error':cancelScan();partialIds=new Set(sampleFiles.slice(0,3).map(n=>n.id));s.failure=true;s.source='partial';s.selected=kids(cur())[0]?.id||null;render();toast('失败状态演示：1 个确认错误；暂未关联项不混入错误数量。');break;
+   case'nx-demo-reset':cancelScan();s.failure=false;s.source='complete';s.lastMode='NTFS 快速 / MFT';s.depth=1;s.sort='size';s.asc=false;s.trash.clear();s.excluded.clear();s.undo=[];s.chart='tiles';s.list='current';s.dark=null;s.history=['cern'];s.historyIndex=0;s.pane='chart';s.focus='chart';$('inspector').hidden=true;root.style.colorScheme='light dark';go('cern',true);toast('已恢复演示初始状态。');break;
+   case'nx-undo':{const id=s.undo.pop();if(id){s.trash.delete(id);render();toast('已恢复 '+nodes.get(id).name);}break;}
+  }
+ });
+ root.addEventListener('dblclick',e=>{const target=e.target.closest('[data-node]');if(target&&nodes.get(target.dataset.node)?.children){s.focus=target.dataset.area||s.focus;go(target.dataset.node);}});
+ root.addEventListener('contextmenu',e=>{if(e.target.closest('input,select,textarea'))return;const target=e.target.closest('[data-node]');if(target||e.target.closest('#nx-stage,#nx-rows,.details')){e.preventDefault();if(target)s.focus=target.dataset.area||s.focus;openMenu(target?nodes.get(target.dataset.node):sel(),e.clientX,e.clientY);}});
+ root.addEventListener('pointerover',e=>{const t=e.target.closest('[data-node]');if(t&&!t.contains(e.relatedTarget)&&$('menu').hidden&&$('shade').hidden){const n=nodes.get(t.dataset.node);showTip(n,e.clientX,e.clientY);}});
+ root.addEventListener('pointerout',e=>{const t=e.target.closest('[data-node]');if(t&&!t.contains(e.relatedTarget))hideTip();});
+ root.addEventListener('focusin',e=>{const t=e.target.closest('[data-node]');if(t){s.focus=t.dataset.area||s.focus;select(t.dataset.node);}});
+ root.addEventListener('input',e=>{if(e.target===$('filter')){s.query=e.target.value;s.page=0;renderRows();}if(e.target.id==='nx-command-query')renderCommands(e.target.value);});
+ root.addEventListener('change',e=>{if(e.target===$('depth')){s.depth=Number(e.target.value);renderChart();remember();}if(['nx-mode','nx-media','nx-threads','nx-scope'].includes(e.target.id))updateStrategy();});
+ root.addEventListener('keydown',e=>{
+  const input=e.target.matches('input,textarea,select');
+  if(!$('shade').hidden){if(e.key==='Escape'){e.preventDefault();closeDialog();return;}if(e.key==='Tab'){const f=Array.from($('dialog').querySelectorAll('button:not(:disabled),input,select'));const first=f[0],last=f[f.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}return;}
+  if(!$('menu').hidden){const bs=Array.from($('menu').querySelectorAll('button:not(:disabled)'));const i=bs.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();bs[e.key==='Home'?0:e.key==='End'?bs.length-1:(i+(e.key==='ArrowDown'?1:-1)+bs.length)%bs.length]?.focus();return;}if(e.key==='Escape'){e.preventDefault();closeMenu();focusItem(s.selected,s.focus);return;}if(e.key==='Tab'){closeMenu();}return;}
+  if(e.key==='Escape'){e.preventDefault();if(!$('address').hidden){closeAddress();$('edit').focus();}else if(e.target===$('filter')){s.query='';$('filter').value='';renderRows();focusArea('list');}else hideTip();return;}
+  if(e.target===$('address')&&e.key==='Enter'){e.preventDefault();submitAddress();return;}
+  if(e.ctrlKey&&e.key.toLowerCase()==='l'){e.preventDefault();editAddress();return;}
+  if(e.ctrlKey&&e.key.toLowerCase()==='f'){e.preventDefault();s.pane='list';applyPane();$('filter').focus();return;}
+  if(e.ctrlKey&&e.key.toLowerCase()==='k'){e.preventDefault();commandPalette();return;}
+  if(e.key==='F1'){e.preventDefault();help();return;}
+  if(e.key==='F6'){e.preventDefault();focusArea(s.focus==='chart'?'list':'chart');return;}
+  if(input)return;
+  if(e.shiftKey&&e.key==='F10'||e.key==='ContextMenu'){e.preventDefault();const r=e.target.getBoundingClientRect();openMenu(sel(),r.left+10,r.bottom);return;}
+  if(e.altKey&&['ArrowLeft','ArrowRight','ArrowUp'].includes(e.key)){e.preventDefault();if(e.key==='ArrowUp')parent();else history(e.key==='ArrowLeft'?-1:1);return;}
+  if(e.altKey&&e.key==='Enter'){e.preventDefault();properties();return;}
+  if(e.ctrlKey&&e.key.toLowerCase()==='c'){e.preventDefault();copyPath();return;}
+  if(e.key==='F5'){e.preventDefault();scanSettings();return;}
+  if(e.key==='Backspace'){e.preventDefault();parent();return;}
+  if(e.key==='Delete'){e.preventDefault();recycle();return;}
+  const onItem=e.target.closest('[data-node]');
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)&&onItem){e.preventDefault();direction(e.key,onItem.dataset.area||s.focus);return;}
+  if(e.key==='Enter'&&onItem){e.preventDefault();enter();return;}
+  if(['+','=','-','0'].includes(e.key)&&s.focus==='chart'){e.preventDefault();if(e.key==='0'){s.zoom=1;s.px=s.py=0;transform();}else zoom(e.key==='-'?-.25:.25);return;}
+  if(e.code==='Space'&&s.focus==='chart'&&onItem){e.preventDefault();space=true;}
+ });
+ root.addEventListener('keyup',e=>{if(e.code==='Space')space=false;});window.addEventListener('blur',()=>{space=false;drag=null;$('scene').classList.remove('drag');});
+ $('stage').addEventListener('wheel',e=>{if(e.ctrlKey){e.preventDefault();zoom(e.deltaY<0?.25:-.25);}}, {passive:false});
+ $('stage').addEventListener('pointerdown',e=>{if((space||e.button===1)&&s.zoom>1){e.preventDefault();drag={x:e.clientX,y:e.clientY,px:s.px,py:s.py,id:e.pointerId};$('stage').setPointerCapture(e.pointerId);$('scene').classList.add('drag');hideTip();}});
+ $('stage').addEventListener('pointermove',e=>{if(drag){s.px=drag.px+e.clientX-drag.x;s.py=drag.py+e.clientY-drag.y;transform();}});
+ const endDrag=()=>{if(drag){drag=null;suppressClick=true;$('scene').classList.remove('drag');setTimeout(()=>suppressClick=false,0);}};
+ $('stage').addEventListener('pointerup',endDrag);$('stage').addEventListener('pointercancel',endDrag);
+ let resizing=false;$('divider').addEventListener('pointerdown',e=>{resizing=true;$('divider').setPointerCapture(e.pointerId);});
+ $('divider').addEventListener('pointermove',e=>{if(resizing){const r=root.querySelector('.main').getBoundingClientRect();root.style.setProperty('--split',Math.max(38,Math.min(68,(e.clientX-r.left)/r.width*100))+'%');renderChart();}});
+ $('divider').addEventListener('pointerup',()=>resizing=false);
+ root.addEventListener('pointerdown',e=>{if(!$('menu').hidden&&!e.target.closest('#nx-menu'))closeMenu();});
+ $('shade').addEventListener('click',e=>{if(e.target===$('shade'))closeDialog();});
+ let resizeTimer;new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{renderBreadcrumb();renderChart();},80);}).observe($('stage'));
+ window.addEventListener('openai:set_globals',e=>{const state=e.detail?.globals?.widgetState;if(state&&JSON.stringify(state.privateContent)!==lastSavedPrivate){applyingState=true;try{restore(state);render();}finally{applyingState=false;}}});
+ const design={showKeyHints:true};function applyDesign(){$('focus-chart').hidden=!design.showKeyHints;$('focus-list').hidden=!design.showKeyHints;root.querySelector('.helpstrip').hidden=!design.showKeyHints;}
+ if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:applyDesign});tweak.addToggle(design,'showKeyHints',{label:'常显快捷键提示'});}
+ render();
+})();
+</script>
+</div>
+
+</main></body></html>

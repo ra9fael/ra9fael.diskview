@@ -1,137 +1,78 @@
-# Disk View (`ra9fael.diskview`)
+# Disk View (ra9fael.diskview)
 
-> [简体中文（默认）](README.md) · **English**
->
-> Win顺 defaults to a Chinese UI but ships an English mode too, so the Chinese
-> guide lives in `README.md` and the English guide here; the two stay in sync
-> and link to each other.
+[简体中文](README.md) · **English**
 
-A disk-usage visualizer for Win顺: scan any folder and see where the space went
-as a **recursive treemap** (default) or a **recursive sunburst**. Area is size —
-bigger tile, more space. Hover for details, click to drill down, and a
-"Largest files" list stays docked on the right. Queries never scan: scanning
-happens only inside the window, when you trigger it. The plugin never touches
-the file system while you type.
+A native disk-space viewer for WinShun. Explore a treemap or sunburst, hover for full paths, click to keep selection details, and double-click folders to navigate. Whole fixed NTFS drives offer an optional elevated fast scanner; other paths use standard enumeration. Typing a query never starts a scan.
 
-## Install
+## Install and update
 
-1. Download `ra9fael.diskview-<version>.wsplugin` from the
-   [latest Release](https://github.com/ra9fael/winshun-diskview/releases/latest).
-   Optionally verify the SHA-256 with the adjacent `.sha256` file
-   (`Get-FileHash <file> -Algorithm SHA256`).
-2. In Win顺, open **Settings → Plugins → Installed → Add plugin → Archive
-   (.zip / .wsplugin)** and pick the file.
-3. Plugins installed from a local archive are **not enabled automatically**.
-   Turn the switch on in the list; enabling is how you confirm the permissions
-   it asks for (see [Permissions and data](#permissions-and-data)).
+Obtain **ra9fael.diskview-0.2.0.wsplugin** from the repository release or local dist/. Verify the adjacent .sha256 with PowerShell's Get-FileHash if desired. In WinShun, open Settings → Plugins → Installed → Add plugin → Archive. Enable the locally installed plugin and review its permissions. Installing the same id updates it after the host's replacement prompt and preserves the plugin data directory.
 
-**Update:** install the new `.wsplugin` the same way. Win顺 recognizes the id,
-asks before replacing the old version, and keeps the plugin's data directory.
+Version 0.2.0 adds **processes** for a short-lived scan helper. Windows administrator consent is separate. Uninstall through the host's plugin list. This native executable is outside the script-only community index.
 
-**Uninstall:** remove it under **Settings → Plugins → Installed**.
+## Use
 
-This is a native exe, so it does not appear in Win顺's in-app plugin index
-(the community index only lists script plugins). This repository's Releases
-are the only distribution channel.
-
-## Usage
-
-Type `disk` in the Win顺 box and press Enter to open the window:
-
-| Input | Behavior |
+| Action | Behavior |
 | --- | --- |
-| `disk` | Opens the window. First run shows a welcome page; later runs remember the last scanned path |
-| `disk D:\work` | Opens the window and **immediately** scans `D:\work` (the only scan entry point, always user-triggered) |
+| disk | Lists fixed-drive capacities; choose a drive to open and scan, or open the welcome screen |
+| disk D:\work | Opens and scans that directory |
+| Click a tile, slice or row | Selects the item, keeps details visible, and highlights it in both panes |
+| Double-click a folder / Enter / Enter folder | Navigates into it; files are never launched |
+| Hover | Shows the full path in the status bar immediately and a tooltip after about 250 ms |
+| Breadcrumbs | Navigate to ancestors; long paths retain root, parent and current folder |
+| Back / Forward / Up | Browse history or navigate to the parent |
+| Ctrl+L | Edits the address; Enter locates an indexed folder, while other paths get an explicit Scan path action |
+| Current / Largest | Lists immediate children or up to 1000 largest files in the current subtree |
+| Filter / column headings | Searches the current list and sorts by name or size; Largest filters only that ranking |
+| Locate parent | Opens a selected file's parent while keeping it selected |
+| Tiles / Rings / Depth | Defaults to one level, optionally two; small items aggregate without redistributing their size |
+| Drag divider | Resizes panes; narrow windows offer Chart / List tabs |
+| Scan issues / Logical size | Explains coverage, read errors, unknown sizes, unattached records, skipped links and accounting |
 
-In the window:
+Keyboard: Alt+Left / Right for history; Backspace or Alt+Up for parent; Ctrl+F for filtering; arrows for list selection; Tab / Shift+Tab for controls; Enter / Space for focused buttons; F5 to rescan the scan root. Text inputs retain editing behavior. Esc exits address editing, clears filtering or selection; Alt+F4 closes the window.
 
-- **Path box + Scan**: type any folder path and press Enter or click "Scan";
-  while scanning the button becomes "Stop" and clicking cancels. A cancelled
-  scan keeps the previous complete result — no half-finished trees.
-- **Treemap / Sunburst**: switch anytime (Ctrl+V); the startup view is the
-  `defaultView` setting.
-- **Drill / Back**: click a tile or slice to enter that folder; "Back" or
-  Backspace goes up; click a breadcrumb in the status bar to jump to any
-  ancestor.
-- **Largest files**: the right-hand list shows the biggest files in the
-  current range (up to 64); clicking a row jumps to its folder. Scroll with
-  the wheel.
-- **Hover**: any tile / slice shows kind, size, file and folder counts, and
-  unreadable-entry count; files also get a cluster-aligned allocation
-  estimate.
-- **Esc** closes the window; **F5** rescans the current path.
+The window follows host colors and offers a light/dark switch. The defaultView setting selects the initial chart.
 
-## The two views
+## Scanning and results
 
-- **Recursive treemap (default)**: a squarified treemap. Folders nest inward,
-  files are leaf tiles, colors group by extension category (video / archive /
-  image / documents…), stable across frames and rescans. Entries too small to
-  draw (below 24 dpi-scaled pixels) are omitted — their space stays as
-  background gaps and the parent tile keeps its true total; nothing is
-  redistributed.
-- **Recursive sunburst**: concentric rings, inner folders outward to their
-  children, angle proportional to share. Slices below 0.003 radians are
-  omitted — again leaving gaps, never changing totals.
+- A whole fixed NTFS drive offers fast or standard scanning. Only the separate fast helper requests elevation; the UI stays unelevated. Declined consent or helper failure automatically falls back to standard scanning, with a visible reason.
+- Folders, other filesystems and UNC paths use directory enumeration, including extended-length paths. Directory reparse points are not followed.
+- During a scan, progress shows discovered items, bytes, time and path without inventing an ETA or completion percentage. Browse the previous result or explicitly switch to the current partial result.
+- Cancellation or failure restores the previous complete result when available. A first scan may keep discovered entries, explicitly marked incomplete. Scan issues includes the failure reason.
+- Snapshots exist only in the current window's memory. Persistent scan caches and USN incremental updates are not implemented.
 
-## Build from source
+The fast engine reads MFT names and unnamed $DATA logical sizes, not file contents or alternate data stream contents. Hard links are counted per visible path. Unknown sizes remain unknown. A scan is not a transactional volume snapshot: concurrent changes can cause differences or omissions. Filesystem metadata, named streams and unreadable areas are not guaranteed to be fully represented.
 
-Requirements: Windows 10/11 x64, CMake 3.21+, and Visual Studio 2022 or newer
-(MSVC) or MinGW-w64 GCC 13+. Packaging and integration tests need Python 3.10+.
-
-```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # MSVC; MinGW: -G "MinGW Makefiles"
-cmake --build build                                       # produces diskview.exe next to plugin.json
-ctest --test-dir build --output-on-failure                # pure-logic tests (layout / scan / path normalization)
-python tools/package.py                                   # builds dist/<id>-<version>.wsplugin
-```
-
-The logic tests cover treemap area conservation and proportions, the gaps left
-by culled entries, sunburst angular continuity and nested radii, scan
-aggregation on a real temporary directory (including the largest-files order),
-cancel semantics, invalid-path errors, and `\\?\` long-path / UNC prefix
-normalization.
+Charts show logical bytes using base 1024. Cluster-rounded allocation is only an estimate, especially for sparse, compressed and hard-linked files. File totals are not the volume's used-space value. Partial-result shares use the entries discovered so far.
 
 ## Permissions and data
 
-| Permission | Why |
+| Permission | Purpose |
 | --- | --- |
-| `ui` | Opens the standalone scan window (Win32 + GDI, no third-party dependencies) |
-| `files:read` | Enumerates directory and file metadata while scanning (FindFirstFile); read-only, never opens file contents |
+| ui | Native Win32 / GDI window |
+| files:read | Directory and filesystem metadata |
+| processes | Same-executable scan helper using a restricted local metadata pipe |
 
-- **No** other permissions: no admin elevation, network, clipboard, or
-  autostart.
-- Scanning reads metadata only: sizes, timestamps, tree structure. File
-  contents are never read and never uploaded — the plugin has no networking
-  code at all.
-- **Data location**: the last scanned path is stored as `diskview.json` (a few
-  dozen bytes) in the data directory Win顺 assigns to each plugin. Nothing else
-  is written; the registry is untouched.
-- Uninstalling removes that data directory along with the plugin's other data.
+Scanning is read-only: no file deletion, moving, content reads, networking, services or startup registration. The only saved plugin data is the last successful path in diskview.json in the host's plugin data directory. Trees are released on window close. The elevated helper does not stay resident after its work or connection ends.
 
-## Appearance
+## Build and preview
 
-The window paints itself with the host's own colours (`appearance.nativeLook`:
-background, text, accent, the accent-filled button and the text on it), so it
-looks like the same interface as Win顺; when the host switches theme or
-interface style, an open window follows. A host too old to send a look gets
-the plugin's built-in light and dark palettes. The startup view is the
-`defaultView` setting (`treemap` or `sunburst`); switch it in the window any
-time with Ctrl+V.
+Windows 10/11 x64, CMake 3.21+ and an MSVC or MinGW-w64 compiler with C++20 support. Use a Developer PowerShell for MSVC. Packaging and protocol tests require Python 3.10+.
 
-## Failure and edge handling
+~~~powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+python tools/package.py
+Start-Process .\diskview.exe -ArgumentList '--view' -WindowStyle Hidden
+~~~
 
-- Missing path / not a folder: the content area shows an error; no stale data
-  is displayed.
-- Unreadable directories (system ACLs etc.): counted on the parent node as
-  "unreadable entries" and listed in the status bar (up to 32 paths); the scan
-  itself continues.
-- Symlinks / reparse points: counted but **never followed**, avoiding loops
-  and double counting.
-- Cancelled scan: the partial tree is discarded, the previous complete result
-  stays, and the status bar notes the cancellation.
-- Long paths (>260 chars) work via the `\\?\` prefix; UNC network paths scan
-  too.
+diskview.exe --view "D:\work" opens a standalone viewer and scans the given folder. Without a path it opens the welcome screen. Preview mode saves no plugin configuration. Starting without arguments retains the host's JSON-RPC protocol mode.
+
+Tests exercise scan totals, cancellation, immutable partial snapshots, MFT parsing, hard links, unknown sizes, reference sequence numbers, extension and corrupt records, and pipe packet bounds. Hidden-window tests cover selection, navigation, filtering, keyboard controls, layout and result recovery. The real-process protocol test checks Unicode paths, appearance updates, reopening and shutdown.
+
+Run tools/verify/render-views.ps1 to render native UI snapshots in build/verify/. Development verification scripts are excluded from the package. See [implementation-status.md](design/implementation-status.md) for implementation status and local measurements.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The reused WinShun MFT reader and its MIT license are in [vendor/winshun](vendor/winshun/README.md); its license is included in the distribution.

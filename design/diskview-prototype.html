@@ -1,0 +1,620 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Disk View · 交互方案仿真</title><style>html{color-scheme:light dark}body{margin:0;padding:24px;background:light-dark(#e9edf3,#10141b);font-family:Segoe UI,Microsoft YaHei,sans-serif}main{max-width:1180px;margin:auto}@media(max-width:760px){body{padding:8px}}</style></head><body><main>
+<style>
+#dv-prototype {
+  --dv-bg: light-dark(#f5f7fb,#171b22); --dv-panel: light-dark(#ffffff,#202630);
+  --dv-text: light-dark(#202b3c,#ecf0f7); --dv-sub: light-dark(#56657b,#b3bfd0);
+  --dv-line: light-dark(#dde4ee,#3b4555); --dv-accent: light-dark(#075db8,#83b9ff);
+  --dv-soft: light-dark(#eaf3ff,#273e5c); --dv-button: light-dark(#0866c9,#97c4ff);
+  --dv-on: light-dark(#fff,#152438); --dv-warn: light-dark(#80531b,#f4ca88);
+  --dv-warnbg: light-dark(#fff4df,#382e20); --dv-good: light-dark(#187451,#91d5b6);
+  --dv-video: light-dark(#e9def5,#493957); --dv-dev: light-dark(#d6eae6,#294943);
+  --dv-doc: light-dark(#d8e8f8,#304962); --dv-archive: light-dark(#f2e5c9,#51472f);
+  --dv-system: light-dark(#e0e4eb,#414a57); --dv-other: light-dark(#e7e6e3,#43433e);
+  font: 13px/1.5 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  color:var(--dv-text); width:100%; position:relative; text-align:left; color-scheme:light dark;
+}
+#dv-prototype *,#dv-prototype *::before,#dv-prototype *::after {box-sizing:border-box}
+#dv-prototype [hidden] {display:none!important}
+#dv-prototype h1,#dv-prototype h2,#dv-prototype h3,#dv-prototype p {margin:0}
+#dv-prototype button,#dv-prototype input,#dv-prototype select {font:inherit;color:inherit}
+#dv-prototype button {cursor:pointer}
+#dv-prototype button:disabled {cursor:default;opacity:.42}
+#dv-prototype button:focus-visible,#dv-prototype input:focus-visible,#dv-prototype select:focus-visible {outline:2px solid var(--dv-accent);outline-offset:2px}
+#dv-prototype .dv-app {background:var(--dv-bg);border:1px solid var(--dv-line);border-radius:10px;overflow:hidden}
+#dv-prototype .dv-title {display:flex;gap:9px;align-items:center;min-height:44px;padding:8px 16px;background:var(--dv-panel);border-bottom:1px solid var(--dv-line)}
+#dv-prototype .dv-mark {background:var(--dv-button);color:var(--dv-on);width:24px;height:24px;border-radius:5px;text-align:center;line-height:24px;font-size:17px}
+#dv-prototype .dv-title strong {font-size:14px;font-weight:600;letter-spacing:.2px}
+#dv-prototype .dv-muted {color:var(--dv-sub)}
+#dv-prototype .dv-spacer {flex:1}
+#dv-prototype .dv-badge {padding:2px 8px;border-radius:5px;background:var(--dv-soft);color:var(--dv-accent);font-size:11px;white-space:nowrap}
+#dv-prototype .dv-btn {display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--dv-line);background:var(--dv-panel);border-radius:5px;padding:6px 10px;min-height:32px;white-space:nowrap}
+#dv-prototype .dv-btn:hover:not(:disabled) {background:var(--dv-soft);border-color:var(--dv-accent)}
+#dv-prototype .dv-btn.dv-primary {background:var(--dv-button);color:var(--dv-on);border-color:transparent}
+#dv-prototype .dv-btn.dv-primary:hover:not(:disabled) {filter:brightness(.96)}
+#dv-prototype .dv-icon {min-width:33px;padding:4px 7px;font-size:17px}
+#dv-prototype .dv-quiet {border-color:transparent;background:transparent}
+#dv-prototype .dv-nav {padding:12px 16px 8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#dv-prototype .dv-address {position:relative;flex:1;min-width:190px;display:flex;align-items:center;gap:2px;min-height:34px;background:var(--dv-panel);border:1px solid var(--dv-line);border-radius:5px}
+#dv-prototype .dv-breadcrumb {display:flex;align-items:center;gap:0;min-width:0;flex:1;flex-wrap:wrap;padding:2px 4px}
+#dv-prototype .dv-crumb {border:0;background:transparent;border-radius:3px;padding:3px 6px;max-width:160px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#dv-prototype .dv-crumb:hover {background:var(--dv-soft);color:var(--dv-accent)}
+#dv-prototype .dv-crumb[aria-current] {font-weight:600;color:var(--dv-accent)}
+#dv-prototype .dv-sep {color:var(--dv-sub);padding:0 2px}
+#dv-prototype .dv-address input {width:100%;border:0;background:transparent;padding:5px 10px;min-height:32px}
+#dv-prototype .dv-edit {border:0;background:transparent;padding:4px 7px;white-space:nowrap;color:var(--dv-sub);font-size:11px}
+#dv-prototype .dv-patherror {color:var(--dv-warn);padding:0 16px 8px;overflow-wrap:anywhere}
+#dv-prototype .dv-tools {display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 12px}
+#dv-prototype select {padding:5px 8px;background:var(--dv-panel);border:1px solid var(--dv-line);border-radius:5px;min-height:32px;max-width:100%}
+#dv-prototype .dv-snapshot {font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+#dv-prototype .dv-statusdot {display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dv-good)}
+#dv-prototype .dv-link {color:var(--dv-accent);border:0;background:transparent;padding:2px 0;text-decoration:none;white-space:nowrap}
+#dv-prototype .dv-link:hover {text-decoration:underline}
+#dv-prototype .dv-progress {margin:0 16px 12px;background:var(--dv-soft);border:1px solid var(--dv-line);border-radius:6px;padding:11px 13px}
+#dv-prototype .dv-progresshead {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#dv-prototype .dv-progress strong {font-weight:600}
+#dv-prototype .dv-stage {display:flex;justify-content:space-between;gap:12px;margin-top:8px;font-size:12px;color:var(--dv-sub)}
+#dv-prototype .dv-track {height:4px;background:color-mix(in srgb,var(--dv-accent) 14%,transparent);margin-top:8px;border-radius:3px;overflow:hidden}
+#dv-prototype .dv-track span {height:100%;display:block;background:var(--dv-accent);transition:width .2s linear}
+#dv-prototype .dv-track.dv-unknown span {width:22%!important;animation:dv-unknown 1.7s ease-in-out infinite alternate}
+@keyframes dv-unknown {from{transform:translateX(0)}to{transform:translateX(350%)}}
+#dv-prototype .dv-banner {margin:0 16px 12px;padding:8px 12px;border-radius:5px;background:var(--dv-warnbg);color:var(--dv-warn);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#dv-prototype .dv-overview {display:flex;align-items:baseline;gap:10px;padding:0 16px 10px;flex-wrap:wrap}
+#dv-prototype .dv-overview h1 {font-size:18px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
+#dv-prototype .dv-total {font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+#dv-prototype .dv-overview small {color:var(--dv-sub);font-size:12px}
+#dv-prototype .dv-main {display:grid;grid-template-columns:minmax(0,1.38fr) 7px minmax(260px,1fr);margin:0 16px;border:1px solid var(--dv-line);background:var(--dv-panel);border-radius:6px;overflow:hidden}
+#dv-prototype .dv-chartpane,#dv-prototype .dv-listpane {min-width:0}
+#dv-prototype .dv-panehead {height:48px;padding:8px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--dv-line)}
+#dv-prototype .dv-panehead strong {font-weight:600;white-space:nowrap}
+#dv-prototype .dv-segment {display:inline-flex;border:1px solid var(--dv-line);border-radius:5px;padding:2px;gap:2px;background:var(--dv-bg)}
+#dv-prototype .dv-segment button {border:0;background:transparent;border-radius:3px;min-height:26px;padding:3px 9px;color:var(--dv-sub);white-space:nowrap}
+#dv-prototype .dv-segment button[aria-pressed=true] {background:var(--dv-panel);color:var(--dv-accent);box-shadow:0 1px 3px #0001}
+#dv-prototype .dv-charttools {display:flex;align-items:center;padding:8px 12px;gap:8px;flex-wrap:wrap;font-size:12px;min-height:46px}
+#dv-prototype .dv-charttools select {min-height:27px;padding:3px 6px;font-size:12px}
+#dv-prototype .dv-chart {height:350px;position:relative;margin:0 10px 8px;min-width:0;isolation:isolate}
+#dv-prototype .dv-tile {position:absolute;border:2px solid var(--dv-panel);background:var(--dv-doc);padding:8px;text-align:left;overflow:hidden;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;color:var(--dv-text);border-radius:4px}
+#dv-prototype .dv-tile.dv-parent {padding:4px 8px;border-radius:4px}
+#dv-prototype .dv-tile strong {font-size:13px;font-weight:600;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;width:100%;word-break:break-word;pointer-events:none}
+#dv-prototype .dv-tile span {font-size:12px;opacity:.84;pointer-events:none;white-space:nowrap}
+#dv-prototype .dv-tile.dv-small {padding:3px 5px}
+#dv-prototype .dv-tile.dv-small strong {font-size:11px;-webkit-line-clamp:1}
+#dv-prototype .dv-tile.dv-small span {display:none}
+#dv-prototype [data-kind=video] {--dv-fill:var(--dv-video)}
+#dv-prototype [data-kind=dev] {--dv-fill:var(--dv-dev)}
+#dv-prototype [data-kind=doc] {--dv-fill:var(--dv-doc)}
+#dv-prototype [data-kind=archive] {--dv-fill:var(--dv-archive)}
+#dv-prototype [data-kind=system] {--dv-fill:var(--dv-system)}
+#dv-prototype [data-kind=other] {--dv-fill:var(--dv-other)}
+#dv-prototype .dv-tile {background:var(--dv-fill)}
+#dv-prototype .dv-tile.dv-hovered {filter:brightness(.96);outline:2px solid var(--dv-accent);outline-offset:-3px;z-index:5}
+#dv-prototype .dv-tile.dv-selected {outline:3px solid var(--dv-accent);outline-offset:-4px}
+#dv-prototype .dv-legend {display:flex;gap:12px;flex-wrap:wrap;padding:3px 12px 10px;color:var(--dv-sub);font-size:11px}
+#dv-prototype .dv-legend span {display:inline-flex;align-items:center;gap:4px}
+#dv-prototype .dv-swatch {background:var(--dv-fill);width:9px;height:9px;border-radius:2px;display:inline-block;flex:none}
+#dv-prototype .dv-divider {background:var(--dv-bg);border-left:1px solid var(--dv-line);border-right:1px solid var(--dv-line);cursor:col-resize;touch-action:none}
+#dv-prototype .dv-divider:hover {background:var(--dv-soft)}
+#dv-prototype .dv-filter {padding:8px 12px;display:flex;gap:6px;align-items:center;min-height:46px}
+#dv-prototype .dv-filter input {width:100%;min-width:0;background:var(--dv-bg);border:1px solid var(--dv-line);border-radius:4px;padding:4px 7px;min-height:28px;font-size:12px}
+#dv-prototype .dv-table {width:100%;border-collapse:collapse;table-layout:fixed}
+#dv-prototype .dv-table th {font-weight:400;font-size:11px;color:var(--dv-sub);text-align:left;padding:4px 10px;border-bottom:1px solid var(--dv-line)}
+#dv-prototype .dv-table th:nth-child(2) {width:82px;text-align:right}
+#dv-prototype .dv-table th:nth-child(3) {width:59px;text-align:right}
+#dv-prototype .dv-table th button {border:0;background:transparent;padding:0;color:inherit;white-space:nowrap}
+#dv-prototype .dv-table td {padding:0;border-bottom:1px solid color-mix(in srgb,var(--dv-line) 60%,transparent);height:var(--dv-row,37px);font-variant-numeric:tabular-nums}
+#dv-prototype .dv-table td:not(:first-child) {padding:0 10px;text-align:right;font-size:12px}
+#dv-prototype .dv-namecell {display:flex;gap:7px;align-items:center;width:100%;border:0;background:transparent;text-align:left;padding:7px 10px;min-height:var(--dv-row,37px)}
+#dv-prototype .dv-namecell span:last-child {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dv-prototype .dv-table tr.dv-hovered {background:var(--dv-bg)}
+#dv-prototype .dv-table tr.dv-selected {background:var(--dv-soft)}
+#dv-prototype .dv-table tr.dv-selected .dv-namecell {color:var(--dv-accent)}
+#dv-prototype .dv-rowicon {color:var(--dv-sub);flex:none;font-size:12px}
+#dv-prototype .dv-listfoot {display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:11px;color:var(--dv-sub);flex-wrap:wrap}
+#dv-prototype .dv-detail {display:flex;align-items:flex-start;gap:12px;margin:12px 16px 0;padding:12px;background:var(--dv-panel);border:1px solid var(--dv-line);border-radius:6px}
+#dv-prototype .dv-detailbody {min-width:0;flex:1}
+#dv-prototype .dv-detailtop {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#dv-prototype .dv-detailtop strong {font-weight:600;overflow-wrap:anywhere}
+#dv-prototype .dv-detailpath {font-size:12px;color:var(--dv-sub);overflow-wrap:anywhere;margin-top:3px}
+#dv-prototype .dv-detailnumbers {display:flex;gap:14px;flex-wrap:wrap;margin-top:5px;font-size:12px}
+#dv-prototype .dv-detailactions {display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;max-width:230px}
+#dv-prototype .dv-status {display:flex;align-items:center;gap:8px;padding:8px 16px;font-size:11px;color:var(--dv-sub);min-height:34px}
+#dv-prototype .dv-statuspath {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dv-prototype .dv-mobile {display:none}
+#dv-prototype .dv-tooltip {position:absolute;width:300px;max-width:calc(100% - 20px);padding:12px;background:var(--dv-panel);border:1px solid var(--dv-line);border-radius:7px;box-shadow:0 6px 24px #0002;z-index:30;pointer-events:none}
+#dv-prototype .dv-tooltip strong {font-weight:600;overflow-wrap:anywhere}
+#dv-prototype .dv-tip-path {font-size:12px;overflow-wrap:anywhere;color:var(--dv-sub);margin:5px 0 7px}
+#dv-prototype .dv-tip-grid {display:flex;justify-content:space-between;gap:12px}
+#dv-prototype .dv-tip-grid b {font-size:16px;font-weight:600}
+#dv-prototype .dv-tip-hint {border-top:1px solid var(--dv-line);margin-top:9px;padding-top:7px;font-size:11px;color:var(--dv-sub)}
+#dv-prototype .dv-empty {height:100%;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--dv-sub);padding:20px;flex-direction:column;gap:8px}
+#dv-prototype .dv-sun {width:100%;height:100%;overflow:visible}
+#dv-prototype .dv-sun path {stroke:var(--dv-panel);stroke-width:2px;fill:var(--dv-fill);cursor:pointer}
+#dv-prototype .dv-sun path.dv-selected,#dv-prototype .dv-sun path.dv-hovered {stroke:var(--dv-accent);stroke-width:3px}
+#dv-prototype .dv-sun text {fill:var(--dv-text);font-family:inherit;text-anchor:middle;pointer-events:none}
+#dv-prototype .dv-sun .dv-sun-name {font-size:14px;font-weight:600}
+#dv-prototype .dv-sun .dv-sun-size {font-size:22px;font-weight:600}
+#dv-prototype .dv-sun .dv-sun-hint {font-size:11px;fill:var(--dv-sub)}
+#dv-prototype .dv-overlay {position:absolute;inset:0;background:#0c152551;z-index:40;display:flex;align-items:flex-start;justify-content:center;padding:85px 16px 20px;border-radius:10px}
+#dv-prototype .dv-dialog {background:var(--dv-panel);color:var(--dv-text);border:1px solid var(--dv-line);border-radius:9px;padding:22px;width:470px;max-width:100%;box-shadow:0 15px 45px #0003}
+#dv-prototype .dv-dialog h2 {font-size:18px;font-weight:600;margin:8px 0}
+#dv-prototype .dv-dialog p {color:var(--dv-sub);margin:8px 0;overflow-wrap:anywhere}
+#dv-prototype .dv-dialog .dv-dialogactions {display:flex;gap:8px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
+#dv-prototype .dv-dialog ul {padding-left:20px;color:var(--dv-sub)}
+#dv-prototype .dv-dialog li {margin:6px 0;overflow-wrap:anywhere}
+#dv-prototype .dv-dialog .dv-btn {white-space:normal}
+#dv-prototype .dv-notice {background:var(--dv-warnbg);color:var(--dv-warn);padding:8px 10px;border-radius:5px;font-size:12px;margin-top:12px}
+#dv-prototype .dv-demo {display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 2px 0;color:var(--dv-sub);font-size:12px;color-scheme:light dark}
+#dv-prototype .dv-demo strong {font-weight:500}
+#dv-prototype .dv-demo .dv-btn {min-height:27px;padding:3px 8px;font-size:12px}
+#dv-prototype .dv-toast {margin:8px 0 0;color:var(--dv-accent);font-size:12px;min-height:18px;color-scheme:light dark}
+@media(max-width:760px) {
+ #dv-prototype .dv-main {display:block;margin:0 10px}
+ #dv-prototype .dv-divider {display:none}
+ #dv-prototype .dv-mobile {display:flex;gap:8px;padding:0 10px 9px}
+ #dv-prototype[data-mobile=chart] .dv-listpane {display:none}
+ #dv-prototype[data-mobile=list] .dv-chartpane {display:none}
+ #dv-prototype .dv-chart {height:340px}
+ #dv-prototype .dv-title {padding:8px 10px}
+ #dv-prototype .dv-nav {padding:10px 10px 8px}
+ #dv-prototype .dv-tools {padding:0 10px 10px;gap:7px}
+ #dv-prototype .dv-overview {padding:0 10px 10px}
+ #dv-prototype .dv-detail {margin:10px 10px 0;flex-wrap:wrap}
+ #dv-prototype .dv-detailactions {max-width:none;width:100%;justify-content:flex-start}
+ #dv-prototype .dv-progress,#dv-prototype .dv-banner {margin:0 10px 10px}
+ #dv-prototype .dv-status {padding:7px 10px}
+ #dv-prototype .dv-status .dv-keyhint {display:none}
+}
+@media(max-width:430px) {
+ #dv-prototype .dv-title .dv-subtitle {display:none}
+ #dv-prototype .dv-title {flex-wrap:wrap}
+ #dv-prototype .dv-title .dv-badge {font-size:10px}
+ #dv-prototype .dv-nav .dv-address {order:2;flex-basis:100%}
+ #dv-prototype .dv-address .dv-crumb {max-width:100px}
+ #dv-prototype .dv-chart {height:300px}
+ #dv-prototype .dv-overview h1 {font-size:16px}
+ #dv-prototype .dv-total {font-size:20px}
+ #dv-prototype .dv-snapshot {flex-basis:100%}
+ #dv-prototype .dv-overlay {padding:60px 10px 15px}
+ #dv-prototype .dv-dialog {padding:16px}
+ #dv-prototype .dv-table th:nth-child(2) {width:78px}
+ #dv-prototype .dv-table th:nth-child(3) {width:50px}
+}
+@media(prefers-reduced-motion:reduce) {
+ #dv-prototype .dv-track span {transition:none;animation:none}
+}
+</style>
+<div id="dv-prototype" data-mobile="chart" aria-label="Disk View 磁盘分析交互原型">
+  <div class="dv-app">
+    <header class="dv-title">
+      <span class="dv-mark" aria-hidden="true">◩</span><strong>Disk View</strong>
+      <span class="dv-subtitle dv-muted">磁盘透视</span><span class="dv-spacer"></span>
+      <span class="dv-badge">交互原型 · 模拟数据</span>
+      <button class="dv-btn dv-quiet" id="dv-theme" aria-label="切换深浅主题">深色</button>
+    </header>
+    <nav class="dv-nav" aria-label="目录导航">
+      <button class="dv-btn dv-icon" id="dv-back" aria-label="后退（Alt+Left）">←</button>
+      <button class="dv-btn dv-icon" id="dv-forward" aria-label="前进（Alt+Right）">→</button>
+      <button class="dv-btn dv-icon" id="dv-up" aria-label="上一级（Backspace）">↑</button>
+      <div class="dv-address">
+        <div id="dv-breadcrumb" class="dv-breadcrumb" aria-label="当前目录面包屑"></div>
+        <input id="dv-address-input" aria-label="完整路径" spellcheck="false" hidden>
+        <button id="dv-edit-address" class="dv-edit" aria-label="编辑完整路径（Ctrl+L）">编辑路径</button>
+      </div>
+      <button id="dv-rescan" class="dv-btn dv-primary">↻ 重新扫描</button>
+    </nav>
+    <div id="dv-patherror" class="dv-patherror" role="alert" hidden></div>
+    <div class="dv-tools">
+      <select id="dv-drive" aria-label="选择磁盘">
+        <option value="c">C: 系统盘 · NTFS</option><option value="d">D: 工作盘 · NTFS</option><option value="e">E: 移动盘 · exFAT</option>
+      </select>
+      <div class="dv-snapshot"><span class="dv-statusdot"></span><span id="dv-source">完整快照 · 14:32</span>
+        <span class="dv-muted">·</span><button id="dv-accounting" class="dv-link">逻辑大小 ⓘ</button>
+      </div>
+      <span class="dv-spacer"></span><button id="dv-issues" class="dv-link">3 个位置无法读取</button>
+    </div>
+    <section id="dv-progress" class="dv-progress" aria-label="扫描进度" hidden>
+      <div class="dv-progresshead"><strong id="dv-phase"></strong><span id="dv-engine" class="dv-badge"></span><span class="dv-spacer"></span>
+        <button id="dv-scan-view" class="dv-btn">查看本轮已发现</button><button id="dv-cancel" class="dv-btn">取消扫描</button>
+      </div>
+      <div class="dv-stage"><span id="dv-progress-stats"></span><span id="dv-progress-time"></span></div>
+      <div class="dv-track" id="dv-track"><span></span></div>
+      <div class="dv-stage"><span id="dv-progress-path"></span><span>时间压缩演示</span></div>
+    </section>
+    <div id="dv-banner" class="dv-banner" hidden></div>
+    <div class="dv-overview"><h1 id="dv-heading">C:\</h1><span class="dv-total" id="dv-total">826.0 GB</span><small id="dv-scope">当前范围 · 7 个直接子项</small></div>
+    <div class="dv-mobile"><div class="dv-segment" aria-label="窄窗口内容"><button id="dv-show-chart" aria-pressed="true">空间图</button><button id="dv-show-list" aria-pressed="false">目录列表</button></div><span class="dv-muted">选中详情始终保留</span></div>
+    <div class="dv-main" id="dv-main">
+      <section class="dv-chartpane" aria-label="空间分布">
+        <div class="dv-panehead"><strong>空间分布</strong><span class="dv-spacer"></span><div class="dv-segment" aria-label="图表类型"><button id="dv-treemap" aria-pressed="true">方块</button><button id="dv-sunburst" aria-pressed="false">圆盘</button></div></div>
+        <div class="dv-charttools"><label for="dv-depth">展开</label><select id="dv-depth"><option value="1">当前一层</option><option value="2">两层</option></select><span class="dv-spacer"></span><span>单击选中 · 双击进入</span></div>
+        <div class="dv-chart" id="dv-chart" aria-label="按逻辑大小分配面积的目录图"></div>
+        <div class="dv-legend" aria-label="文件类别图例"><span data-kind="doc"><i class="dv-swatch"></i>文档 / 用户</span><span data-kind="dev"><i class="dv-swatch"></i>开发工具</span><span data-kind="video"><i class="dv-swatch"></i>视频</span><span data-kind="archive"><i class="dv-swatch"></i>镜像 / 压缩包</span><span data-kind="system"><i class="dv-swatch"></i>系统</span></div>
+      </section>
+      <div id="dv-divider" class="dv-divider" aria-hidden="true"></div>
+      <section class="dv-listpane" aria-label="文件和目录列表">
+        <div class="dv-panehead"><div class="dv-segment" aria-label="列表范围"><button id="dv-current-list" aria-pressed="true">当前层</button><button id="dv-largest-list" aria-pressed="false">最大文件</button></div><span class="dv-spacer"></span><span id="dv-list-count" class="dv-muted"></span></div>
+        <div class="dv-filter"><input id="dv-filter" type="search" aria-label="筛选当前列表，图表保持完整" placeholder="筛选列表，图表保持完整"><button id="dv-clear-filter" class="dv-btn dv-quiet" aria-label="清空筛选">×</button></div>
+        <table class="dv-table"><thead><tr><th><button id="dv-sort-name">名称</button></th><th><button id="dv-sort-size">大小 ↓</button></th><th>占比</th></tr></thead><tbody id="dv-rows"></tbody></table>
+        <div class="dv-listfoot"><span id="dv-list-note">双击文件夹进入</span><span class="dv-spacer"></span><button id="dv-prev-page" class="dv-link">上一页</button><span id="dv-page"></span><button id="dv-next-page" class="dv-link">下一页</button></div>
+      </section>
+    </div>
+    <section class="dv-detail" aria-label="已选中项目详情">
+      <div class="dv-detailbody"><div class="dv-detailtop"><span class="dv-badge" id="dv-detail-type">当前目录</span><strong id="dv-detail-name">系统盘 C:</strong></div><div id="dv-detail-path" class="dv-detailpath">C:\</div><div class="dv-detailnumbers" id="dv-detail-numbers"></div></div>
+      <div class="dv-detailactions"><button id="dv-enter" class="dv-btn dv-primary" disabled>进入文件夹</button><button id="dv-locate" class="dv-btn" disabled>定位到所在目录</button></div>
+    </section>
+    <footer class="dv-status"><span id="dv-hover-status" class="dv-statuspath">悬停查看完整路径；单击后详情保持</span><span class="dv-keyhint">Alt+← 后退　Ctrl+L 地址</span></footer>
+  </div>
+  <div class="dv-demo" aria-label="原型场景控制"><strong>试用场景</strong><button id="dv-demo-first" class="dv-btn">首次扫描</button><button id="dv-demo-normal" class="dv-btn">普通扫描</button><button id="dv-demo-error" class="dv-btn">扫描失败</button><button id="dv-demo-reset" class="dv-btn">回到示例结果</button><span>所有目录、权限和扫描进度均为模拟</span></div>
+  <div class="dv-toast" id="dv-toast" role="status" aria-live="polite"></div>
+  <div id="dv-tooltip" class="dv-tooltip" role="tooltip" hidden></div>
+  <div id="dv-overlay" class="dv-overlay" hidden></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  const app = document.getElementById("dv-prototype");
+  const el = function (id) { return app.querySelector("#dv-" + id); };
+  const esc = function (v) { return String(v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); };
+  const file = function (name,size,kind,count) { return {name:name,bytes:size,kind:kind||"other",count:count||1,type:count?"aggregate":"file"}; };
+  const dir = function (name,children,kind) { return {name:name,children:children,kind:kind||"doc",type:"dir"}; };
+  const drives = {
+    c:dir("C:\\",[
+      dir("用户",[
+        dir("renfei",[
+          dir("下载",[
+            file("2026-10-19 录像.mp4",53.6,"video"),file("工具链备份.zip",28,"archive"),
+            file("Ubuntu-24.04.iso",6,"archive"),file("其他下载文件",42,"other",32480)
+          ],"archive"),
+          dir("视频",[file("项目演示素材.mov",66.6,"video"),file("旅行视频.mp4",22.5,"video"),file("会议录像.mp4",5.3,"video")],"video"),
+          dir("AppData",[
+            dir("Local",[dir("Docker",[file("docker_data.vhdx",30,"archive")],"dev"),dir("Cache",[file("浏览器与应用缓存",16,"other",184200)],"other"),dir("VSCode",[file("扩展与工作区缓存",10,"dev",28500)],"dev")],"dev"),
+            dir("Roaming",[file("应用配置与数据",20,"other",26400)],"other")
+          ],"dev"),
+          dir("文档",[dir("论文",[file("实验数据.parquet",6.2,"doc"),file("论文图表与草稿",2.3,"doc",286)],"doc"),dir("项目",[file("代码与构建文件",16,"dev",12800)],"dev"),file("其他文档",5.5,"doc",3240)],"doc")
+        ],"doc"),
+        dir("Public",[file("共享素材",16,"video",426),file("公共文件",6,"doc",480)],"doc")
+      ],"doc"),
+      dir("AMDDesignTools",[dir("2025.2",[dir("Vivado",[file("工具组件与器件库",96,"dev",2084000)],"dev"),dir("Vitis",[file("编译器与 Python 包",48,"dev",1428000)],"dev")],"dev"),file("安装包",14,"archive",62)],"dev"),
+      dir("Windows",[dir("WinSxS",[file("系统组件",54,"system",184200)],"system"),dir("System32",[file("系统运行文件",36,"system",68200)],"system"),dir("Installer",[file("安装缓存",22,"system",18240)],"system")],"system"),
+      dir("Program Files",[dir("应用程序",[file("应用资源",46,"other",82600)],"other"),dir("开发工具",[file("工具与依赖",40,"dev",96200)],"dev")],"dev"),
+      dir("ProgramData",[dir("Package Cache",[file("软件包缓存",38,"archive",46380)],"archive"),dir("应用数据",[file("共享应用数据",20,"other",35100)],"other")],"other"),
+      dir("系统与其他",[file("pagefile.sys",7.2,"system"),file("hiberfil.sys",12,"system"),file("其他系统文件",40.8,"system",38400)],"system"),
+      {name:"System Volume Information",bytes:0,count:0,kind:"system",type:"blocked"}
+    ],"doc"),
+    d:dir("D:\\",[dir("数据",[file("实验数据集.bin",72,"doc"),file("归档数据",46,"doc",42600)],"doc"),dir("代码",[dir("winshun-dev",[file("源码与构建产物",42,"dev",84260)],"dev"),file("其他代码项目",22,"dev",126800)],"dev"),dir("镜像",[file("工作机备份.vhdx",32,"archive"),file("其他镜像",16,"archive",18)],"archive")],"dev"),
+    e:dir("E:\\",[dir("照片",[file("RAW 照片",64,"doc",6200)],"doc"),dir("备份",[file("备份-2026.zip",32,"archive")],"archive")],"doc")
+  };
+  let nextId=0;
+  const nodes=new Map(),byPath=new Map(),virtuals=new Map();
+  function register(n,parent,drive) {
+    n.id="n"+(++nextId);n.parent=parent||null;n.drive=drive;
+    n.path=parent?parent.path+(parent.path.endsWith("\\")?"":"\\")+n.name:n.name;
+    if(n.children){n.children.forEach(function(c){register(c,n,drive);});n.bytes=n.children.reduce(function(a,c){return a+c.bytes;},0);n.count=n.children.reduce(function(a,c){return a+c.count;},0);}
+    nodes.set(n.id,n);byPath.set(n.path.toLowerCase().replace(/\\$/,""),n);
+  }
+  Object.keys(drives).forEach(function(d){register(drives[d],null,d);});
+  const settings={density:"标准",hoverDelay:250};
+  const state={current:drives.c.id,selected:null,hover:null,history:[drives.c.id],historyIndex:0,mode:"treemap",depth:1,list:"current",sort:"size",ascending:false,filter:"",page:0,mobile:"chart",scan:null,hasComplete:true,source:"complete",partial:new Map(),banner:"",latest:"14:32",group:null,theme:"system"};
+  let scanTimer=null,hoverTimer=null,lastPointer=null,modalReturn=null;
+  function node(id){return nodes.get(id)||virtuals.get(id);}
+  function current(){return node(state.current);}
+  function root(){return drives[current().drive];}
+  function activePartial(){return state.source==="partial";}
+  function size(n){if(!n)return 0;if(n.type==="group")return n.children.reduce(function(a,c){return a+size(c);},0);return activePartial()?(state.partial.get(n.id)||0):n.bytes;}
+  function fmt(n){return n>=1?n.toLocaleString("en-US",{minimumFractionDigits:1,maximumFractionDigits:1})+" GB":n>0?(n*1024).toFixed(1)+" MB":"0 B";}
+  function count(n){return Math.round(n).toLocaleString("en-US");}
+  function share(n){return size(current())>0?(100*size(n)/size(current())).toFixed(1)+"%":"—";}
+  function typeName(n){return {dir:"文件夹",file:"文件",aggregate:"汇总项",blocked:"无法读取",group:"小项合并"}[n.type]||"目录";}
+  function notify(text){el("toast").textContent=text;}
+  function save(){
+    if(window.openai&&window.openai.setWidgetState)Promise.resolve(window.openai.setWidgetState({
+      modelContent:{permissionChoice:"扫描助手按需授权",directoryClick:"单击选中、双击进入",currentPath:current().path,view:state.mode,depth:state.depth},
+      privateContent:{current:state.current,mode:state.mode,depth:state.depth,list:state.list,theme:state.theme}
+    })).catch(function(){});
+  }
+  function restore(saved){
+    const s=saved&&saved.privateContent;
+    if(!s)return;
+    if(nodes.has(s.current)&&node(s.current).type==="dir"){state.current=s.current;state.history=[s.current];state.historyIndex=0;}
+    if(["treemap","sunburst"].includes(s.mode))state.mode=s.mode;
+    if([1,2].includes(s.depth))state.depth=s.depth;
+    if(["current","largest"].includes(s.list))state.list=s.list;
+    if(["light","dark","system"].includes(s.theme))state.theme=s.theme;
+  }
+  restore(window.openai&&window.openai.widgetState);
+  window.addEventListener("openai:set_globals",function(e){if(e.detail&&e.detail.globals&&e.detail.globals.widgetState){restore(e.detail.globals.widgetState);render();}});
+  function resetHover(){clearTimeout(hoverTimer);state.hover=null;el("tooltip").hidden=true;paintSelection();status();}
+  function navigate(id,record){
+    const n=node(id);if(!n||n.type!=="dir")return;
+    resetHover();state.current=id;state.selected=null;state.filter="";state.page=0;state.group=null;el("filter").value="";
+    if(record!==false&&state.history[state.historyIndex]!==id){state.history=state.history.slice(0,state.historyIndex+1);state.history.push(id);state.historyIndex++;}
+    render();save();
+  }
+  function select(id){state.selected=id;renderDetail();paintSelection();status();save();}
+  function historyStep(delta){const i=state.historyIndex+delta;if(i<0||i>=state.history.length)return;state.historyIndex=i;navigate(state.history[i],false);}
+  function up(){if(current().parent)navigate(current().parent.id);}
+  function openNode(id){
+    const n=node(id);if(!n)return;
+    if(n.type==="dir")navigate(id);
+    else if(n.type==="group"){state.group=n.children.map(function(c){return c.id;});state.list="current";state.page=0;state.filter="";el("filter").value="";state.mobile="list";render();notify("列表已展开这些小项；图表面积保持不变。");}
+    else if(n.type==="blocked"){showDialog("issues");}
+    else {select(id);notify(n.type==="aggregate"?"这是示例数据中的汇总项；真实扫描会提供具体文件。":"已固定文件详情。可定位到所在目录；不会启动外部程序。");}
+  }
+  function editAddress(){
+    el("breadcrumb").hidden=true;el("address-input").hidden=false;el("edit-address").hidden=true;
+    el("address-input").value=current().path;el("address-input").focus();el("address-input").select();
+  }
+  function endAddress(){el("breadcrumb").hidden=false;el("address-input").hidden=true;el("edit-address").hidden=false;}
+  function submitAddress(){
+    const p=el("address-input").value.trim().replace(/\//g,"\\").replace(/\\+$/,"").toLowerCase();
+    const n=byPath.get(p);
+    if(n&&n.type==="dir"){if(n.drive!==current().drive)changeDrive(n.drive);navigate(n.id);endAddress();el("patherror").hidden=true;}
+    else {el("patherror").textContent="这个位置不在原型数据中。试试 C:\\用户\\renfei\\下载；真实版会在此提供“扫描此路径”。";el("patherror").hidden=false;}
+  }
+  function renderNav(){
+    const chain=[];let n=current();while(n){chain.unshift(n);n=n.parent;}
+    el("breadcrumb").innerHTML=chain.map(function(c,i){return (i?'<span class="dv-sep" aria-hidden="true">›</span>':'')+'<button class="dv-crumb" data-nav="'+c.id+'" '+(i===chain.length-1?'aria-current="location"':'')+' aria-label="转到 '+esc(c.path)+'">'+esc(c.name)+'</button>';}).join("");
+    el("back").disabled=state.historyIndex===0;el("forward").disabled=state.historyIndex===state.history.length-1;el("up").disabled=!current().parent;
+    el("drive").value=current().drive;el("depth").value=String(state.depth);
+    el("heading").textContent=current().parent?current().name:current().name+" "+({c:"系统盘",d:"工作盘",e:"移动盘"}[current().drive]);
+    el("total").textContent=(!state.hasComplete&&!state.scan&&!state.partial.size)?"—":fmt(size(current()));
+    el("scope").textContent=(activePartial()?"当前已发现 · ":"当前范围 · ")+(current().children||[]).filter(function(c){return !activePartial()||size(c)>0;}).length+" 个直接子项";
+    el("source").textContent=activePartial()?"本轮未完成结果":state.scan?"上次完整快照 · "+state.latest:state.hasComplete?"完整快照 · "+state.latest:"尚未扫描";
+    el("issues").hidden=current().drive!=="c"||!state.hasComplete;
+    el("rescan").disabled=!!state.scan;el("rescan").textContent=state.scan?"扫描中…":"↻ 重新扫描";
+    app.dataset.mobile=state.mobile;
+    el("show-chart").setAttribute("aria-pressed",state.mobile==="chart");el("show-list").setAttribute("aria-pressed",state.mobile==="list");
+    el("treemap").setAttribute("aria-pressed",state.mode==="treemap");el("sunburst").setAttribute("aria-pressed",state.mode==="sunburst");
+    el("current-list").setAttribute("aria-pressed",state.list==="current");el("largest-list").setAttribute("aria-pressed",state.list==="largest");
+    const isDark=state.theme==="dark"||(state.theme==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);
+    app.style.colorScheme=state.theme==="system"?"light dark":state.theme;el("theme").textContent=isDark?"浅色":"深色";
+    app.style.setProperty("--dv-row",settings.density==="紧凑"?"32px":"37px");
+    let message=state.banner;
+    if(activePartial())message=(state.scan?"正在构建局部结果":"未完成结果")+" · 仅包含本轮已发现条目，占比随扫描变化。"+(state.banner?" "+state.banner:"");
+    else if(state.scan)message="后台正在更新 "+root().path+"；当前显示上次完成结果，可继续浏览。";
+    el("banner").hidden=!message;el("banner").textContent=message;
+  }
+  function visibleChildren(n){return (n.children||[]).filter(function(c){return size(c)>0;}).sort(function(a,b){return size(b)-size(a);});}
+  function grouped(n,w,h){
+    const all=visibleChildren(n),small=[],large=[];const total=size(n)||1;
+    all.forEach(function(c){(w*h*size(c)/total<850?small:large).push(c);});
+    if(small.length>1){
+      const g={id:"group-"+n.id,name:"其他 "+small.length+" 项",type:"group",children:small,parent:n,path:n.path,drive:n.drive,kind:"other",bytes:small.reduce(function(a,c){return a+c.bytes;},0),count:small.reduce(function(a,c){return a+c.count;},0)};
+      virtuals.set(g.id,g);large.push(g);
+    }else large.push.apply(large,small);
+    return large.sort(function(a,b){return size(b)-size(a);});
+  }
+  function partition(items,x,y,w,h){
+    if(!items.length)return[];
+    if(items.length===1)return[{n:items[0],x:x,y:y,w:w,h:h}];
+    const total=items.reduce(function(a,n){return a+size(n);},0);let acc=0,index=1,best=Infinity;
+    for(let i=1;i<items.length;i++){acc+=size(items[i-1]);const gap=Math.abs(total/2-acc);if(gap<best){best=gap;index=i;}}
+    const left=items.slice(0,index),right=items.slice(index),ratio=left.reduce(function(a,n){return a+size(n);},0)/total;
+    return w>=h?partition(left,x,y,w*ratio,h).concat(partition(right,x+w*ratio,y,w*(1-ratio),h)):partition(left,x,y,w,h*ratio).concat(partition(right,x,y+h*ratio,w,h*(1-ratio)));
+  }
+  function renderChart(){
+    const chart=el("chart"),w=chart.clientWidth,h=chart.clientHeight;
+    if(w<1)return;
+    if(!state.hasComplete&&!state.scan&&!state.partial.size){chart.innerHTML='<div class="dv-empty"><strong>从一次扫描开始</strong><span>选择磁盘后开始扫描。发现的目录会逐步出现。</span></div>';return;}
+    if(size(current())<=0){chart.innerHTML='<div class="dv-empty"><strong>'+(state.scan?"正在读取文件记录…":"当前范围没有可绘制的条目")+'</strong><span>'+(state.scan?"发现目录后会在这里出现。":"无法读取的位置请在问题详情中查看。")+'</span></div>';return;}
+    if(state.mode==="sunburst"){renderSunburst(w,h);return;}
+    const tiles=[];
+    function layer(n,x,y,width,height,depth){
+      partition(grouped(n,width,height),x,y,width,height).forEach(function(r){
+        const nested=depth<state.depth&&r.n.type==="dir"&&r.w>90&&r.h>70;
+        tiles.push('<button class="dv-tile '+(nested?'dv-parent':'')+(r.w<100||r.h<52?' dv-small':'')+'" data-node="'+r.n.id+'" data-kind="'+r.n.kind+'" aria-label="'+esc(r.n.path+"，"+fmt(size(r.n))+"，"+typeName(r.n))+'" style="left:'+r.x+'px;top:'+r.y+'px;width:'+r.w+'px;height:'+r.h+'px"><strong>'+esc(r.n.name)+'</strong>'+(nested?'':'<span>'+fmt(size(r.n))+' · '+share(r.n)+'</span>')+'</button>');
+        if(nested)layer(r.n,r.x+3,r.y+29,r.w-6,r.h-32,depth+1);
+      });
+    }
+    layer(current(),0,0,w,h,1);chart.innerHTML=tiles.join("");paintSelection();
+  }
+  function renderSunburst(w,h){
+    const cx=w/2,cy=h/2,rMax=Math.max(60,Math.min(w,h)/2-10),r0=rMax*.45,ring=(rMax-r0)/state.depth;
+    let svg='<svg class="dv-sun" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="当前目录的圆盘空间分布；列表提供同等导航">';
+    function point(r,a){return (cx+Math.cos(a)*r).toFixed(2)+","+(cy+Math.sin(a)*r).toFixed(2);}
+    function slices(n,a0,a1,depth){
+      const total=size(n);let a=a0;
+      visibleChildren(n).forEach(function(c){
+        const span=(a1-a0)*size(c)/total,end=a+span-0.001,inner=r0+ring*(depth-1),outer=inner+ring;
+        if(span>0.005){
+          const large=span>Math.PI?1:0;
+          const path="M"+point(outer,a)+" A"+outer+","+outer+" 0 "+large+" 1 "+point(outer,end)+" L"+point(inner,end)+" A"+inner+","+inner+" 0 "+large+" 0 "+point(inner,a)+" Z";
+          svg+='<path data-node="'+c.id+'" data-kind="'+c.kind+'" d="'+path+'" aria-label="'+esc(c.path+" "+fmt(size(c)))+'"></path>';
+          if(depth<state.depth&&c.type==="dir")slices(c,a,a+span,depth+1);
+        }a+=span;
+      });
+    }
+    slices(current(),-Math.PI/2,Math.PI*1.5,1);
+    const label=current().parent?current().name:current().name;
+    svg+='<text class="dv-sun-name" x="'+cx+'" y="'+(cy-20)+'">'+esc(label.length>12?label.slice(0,11)+"…":label)+'</text><text class="dv-sun-size" x="'+cx+'" y="'+(cy+9)+'">'+fmt(size(current()))+'</text><text class="dv-sun-hint" x="'+cx+'" y="'+(cy+32)+'">双击扇区进入</text></svg>';
+    el("chart").innerHTML=svg;paintSelection();
+  }
+  function descendants(n,out){(n.children||[]).forEach(function(c){if(c.type==="file")out.push(c);else if(c.children)descendants(c,out);});return out;}
+  function listItems(){
+    let a=state.list==="largest"?descendants(current(),[]):state.group?state.group.map(node).filter(Boolean):(current().children||[]).slice();
+    if(activePartial())a=a.filter(function(n){return size(n)>0;});
+    const q=state.filter.toLowerCase();if(q)a=a.filter(function(n){return (n.name+" "+n.path).toLowerCase().includes(q);});
+    return a.sort(function(a,b){const v=state.sort==="name"?a.name.localeCompare(b.name,"zh-CN"):size(a)-size(b);return state.ascending?v:-v;});
+  }
+  function renderList(){
+    const a=listItems(),pages=Math.max(1,Math.ceil(a.length/8));state.page=Math.min(state.page,pages-1);
+    el("list-count").textContent=a.length+" 项";
+    el("rows").innerHTML=a.slice(state.page*8,state.page*8+8).map(function(n){
+      return '<tr data-node="'+n.id+'"><td><button class="dv-namecell" data-node="'+n.id+'" aria-label="选中 '+esc(n.path)+'"><span class="dv-rowicon">'+(n.type==="dir"?"▸":n.type==="blocked"?"!":"▪")+'</span><i class="dv-swatch" data-kind="'+n.kind+'"></i><span>'+esc(n.name)+'</span></button></td><td>'+(n.type==="blocked"?"—":fmt(size(n)))+'</td><td>'+(n.type==="blocked"?"—":share(n))+'</td></tr>';
+    }).join("")||'<tr><td colspan="3"><div class="dv-empty" style="height:110px">'+(state.filter?"没有匹配的条目":"暂无条目")+'</div></td></tr>';
+    el("page").textContent=(state.page+1)+"/"+pages;el("prev-page").disabled=state.page===0;el("next-page").disabled=state.page===pages-1;
+    el("list-note").textContent=state.group?"当前仅列出聚合的小项":state.list==="largest"?"本范围内的示例文件 · 不限于本层":"双击文件夹进入";
+    el("sort-name").textContent="名称"+(state.sort==="name"?(state.ascending?" ↑":" ↓"):"");
+    el("sort-size").textContent="大小"+(state.sort==="size"?(state.ascending?" ↑":" ↓"):"");
+    paintSelection();
+  }
+  function renderDetail(){
+    const selected=node(state.selected),n=selected||current();
+    el("detail-type").textContent=selected?"已选中 · "+typeName(n):"当前目录";
+    el("detail-name").textContent=n.name;el("detail-path").textContent=n.path;
+    el("detail-numbers").innerHTML=n.type==="blocked"?'<span>大小未知 · 访问被拒绝</span>':'<span><b>'+fmt(size(n))+'</b> 逻辑大小</span><span>占当前范围 '+share(n)+'</span><span>'+count(n.count*(activePartial()&&n.bytes?size(n)/n.bytes:1))+' 个文件'+(activePartial()?"（已发现，模拟）":"")+'</span>';
+    el("enter").disabled=!selected||!["dir","group"].includes(n.type)||n.id===state.current;
+    el("enter").textContent=n.type==="group"?"展开这些条目":"进入文件夹";
+    el("locate").disabled=!selected||!n.parent;
+  }
+  function paintSelection(){
+    app.querySelectorAll("[data-node]").forEach(function(target){
+      target.classList.toggle("dv-selected",target.dataset.node===state.selected);
+      target.classList.toggle("dv-hovered",target.dataset.node===state.hover&&state.hover!==state.selected);
+      if(target.tagName==="BUTTON")target.setAttribute("aria-pressed",target.dataset.node===state.selected);
+    });
+  }
+  function status(){
+    const n=node(state.hover)||node(state.selected);
+    el("hover-status").textContent=n?n.path+" · "+(n.type==="blocked"?"无法读取":fmt(size(n))+" · "+share(n)):"悬停查看完整路径；单击后详情保持";
+  }
+  function positionTooltip(){
+    if(!lastPointer)return;const r=app.getBoundingClientRect(),tip=el("tooltip");
+    let x=lastPointer.x-r.left+16,y=lastPointer.y-r.top+18;
+    x=Math.max(10,Math.min(x,r.width-tip.offsetWidth-10));
+    if(y+tip.offsetHeight>r.height-10)y=lastPointer.y-r.top-tip.offsetHeight-12;
+    tip.style.left=x+"px";tip.style.top=Math.max(10,y)+"px";
+  }
+  function hover(n,e){
+    lastPointer={x:e.clientX,y:e.clientY};
+    if(state.hover===n.id){positionTooltip();return;}
+    clearTimeout(hoverTimer);el("tooltip").hidden=true;state.hover=n.id;paintSelection();status();
+    hoverTimer=setTimeout(function(){
+      if(state.hover!==n.id)return;
+      el("tooltip").innerHTML='<strong>'+esc(n.name)+'</strong><div class="dv-tip-path">'+esc(n.path)+'</div><div class="dv-tip-grid"><span>'+typeName(n)+'<br><b>'+(n.type==="blocked"?"未知":fmt(size(n)))+'</b></span><span>占当前范围<br><b>'+share(n)+'</b></span></div><div class="dv-tip-hint">'+(n.type==="dir"?"单击固定详情 · 双击进入文件夹":n.type==="group"?"单击查看汇总 · 双击在列表展开":"单击固定详情 · 定位到所在目录")+'</div>';
+      el("tooltip").hidden=false;positionTooltip();
+    },settings.hoverDelay);
+  }
+  app.addEventListener("pointermove",function(e){
+    const target=e.target.closest("[data-node]");if(target&&app.contains(target)&&node(target.dataset.node))hover(node(target.dataset.node),e);
+    else if(state.hover)resetHover();
+  });
+  app.addEventListener("pointerleave",resetHover);
+  app.addEventListener("focusin",function(e){const t=e.target.closest("button[data-node]");if(t){const r=t.getBoundingClientRect();hover(node(t.dataset.node),{clientX:r.left+r.width/2,clientY:r.bottom});}});
+  app.addEventListener("click",function(e){
+    const nav=e.target.closest("[data-nav]");if(nav){navigate(nav.dataset.nav);return;}
+    const target=e.target.closest("[data-node]");if(target){select(target.dataset.node);return;}
+    const action=e.target.closest("[data-action]");if(action)modalAction(action.dataset.action);
+  });
+  app.addEventListener("dblclick",function(e){const t=e.target.closest("[data-node]");if(t){e.preventDefault();openNode(t.dataset.node);}});
+  function render(){renderNav();renderList();renderChart();renderDetail();status();renderProgress();}
+  function dialogMarkup(kind){
+    if(kind==="permission")return '<span class="dv-badge">按需授权 · 原型演示</span><h2>用快速模式扫描 '+esc(root().path)+'？</h2><p>仅扫描助手请求管理员权限，读取此 NTFS 卷的文件元数据。主界面保持普通权限。</p><ul><li>只读取名称、目录关系和大小，不读取文件内容。</li><li>任务结束后助手退出，不安装常驻服务。</li><li>拒绝授权后可继续普通扫描。</li></ul><div class="dv-notice">这是交互模拟，不会弹出真实 Windows 授权窗口。真实速度需要另行测试。</div><div class="dv-dialogactions"><button class="dv-btn" data-action="close">取消</button><button class="dv-btn" data-action="start-normal">不授权，普通扫描</button><button class="dv-btn dv-primary" data-action="start-fast">模拟授权并扫描</button></div>';
+    if(kind==="issues")return '<span class="dv-badge">扫描覆盖范围</span><h2>3 个位置无法读取</h2><p>扫描已结束，但这些位置的大小未计入结果；未知大小不代表零占用。</p><ul><li>C:\\System Volume Information — 访问被拒绝</li><li>C:\\Recovery\\WindowsRE — 访问被拒绝</li><li>C:\\ProgramData\\受保护数据 — 目录已变化</li></ul><p>目录链接与跨卷挂载点不继续跟随，避免重复统计。快速模式也不保证覆盖全部受保护数据。</p><div class="dv-dialogactions"><button class="dv-btn dv-primary" data-action="close">知道了</button></div>';
+    return '<span class="dv-badge">统计口径 · 原型使用逻辑大小</span><h2>这些数字为什么不同？</h2><p><strong>逻辑大小：</strong>文件声明的长度，本图按这个值分配面积。</p><p><strong>占用空间：</strong>实际分配的磁盘空间。压缩、稀疏文件、硬链接都会影响它；按簇取整只能标为近似。</p><p><strong>磁盘已用：</strong>还包含文件系统元数据和未读取区域，不能直接当作文件扫描总量。</p><div class="dv-notice">未完成结果的占比以“本轮已发现内容”为分母；它不是磁盘扫描完成百分比。</div><div class="dv-dialogactions"><button class="dv-btn dv-primary" data-action="close">知道了</button></div>';
+  }
+  let pendingFirst=false,pendingFail=false;
+  function showDialog(kind){
+    resetHover();modalReturn=document.activeElement;el("overlay").innerHTML='<section class="dv-dialog" role="dialog" aria-modal="true" aria-label="'+(kind==="permission"?"快速扫描权限演示":kind==="issues"?"无法读取的位置":"统计口径")+'">'+dialogMarkup(kind)+'</section>';el("overlay").hidden=false;
+    el("overlay").querySelector("button").focus();
+  }
+  function closeDialog(){el("overlay").hidden=true;el("overlay").innerHTML="";if(modalReturn&&modalReturn.isConnected)modalReturn.focus();}
+  function modalAction(action){
+    if(action==="close"){closeDialog();return;}
+    if(action==="start-fast"||action==="start-normal"){closeDialog();beginScan(action==="start-fast"?"fast":"normal",pendingFirst,pendingFail);}
+  }
+  function requestScan(first,fail){
+    if(state.scan)return;pendingFirst=!!first;pendingFail=!!fail;
+    if(current().drive==="e"){beginScan("normal",first,fail);notify("E: 为 exFAT，自动使用普通目录扫描（模拟）。");}
+    else showDialog("permission");
+  }
+  function buildPartial(fraction){
+    state.partial.clear();
+    const leaves=[];function walk(n){if(n.children)n.children.forEach(walk);else if(n.type!=="blocked")leaves.push(n);}
+    walk(root());const discovered=Math.floor(leaves.length*fraction);
+    leaves.forEach(function(n,i){state.partial.set(n.id,i<discovered?n.bytes:0);});
+    function sum(n){if(n.children)state.partial.set(n.id,n.children.reduce(function(a,c){return a+sum(c);},0));return state.partial.get(n.id)||0;}
+    sum(root());
+  }
+  function beginScan(engine,first,fail){
+    clearInterval(scanTimer);resetHover();
+    if(first){state.hasComplete=false;state.current=root().id;state.selected=null;state.history=[state.current];state.historyIndex=0;state.filter="";el("filter").value="";state.page=0;state.group=null;}
+    state.source=first?"partial":"complete";state.partial.clear();state.banner="";
+    state.scan={engine:engine,started:performance.now(),fraction:0,fail:!!fail,lastPaint:0};
+    render();notify(first?"首次扫描演示：发现的条目逐步可浏览。":"更新扫描演示：可以继续浏览上次完成结果。");
+    scanTimer=setInterval(function(){
+      const s=state.scan;if(!s)return;const elapsed=performance.now()-s.started;s.fraction=Math.min(1,elapsed/10000);
+      buildPartial(Math.min(1,s.fraction/0.8));
+      if(s.fail&&s.fraction>.45){endScan("failed");return;}
+      if(s.fraction>=1){endScan("complete");return;}
+      renderProgress();
+      if(activePartial()&&elapsed-s.lastPaint>700){s.lastPaint=elapsed;render();}
+    },180);
+  }
+  function endScan(reason){
+    clearInterval(scanTimer);scanTimer=null;state.scan=null;resetHover();
+    if(reason==="complete"){state.hasComplete=true;state.source="complete";state.latest="14:33";state.banner="快照已更新。"+(current().drive==="c"?"仍有 3 个位置未读取，可查看问题详情。":"");notify("模拟扫描完成，当前浏览位置已保留。");}
+    else {state.source=state.hasComplete?"complete":"partial";state.banner=(reason==="failed"?"更新失败：扫描助手连接中断（模拟）。":"扫描已取消。")+(state.hasComplete?"已保留上次完成结果。":"仅保留已发现的局部结果。");notify(reason==="failed"?"可以重新扫描；旧快照没有被失败的结果覆盖。":"取消成功，当前数据来源已标明。");}
+    render();
+  }
+  function renderProgress(){
+    const s=state.scan;el("progress").hidden=!s;if(!s)return;
+    const f=s.fraction,stage=f<.65?0:f<.85?1:2;
+    el("phase").textContent=(s.engine==="fast"?["读取文件记录","汇总文件大小","构建目录视图"]:["枚举目录","汇总已发现大小","构建目录视图"])[stage]+" · "+root().path;
+    el("engine").textContent=s.engine==="fast"?"NTFS 快速模式（模拟）":"普通扫描（模拟）";
+    el("progress-stats").textContent="已发现 "+count(root().count*Math.min(1,f/.8))+" 个文件 · 阶段 "+(stage+1)+"/3";
+    el("progress-time").textContent=((performance.now()-s.started)/1000).toFixed(1)+" s · 演示";
+    el("progress-path").textContent=stage===0?(s.engine==="fast"?"正在读取索引记录，尚无可靠剩余时间":"当前目录："+root().path+"…"):"正在整理已发现条目";
+    el("track").classList.toggle("dv-unknown",stage===0);
+    el("track").firstElementChild.style.width=stage===1?((f-.65)/.2*100)+"%":stage===2?((f-.85)/.15*100)+"%":"22%";
+    el("scan-view").hidden=!state.hasComplete;el("scan-view").textContent=activePartial()?"查看上次完成结果":"查看本轮已发现";
+  }
+  function changeDrive(d){
+    if(state.scan)endScan("cancelled");
+    state.current=drives[d].id;state.hasComplete=true;state.source="complete";state.partial.clear();state.banner="";state.latest="14:32";state.selected=null;state.history=[state.current];state.historyIndex=0;state.filter="";state.page=0;state.group=null;el("filter").value="";
+    render();save();
+  }
+  el("back").onclick=function(){historyStep(-1);};el("forward").onclick=function(){historyStep(1);};el("up").onclick=up;
+  el("edit-address").onclick=editAddress;
+  el("address-input").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();submitAddress();}if(e.key==="Escape"){endAddress();el("patherror").hidden=true;}});
+  el("drive").onchange=function(e){changeDrive(e.target.value);};
+  el("rescan").onclick=function(){requestScan(false,false);};
+  el("issues").onclick=function(){showDialog("issues");};el("accounting").onclick=function(){showDialog("accounting");};
+  el("cancel").onclick=function(){endScan("cancelled");};
+  el("scan-view").onclick=function(){state.source=activePartial()?"complete":"partial";resetHover();render();};
+  el("treemap").onclick=function(){state.mode="treemap";resetHover();render();save();};
+  el("sunburst").onclick=function(){state.mode="sunburst";resetHover();render();save();};
+  el("depth").onchange=function(e){state.depth=Number(e.target.value);resetHover();renderChart();save();};
+  el("current-list").onclick=function(){state.list="current";state.group=null;state.page=0;render();save();};
+  el("largest-list").onclick=function(){state.list="largest";state.group=null;state.page=0;render();save();};
+  el("filter").oninput=function(e){state.filter=e.target.value;state.page=0;renderList();};
+  el("clear-filter").onclick=function(){state.filter="";state.group=null;el("filter").value="";state.page=0;renderList();};
+  function sortBy(key){state.ascending=state.sort===key?!state.ascending:key==="name";state.sort=key;state.page=0;renderList();}
+  el("sort-name").onclick=function(){sortBy("name");};el("sort-size").onclick=function(){sortBy("size");};
+  el("prev-page").onclick=function(){state.page=Math.max(0,state.page-1);renderList();};
+  el("next-page").onclick=function(){state.page++;renderList();};
+  el("enter").onclick=function(){if(state.selected)openNode(state.selected);};
+  el("locate").onclick=function(){const n=node(state.selected);if(n&&n.parent){navigate(n.parent.id);select(n.id);state.mobile="chart";render();notify("已定位 "+n.path);}};
+  el("show-chart").onclick=function(){state.mobile="chart";render();};
+  el("show-list").onclick=function(){state.mobile="list";render();};
+  el("theme").onclick=function(){const dark=state.theme==="dark"||(state.theme==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);state.theme=dark?"light":"dark";render();save();};
+  el("demo-first").onclick=function(){requestScan(true,false);};
+  el("demo-normal").onclick=function(){beginScan("normal",false,false);};
+  el("demo-error").onclick=function(){beginScan("fast",false,true);};
+  el("demo-reset").onclick=function(){clearInterval(scanTimer);scanTimer=null;state.scan=null;closeDialog();changeDrive("c");state.mode="treemap";state.depth=1;state.list="current";state.mobile="chart";el("patherror").hidden=true;notify("已回到合成的示例结果。");render();};
+  app.addEventListener("keydown",function(e){
+    if(!el("overlay").hidden){
+      if(e.key==="Escape"){e.preventDefault();closeDialog();}
+      if(e.key==="Tab"){const buttons=Array.from(el("overlay").querySelectorAll("button"));const first=buttons[0],last=buttons[buttons.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}
+      return;
+    }
+    const input=/INPUT|TEXTAREA|SELECT/.test(e.target.tagName);
+    if(e.ctrlKey&&e.key.toLowerCase()==="l"){e.preventDefault();editAddress();return;}
+    if(input)return;
+    if(e.altKey&&e.key==="ArrowLeft"){e.preventDefault();historyStep(-1);}
+    else if(e.altKey&&e.key==="ArrowRight"){e.preventDefault();historyStep(1);}
+    else if(e.key==="Backspace"||(e.altKey&&e.key==="ArrowUp")){e.preventDefault();up();}
+    else if(e.key==="Escape"){resetHover();}
+    else if(e.key==="Enter"){const t=e.target.closest("[data-node]");if(t){e.preventDefault();openNode(t.dataset.node);}}
+  });
+  let dragging=false;
+  el("divider").addEventListener("pointerdown",function(e){dragging=true;e.currentTarget.setPointerCapture(e.pointerId);resetHover();});
+  el("divider").addEventListener("pointermove",function(e){if(!dragging)return;const r=el("main").getBoundingClientRect(),ratio=Math.max(.38,Math.min(.69,(e.clientX-r.left)/r.width));el("main").style.gridTemplateColumns="minmax(0,"+ratio+"fr) 7px minmax(260px,"+(1-ratio)+"fr)";});
+  el("divider").addEventListener("pointerup",function(){dragging=false;});
+  el("divider").addEventListener("lostpointercapture",function(){dragging=false;});
+  let lastWidth=0;
+  new ResizeObserver(function(entries){const w=entries[0].contentRect.width;if(Math.abs(w-lastWidth)>1){lastWidth=w;renderChart();}}).observe(el("chart"));
+  render();
+  if(globalThis.Tweak){const tweak=new Tweak({container:app,onChange:render});tweak.addSelect(settings,"density",{label:"列表密度",options:["标准","紧凑"]});tweak.addSlider(settings,"hoverDelay",{label:"悬停提示延迟",min:100,max:600,step:50,unit:"ms"});}
+})();
+</script>
+</main></body></html>

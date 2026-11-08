@@ -2,12 +2,13 @@
 """Package this plugin as dist/<id>-<version>.wsplugin.
 
 Usage:
-  python tools/package.py              # package the committed files + the built exe
+  python tools/package.py              # package tracked files + required sources + built exe
   python tools/package.py --tag v1.2.3 # also require the tag to match plugin.json
 
 What goes in: every file tracked by git (``git ls-files``), except paths that
-start with a dot (.github, .gitignore, ...), plus ``runtime.program`` from
-plugin.json (the built exe, which is not committed). The zip is deterministic
+start with a dot (.github, .gitignore, ...), plus the explicit required source
+and license list and ``runtime.program`` from plugin.json. Required files are
+included even before they are added to git. The zip is deterministic
 (sorted names, fixed timestamps, stored, not compressed), so the same inputs
 always give the same sha256. plugin.json sits at the archive root, which is
 what WinShun's "install from archive" expects.
@@ -33,6 +34,12 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 MAX_BYTES = 256 << 20  # WinShun's archive limit (src/plugin/Install.h)
+REQUIRED_FILES = {
+    "mft_scan.h", "scan_helper.h", "diskview.rc", "app.ico",
+    "vendor/winshun/Ntfs.h", "vendor/winshun/Ntfs.cpp",
+    "vendor/winshun/LICENSE", "vendor/winshun/README.md",
+    "design/implementation-status.md",
+}
 
 
 def fail(msg: str) -> int:
@@ -73,12 +80,12 @@ def main() -> int:
     if not (ROOT / program).is_file():
         return fail(f"{program} not found; build first (cmake -B build && cmake --build build)")
 
-    files = sorted(set(tracked_files()) | {program})
+    files = sorted(set(tracked_files()) | REQUIRED_FILES | {program})
     if "plugin.json" not in files:
         return fail("plugin.json is not committed")
     missing = [f for f in files if not (ROOT / f).is_file()]
     if missing:
-        return fail(f"tracked but missing on disk: {missing}")
+        return fail(f"required package files missing on disk: {missing}")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

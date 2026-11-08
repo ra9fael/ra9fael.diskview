@@ -15,7 +15,7 @@
 //     per link);
 //   * cancellation through an atomic checked between entries, plus the
 //     progress callback's return value;
-//   * top 64 largest files with their full paths, for the side panel.
+//   * top 1000 largest files with their full paths, for the side panel.
 
 #ifndef DISKVIEW_SCAN_H
 #define DISKVIEW_SCAN_H
@@ -88,9 +88,12 @@ struct ScanResult {
     std::uint32_t skippedDirs = 0;
     std::uint32_t skippedLinks = 0;
     std::vector<SkippedDir> skippedList; // the first 32, then only counted
-    std::vector<LargeFile> largest;      // the top 64, largest first
+    std::vector<LargeFile> largest;      // the top 1000, largest first
     std::uint64_t elapsedMs = 0;
     bool cancelled = false;
+    bool fast = false;
+    std::uint32_t unknownSizes = 0, orphanRecords = 0;
+    std::wstring fallbackReason;
     std::string error; // fatal (root unreadable, path empty); UTF-8
 };
 
@@ -99,16 +102,22 @@ struct ScanProgress {
     std::uint64_t dirs = 0;
     std::uint64_t bytes = 0;
     std::wstring current; // the directory being read now
+    bool fast = false;
+    std::uint64_t recordsDone = 0, recordsTotal = 0;
+    std::wstring fallbackReason;
 };
 
 // Return false to cancel.
 using ProgressFn = std::function<bool(const ScanProgress&)>;
+using SnapshotFn = std::function<void(std::shared_ptr<ScanResult>)>;
 
 // Trims quotes and spaces, maps a bare drive letter to its root, strips the
 // trailing backslash (except on roots), and returns the display form while
 // writing the \\?\-prefixed form for the file system calls. Empty on failure.
 inline std::wstring normalizePath(std::wstring path, std::wstring* prefixed)
 {
+    if (prefixed)
+        prefixed->clear();
     // trim spaces and quotes
     const auto isPad = [](wchar_t c) { return c == L' ' || c == L'"' || c == L'\t'; };
     const auto trim = [&isPad](std::wstring& p) {
@@ -120,18 +129,33 @@ inline std::wstring normalizePath(std::wstring path, std::wstring* prefixed)
     trim(path);
     if (path.empty())
         return {};
+    std::replace(path.begin(), path.end(), L'/', L'\\');
+    if (path.rfind(L"\\\\?\\UNC\\", 0) == 0)
+        path = L"\\\\" + path.substr(8);
+    else if (path.rfind(L"\\\\?\\", 0) == 0)
+        path.erase(0, 4);
     // A drive letter on its own means the drive root.
     if (path.size() == 2 && path[1] == L':')
         path += L'\\';
     // Strip trailing backslashes, but keep the root's own ("C:\" or "\\").
-    const bool isDriveRoot = path.size() == 3 && path[1] == L':' && path[2] == L'\\';
-    if (!isDriveRoot && path != L"\\")
-        while (path.size() > 1 && path.back() == L'\\')
-            path.pop_back();
+    while (path.size() > 1 && path.back() == L'\\'
+           && !(path.size() == 3 && path[1] == L':'))
+        path.pop_back();
     // Removing the separator can expose padding again ("D:\dir \ " -> "D:\dir").
     trim(path);
     if (path.empty())
         return {};
+    // Resolve relative paths and dot segments before adding the extended
+    // prefix: Windows does not normalize them once that prefix is present.
+    const DWORD needed = ::GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+    if (!needed)
+        return {};
+    std::wstring absolute(needed, L'\0');
+    const DWORD written = ::GetFullPathNameW(path.c_str(), needed, absolute.data(), nullptr);
+    if (!written || written >= needed)
+        return {};
+    absolute.resize(written);
+    path = std::move(absolute);
     if (prefixed) {
         if (path.rfind(L"\\\\?\\", 0) == 0)
             *prefixed = path;
@@ -155,11 +179,22 @@ struct Ctx {
     std::priority_queue<LargeFile, std::vector<LargeFile>, std::greater<>> top;
     std::uint64_t clusterBytes = 4096;
     std::uint64_t bytes = 0;
+    ScanResult* result = nullptr;
+    const SnapshotFn* snapshot = nullptr;
+    std::uint64_t nextSnapshot = 0;
 };
 
 constexpr std::size_t kMaxSkippedList = 32;
-constexpr std::size_t kMaxLargest = 64;
+constexpr std::size_t kMaxLargest = 1000;
 constexpr int kMaxDepth = 96;
+
+struct FindHandle {
+    HANDLE value;
+    explicit FindHandle(HANDLE handle) : value(handle) {}
+    ~FindHandle() { ::FindClose(value); }
+    FindHandle(const FindHandle&) = delete;
+    FindHandle& operator=(const FindHandle&) = delete;
+};
 
 inline void recordSkipped(Ctx& ctx, const std::wstring& path, DWORD error)
 {
@@ -185,10 +220,6 @@ inline void considerLarge(Ctx& ctx, std::uint64_t logical, const std::wstring& d
 
 inline bool report(Ctx& ctx, const std::wstring& displayDir)
 {
-    ctx.pg.current = displayDir;
-    ctx.pg.files = ctx.files;
-    ctx.pg.dirs = ctx.dirs;
-    ctx.pg.bytes = ctx.bytes;
     if (*ctx.cancel)
         return false;
     if (!*ctx.progress)
@@ -197,6 +228,31 @@ inline bool report(Ctx& ctx, const std::wstring& displayDir)
     if (now - ctx.lastPostMs < 100)
         return true;
     ctx.lastPostMs = now;
+    ctx.pg.current = displayDir;
+    ctx.pg.files = ctx.files;
+    ctx.pg.dirs = ctx.dirs;
+    ctx.pg.bytes = ctx.bytes;
+    if (ctx.snapshot && *ctx.snapshot && now >= ctx.nextSnapshot) {
+        auto copy = std::make_shared<ScanResult>(*ctx.result);
+        const auto sum = [&](const auto& self, Node& n) -> void {
+            if (!n.dir) return;
+            n.logical=0; n.allocApprox=0; n.files=0; n.dirs=0;
+            for (auto& c:n.children) {
+                self(self,c); n.logical+=c.logical; n.allocApprox+=c.allocApprox;
+                n.files+=c.dir?c.files:1; n.dirs+=c.dir?c.dirs+1:0;
+            }
+            std::sort(n.children.begin(),n.children.end(),[](const Node& a,const Node& b){return a.logical>b.logical;});
+        };
+        sum(sum,copy->root); copy->files=ctx.files;copy->dirs=ctx.dirs;
+        copy->skippedDirs=ctx.skippedDirs;copy->skippedList=ctx.skippedList;
+        auto ranking=ctx.top;
+        while(!ranking.empty()){copy->largest.push_back(ranking.top());ranking.pop();}
+        std::sort(copy->largest.begin(),copy->largest.end(),std::greater<>());
+        (*ctx.snapshot)(std::move(copy));
+        // Full immutable snapshots are adaptive: keep their cost below ~10% of scan time.
+        const auto spent=::GetTickCount64()-now;
+        ctx.nextSnapshot=::GetTickCount64()+std::max<std::uint64_t>(1000,spent*10);
+    }
     return (*ctx.progress)(ctx.pg);
 }
 
@@ -217,7 +273,7 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
         return true;
     }
     WIN32_FIND_DATAW fd {};
-    HANDLE h = ::FindFirstFileExW((prefixedDir + L"\\*").c_str(), FindExInfoBasic, &fd,
+    HANDLE h = ::FindFirstFileExW(childPath(prefixedDir, L"*").c_str(), FindExInfoBasic, &fd,
                                   FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
     if (h == INVALID_HANDLE_VALUE) {
         const DWORD e = ::GetLastError();
@@ -231,6 +287,7 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
         recordSkipped(ctx, displayDir, e);
         return true;
     }
+    const FindHandle ownedHandle(h);
     std::uint64_t selfLogical = 0, selfAlloc = 0;
     std::uint32_t selfFiles = 0, selfDirs = 0;
     bool ok = true;
@@ -250,6 +307,8 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
                 // A junction or a directory symlink: shown as an entry of zero
                 // size, never followed (no loops, no double-counting).
                 ++ctx.skippedLinks;
+                ++ctx.dirs;
+                ++selfDirs;
                 Node link;
                 link.name = n;
                 link.dir = true;
@@ -257,18 +316,17 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
                 node.children.push_back(std::move(link));
             } else if (isDir) {
                 ++ctx.dirs;
-                Node d;
+                node.children.emplace_back();
+                Node& d = node.children.back();
                 d.name = n;
                 d.dir = true;
-                if (!walkDir(prefixedDir + L"\\" + n, displayDir + L"\\" + n, d, depth + 1, ctx, out)) {
-                    ok = false;
-                    break;
-                }
+                const bool childDone = walkDir(childPath(prefixedDir, n), childPath(displayDir, n), d, depth + 1, ctx, out);
                 selfLogical += d.logical;
                 selfAlloc += d.allocApprox;
                 selfFiles += d.files;
                 selfDirs += d.dirs + 1;
-                node.children.push_back(std::move(d));
+                node.skippedChildren += d.skippedChildren;
+                if (!childDone) { ok=false; break; }
             } else {
                 ++ctx.files;
                 ctx.bytes += logical;
@@ -286,7 +344,7 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
         }
         if (!::FindNextFileW(h, &fd)) {
             const DWORD e = ::GetLastError();
-            if (e != ERROR_NO_MORE_FILES && e != ERROR_ACCESS_DENIED) {
+            if (e != ERROR_NO_MORE_FILES) {
                 // The listing broke mid-directory: record it, keep what we have.
                 node.skippedChildren += 1;
                 recordSkipped(ctx, displayDir, e);
@@ -294,8 +352,6 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
             break;
         }
     }
-    ::FindClose(h);
-
     node.logical += selfLogical;
     node.allocApprox += selfAlloc;
     node.files += selfFiles;
@@ -307,13 +363,14 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
 
 } // namespace detail
 
-// Scans `path`. Never throws; on a fatal problem sets result->error and leaves
+// Scans `path`. On a filesystem failure sets result->error and leaves
 // the tree partial. Cancellation is checked between entries and inside the
 // progress callback; a cancelled scan sets result->cancelled and keeps what it
-// gathered, which the caller should discard (a partial tree would misreport).
+// gathered. Callers must label this as incomplete when displaying it.
 inline void scanPath(const std::wstring& path, const ProgressFn& progress,
-                     const std::atomic<bool>& cancel, ScanResult* result)
+                     const std::atomic<bool>& cancel, ScanResult* result, const SnapshotFn& snapshot = {})
 {
+    *result = ScanResult {};
     std::wstring prefixed;
     const std::wstring display = normalizePath(path, &prefixed);
     if (display.empty()) {
@@ -351,6 +408,7 @@ inline void scanPath(const std::wstring& path, const ProgressFn& progress,
     ctx.cancel = &cancel;
     ctx.progress = &progress;
     ctx.clusterBytes = result->clusterBytes;
+    ctx.result=result;ctx.snapshot=&snapshot;ctx.nextSnapshot=::GetTickCount64()+1000;
     result->root.skippedChildren = 0;
     const bool done = detail::walkDir(prefixed, display, result->root, 0, ctx, result);
     (void)done; // a cancelled walk keeps partial data but sets result->cancelled

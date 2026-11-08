@@ -3,7 +3,7 @@
 // The SDK owns stdio and the JSON-RPC framing. This file only answers the
 // `disk` query with entry rows and opens the viewer window on the "open"
 // action. Queries never scan: the scan runs inside the window, started by the
-// user, and touches nothing outside it (no deletes, no launches, no clipboard).
+// user. A short-lived elevated helper may read NTFS metadata for whole drives.
 //
 // Code and comments are English; the user-visible strings are localized with
 // the host's locale (Chinese by default, English when locale starts with "en").
@@ -30,7 +30,7 @@ bool defaultSunburst(const winshun::Json& s)
 }
 
 // The empty query gets one row per fixed drive (volume-level usage, not a
-// scan), largest used first, then a row that opens the window with the last
+// scan), in drive-letter order, then a row that opens the window with the last
 // scanned path and a usage hint.
 winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
 {
@@ -81,8 +81,8 @@ winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
         .withAutocomplete(usage)
         .withPreview(usage + "\n\n"
                      + tr(zh, "方块图（递归矩形）与圆盘（递归放射）共用同一份扫描数据，"
-                              "点击进入文件夹，Backspace 返回上级。",
-                              "The treemap and the sunburst share one scan; click to enter a folder, "
+                              "单击选中、双击进入文件夹；顶部面包屑和 Backspace 返回上级。",
+                              "The treemap and the sunburst share one scan; click to select, double-click to enter; "
                               "Backspace goes up."));
     items.push_back(std::move(help));
     return items;
@@ -144,7 +144,7 @@ struct DiskView : winshun::Plugin {
         if (a.action != "open" && a.action != "default")
             return {winshun::effect::keep()};
         const winshun::Json data = a.item["data"];
-        const std::string path = data["path"].isString() && !data["path"].toString().empty()
+        const std::string path = data["path"].isString()
                                      ? data["path"].toString()
                                      : winshun::trim(a.text);
         const bool zh = chinese();
@@ -167,7 +167,7 @@ struct DiskView : winshun::Plugin {
                     winshun::effect::hide()};
         }
         winshun::debug("ra9fael.diskview: viewer window opened");
-        return {winshun::effect::notify(tr(zh, "磁盘透视已打开（Esc 关闭）", "Disk view opened (Esc closes)")),
+        return {winshun::effect::notify(tr(zh, "磁盘透视已打开", "Disk view opened")),
                 winshun::effect::hide()};
     }
 
@@ -196,7 +196,33 @@ struct DiskView : winshun::Plugin {
 
 } // namespace
 
-int main()
+int main(int argc,char** argv)
 {
+    if(argc>1 && std::string(argv[1])=="--view") {
+        diskview::ViewerSpec spec;
+        spec.theme="light";
+        int count=0;
+        auto args=::CommandLineToArgvW(::GetCommandLineW(),&count);
+        if(!args)return 2;
+        if(count>2)spec.initialPath=args[2];
+        ::LocalFree(args);
+        std::string error;
+        if(!diskview::openViewerWindow(spec,error)) {
+            winshun::debug(error);
+            diskview::closeViewerAndWait(1500);
+            return 1;
+        }
+        auto& viewer=diskview::detail::state();
+        std::unique_lock<std::mutex> lock(viewer.m);
+        viewer.cv.wait(lock,[&]{return !viewer.running;});
+        lock.unlock();
+        if(viewer.worker.joinable())viewer.worker.join();
+        return 0;
+    }
+    if(argc>1 && std::string(argv[1])=="--scan-helper") {
+        if(argc!=5)return 2;
+        try {return diskview::helper::run(diskview::normalizePath(winshun::wide(argv[2]),nullptr),winshun::wide(argv[3]),static_cast<DWORD>(std::stoul(argv[4])));}
+        catch(...){return 2;}
+    }
     return DiskView().serve();
 }

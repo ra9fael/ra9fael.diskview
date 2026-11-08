@@ -43,11 +43,12 @@ function Save-Bmp([System.Drawing.Bitmap]$bmp, [string]$path) {
     $bmp.Dispose()
 }
 
-# 1) PrintWindow
+# 1) PrintWindow (flag 2: PW_RENDERFULLCONTENT, the DWM-composited surface —
+#    flag 0 relies on the window answering WM_PRINTCLIENT)
 $bmp1 = New-Object System.Drawing.Bitmap($w, $h)
 $g1 = [System.Drawing.Graphics]::FromImage($bmp1)
 $hdc1 = $g1.GetHdc()
-$ok = [WCap]::PrintWindow($target, $hdc1, 0)
+$ok = [WCap]::PrintWindow($target, $hdc1, 2)
 $g1.ReleaseHdc($hdc1)
 $g1.Dispose()
 Save-Bmp $bmp1 ($Out -replace '\.png$', "-printwindow.png")
