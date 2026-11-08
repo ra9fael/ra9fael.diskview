@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LingCore/WinShun-plugins/main/schema/plugin.schema.json",
+  "manifest": 1,
+  "id": "ra9fael.diskview",
+  "name": {"zh": "磁盘透视", "en": "Disk View"},
+  "version": "0.1.0",
+  "description": "磁盘占用可视化：扫描任意文件夹后，以递归矩形图（默认）或递归放射圆盘查看空间都花在哪里；悬停看明细，点击下钻。查询不扫描，扫描只发生在窗口里由你触发。",
+  "author": "ra9fael",
+  "license": "MIT",
+  "permissions": ["ui", "files:read"],
+  "runtime": {
+    "mode": "resident",
+    "program": "diskview.exe",
+    "sandbox": "normal",
+    "start": "lazy",
+    "timeoutMs": 1500,
+    "memoryMB": 1024,
+    "idleExitSec": 0,
+    "encoding": "utf-8"
+  },
+  "settings": [
+    {
+      "key": "defaultView",
+      "type": "choice",
+      "title": {"zh": "默认视图", "en": "Default view"},
+      "hint": {"zh": "打开窗口时先用哪种画法；窗口里随时可切", "en": "Which layout to open with; switchable in the window"},
+      "default": "treemap",
+      "options": ["treemap", "sunburst"]
+    }
+  ],
+  "commands": [
+    {
+      "id": "disk",
+      "keyword": "disk",
+      "title": {"zh": "磁盘占用分析", "en": "Disk space analyzer"},
+      "hint": {"zh": "Enter 打开磁盘透视窗口 · 可带路径，如 disk D:\\工作",
+               "en": "Enter opens the window · optional path, e.g. disk D:\\work"},
+      "actions": [
+        {"id": "open", "title": {"zh": "打开磁盘透视窗口", "en": "Open disk view"}, "key": "Enter"}
+      ]
+    }
+  ]
+}
