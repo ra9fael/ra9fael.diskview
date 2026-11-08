@@ -103,10 +103,20 @@ normalization.
 - Scanning reads metadata only: sizes, timestamps, tree structure. File
   contents are never read and never uploaded — the plugin has no networking
   code at all.
-- **Data location**: window preferences (last scanned path, view choice) are
-  stored as `diskview.json` (a few dozen bytes) in the data directory Win顺
-  assigns to each plugin. Nothing else is written; the registry is untouched.
+- **Data location**: the last scanned path is stored as `diskview.json` (a few
+  dozen bytes) in the data directory Win顺 assigns to each plugin. Nothing else
+  is written; the registry is untouched.
 - Uninstalling removes that data directory along with the plugin's other data.
+
+## Appearance
+
+The window paints itself with the host's own colours (`appearance.nativeLook`:
+background, text, accent, the accent-filled button and the text on it), so it
+looks like the same interface as Win顺; when the host switches theme or
+interface style, an open window follows. A host too old to send a look gets
+the plugin's built-in light and dark palettes. The startup view is the
+`defaultView` setting (`treemap` or `sunburst`); switch it in the window any
+time with Ctrl+V.
 
 ## Failure and edge handling
 

@@ -25,7 +25,9 @@ single source of truth; release tags are `v<version>`.
   accounting (up to 32 paths listed), reparse points counted but never
   followed, `\\?\` long-path and UNC support, logical vs cluster-rounded
   sizes.
-- Window preferences (last path, view choice) persisted as `diskview.json`
-  in the plugin data directory.
-- Dark and light themes taken from the host at window-open time; per-monitor
-  V2 DPI awareness.
+- The window paints itself with the host's own colours (`appearance.nativeLook`),
+  falling back to built-in light and dark palettes; it follows a theme or style
+  change while it is open.
+- The `defaultView` setting decides the startup view; the saved config keeps
+  only the last scanned path (`diskview.json` in the plugin data directory).
+- Per-monitor V2 DPI awareness.
