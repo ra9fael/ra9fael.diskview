@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <memory>
@@ -41,17 +42,22 @@ struct ViewerSpec {
     std::string theme = "dark";   // light | dark, from the host at open time
     std::string dataDir;          // WS_DATA_DIR (UTF-8); diskview.json lives here
     bool defaultSunburst = false; // the defaultView setting
+    winshun::Json appearance;      // the host's look (nativeLook and the rest)
 };
 
 bool openViewerWindow(const ViewerSpec& spec, std::string& error);
 bool viewerVisible();
 void closeViewerAndWait(unsigned timeoutMs);
+// The host's look changed while the window is open: it takes the new
+// colours. False when no window is open.
+bool updateViewerAppearance(const winshun::Json& appearance);
 
 // ---- persisted configuration (WS_DATA_DIR/diskview.json) --------------------------
 
+// Only the last scanned path is kept. Which view the window opens with is the
+// `defaultView` setting, not something a file may decide.
 struct ViewConfig {
     std::wstring lastPath;
-    bool sunburst = false;
     bool hasFile = false; // a config file existed at all
 };
 
@@ -76,8 +82,7 @@ inline ViewConfig loadViewConfig(const std::string& dataDir)
     if (j && j->isObject()) {
         if ((*j)["path"].isString())
             c.lastPath = winshun::wide((*j)["path"].toString());
-        c.sunburst = (*j)["sunburst"].toBool();
-        c.hasFile = true;
+        c.hasFile = true; // a file from before still carries "sunburst"; it is ignored
     }
     return c;
 }
@@ -89,7 +94,6 @@ inline void saveViewConfig(const std::string& dataDir, const ViewConfig& c)
         return;
     const winshun::Json j(winshun::Json::Object {
         {"path", winshun::utf8(c.lastPath)},
-        {"sunburst", c.sunburst},
     });
     std::ofstream f(path.c_str(), std::ios::binary | std::ios::trunc);
     if (f)
@@ -102,22 +106,135 @@ namespace detail {
 
 constexpr UINT WM_APP_PROGRESS = WM_APP + 1;
 constexpr UINT WM_APP_DONE = WM_APP + 2;
+constexpr UINT WM_APP_APPEARANCE = WM_APP + 3;
 
 struct Palette {
     COLORREF bg, panel, panelText, text, muted, accent, danger, border, hoverLine, progress;
+    COLORREF accentFill; // the fill of a chosen button
+    COLORREF accentText; // the text on that fill
+    COLORREF hover;      // a hovered row or button
+    COLORREF input;      // the path box's fill
     bool dark = true;
 };
 
+inline COLORREF lighten(COLORREF c, int amount)
+{
+    const auto up = [amount](int v) { return std::min(255, std::max(0, v + amount)); };
+    return RGB(static_cast<BYTE>(up(GetRValue(c))), static_cast<BYTE>(up(GetGValue(c))),
+               static_cast<BYTE>(up(GetBValue(c))));
+}
+
+inline COLORREF tileText(COLORREF bg)
+{
+    const double lum = 0.299 * GetRValue(bg) + 0.587 * GetGValue(bg) + 0.114 * GetBValue(bg);
+    return lum > 140 ? RGB(24, 26, 30) : RGB(240, 242, 245);
+}
+
 inline Palette darkPalette()
 {
-    return {RGB(24, 26, 30), RGB(31, 34, 39), RGB(232, 234, 237), RGB(232, 234, 237), RGB(120, 128, 136),
-            RGB(88, 166, 255), RGB(240, 128, 128), RGB(52, 57, 64), RGB(88, 166, 255), RGB(88, 166, 255), true};
+    const COLORREF accent = RGB(88, 166, 255);
+    const COLORREF panel = RGB(31, 34, 39);
+    return {RGB(24, 26, 30), panel, RGB(232, 234, 237), RGB(232, 234, 237), RGB(120, 128, 136),
+            accent, RGB(240, 128, 128), RGB(52, 57, 64), accent, accent,
+            accent, tileText(accent), lighten(panel, 14), RGB(20, 22, 26), true};
 }
 
 inline Palette lightPalette()
 {
-    return {RGB(246, 247, 249), RGB(255, 255, 255), RGB(24, 26, 30), RGB(24, 26, 30), RGB(110, 118, 126),
-            RGB(9, 105, 218), RGB(180, 40, 40), RGB(210, 214, 219), RGB(9, 105, 218), RGB(9, 105, 218), false};
+    const COLORREF accent = RGB(9, 105, 218);
+    const COLORREF panel = RGB(255, 255, 255);
+    return {RGB(246, 247, 249), panel, RGB(24, 26, 30), RGB(24, 26, 30), RGB(110, 118, 126),
+            accent, RGB(180, 40, 40), RGB(210, 214, 219), accent, accent,
+            accent, tileText(accent), lighten(panel, -10), RGB(255, 255, 255), false};
+}
+
+// ---- the host's look (appearance()["nativeLook"]) --------------------------------------
+
+// "#AARRGGBB" or "#RRGGBB" as 0xAARRGGBB; 0 when it is not a colour. The host
+// writes the alpha first (docs/plugins.md, 外观).
+inline std::uint32_t argbOf(const std::string& name)
+{
+    if ((name.size() != 7 && name.size() != 9) || name[0] != '#')
+        return 0;
+    std::uint32_t value = 0;
+    for (std::size_t i = 1; i < name.size(); ++i) {
+        const char c = name[i];
+        const int digit = c >= '0' && c <= '9' ? c - '0'
+                         : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                         : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                               : -1;
+        if (digit < 0)
+            return 0;
+        value = value << 4 | static_cast<std::uint32_t>(digit);
+    }
+    return name.size() == 7 ? 0xFF000000u | value : value;
+}
+
+// The host's colour over an opaque one. With the transparency effect on some
+// of its colours are half transparent; a window paints on an opaque base, so
+// they are laid over it here (docs/plugins.md, 外观).
+inline COLORREF over(COLORREF base, std::uint32_t argb)
+{
+    const int a = static_cast<int>((argb >> 24) & 0xFF);
+    const int r = static_cast<int>((argb >> 16) & 0xFF);
+    const int g = static_cast<int>((argb >> 8) & 0xFF);
+    const int b = static_cast<int>(argb & 0xFF);
+    if (a == 255)
+        return RGB(static_cast<BYTE>(r), static_cast<BYTE>(g), static_cast<BYTE>(b));
+    const auto mix = [a](int c, int under) { return (c * a + under * (255 - a) + 127) / 255; };
+    return RGB(static_cast<BYTE>(mix(r, GetRValue(base))), static_cast<BYTE>(mix(g, GetGValue(base))),
+               static_cast<BYTE>(mix(b, GetBValue(base))));
+}
+
+// The window's palette from the host's look: the colours of Win顺's own
+// interface style, so the window looks like Win顺 (docs/plugins.md, 外观).
+// A colour the host did not send keeps the built-in one; a host too old to
+// send a look at all keeps the whole built-in palette.
+inline Palette hostPalette(const winshun::Json& appearance, const Palette& fallback)
+{
+    const winshun::Json& native = appearance["nativeLook"];
+    if (!native.isObject())
+        return fallback;
+    if (native["dark"].isBool() && native["dark"].toBool() != fallback.dark)
+        return fallback; // written for the other theme, a moment before it changes
+
+    Palette p = fallback;
+    const COLORREF base = fallback.dark ? RGB(0, 0, 0) : RGB(255, 255, 255);
+    std::uint32_t argb = argbOf(native["background"].toString());
+    const COLORREF bg = argb ? over(base, argb) : fallback.bg;
+    p.bg = bg;
+    argb = argbOf(native["layer"].toString());
+    if (!argb)
+        argb = argbOf(native["page"].toString());
+    p.panel = argb ? over(bg, argb) : fallback.panel;
+    argb = argbOf(native["text"].toString());
+    p.text = argb ? over(bg, argb) : fallback.text;
+    p.panelText = p.text;
+    argb = argbOf(native["subtext"].toString());
+    if (!argb)
+        argb = argbOf(native["faint"].toString());
+    p.muted = argb ? over(bg, argb) : fallback.muted;
+    argb = argbOf(native["accent"].toString());
+    p.accent = argb ? over(bg, argb) : fallback.accent;
+    argb = argbOf(native["accentFill"].toString());
+    p.accentFill = argb ? over(bg, argb) : fallback.accentFill;
+    argb = argbOf(native["accentText"].toString());
+    p.accentText = argb ? over(p.accentFill, argb) : fallback.accentText;
+    argb = argbOf(native["danger"].toString());
+    p.danger = argb ? over(bg, argb) : fallback.danger;
+    argb = argbOf(native["divider"].toString());
+    if (!argb)
+        argb = argbOf(native["controlBorder"].toString());
+    p.border = argb ? over(bg, argb) : fallback.border;
+    argb = argbOf(native["hover"].toString());
+    p.hover = argb ? over(p.panel, argb) : fallback.hover;
+    argb = argbOf(native["control"].toString());
+    if (!argb)
+        argb = argbOf(native["inputFocused"].toString());
+    p.input = argb ? over(bg, argb) : fallback.input;
+    p.hoverLine = p.accent;
+    p.progress = p.accent;
+    return p;
 }
 
 inline COLORREF hsl(int hue, int sat, int light)
@@ -131,13 +248,6 @@ inline COLORREF hsl(int hue, int sat, int light)
         return std::clamp(v, 0.0, 1.0);
     };
     return RGB(static_cast<BYTE>(f(0) * 255), static_cast<BYTE>(f(8) * 255), static_cast<BYTE>(f(4) * 255));
-}
-
-inline COLORREF lighten(COLORREF c, int amount)
-{
-    const auto up = [amount](int v) { return std::min(255, std::max(0, v + amount)); };
-    return RGB(static_cast<BYTE>(up(GetRValue(c))), static_cast<BYTE>(up(GetGValue(c))),
-               static_cast<BYTE>(up(GetBValue(c))));
 }
 
 inline COLORREF dirColor(int depth, const Palette& p)
@@ -199,12 +309,6 @@ inline COLORREF fileColor(const std::wstring& name, int depth, const Palette& p)
     return hsl(hue, 42, std::min(86, 70 + depth * 2));
 }
 
-inline COLORREF tileText(COLORREF bg)
-{
-    const double lum = 0.299 * GetRValue(bg) + 0.587 * GetGValue(bg) + 0.114 * GetBValue(bg);
-    return lum > 140 ? RGB(24, 26, 30) : RGB(240, 242, 245);
-}
-
 inline RECT toRect(const Rect& r)
 {
     return {static_cast<int>(std::lround(r.x)), static_cast<int>(std::lround(r.y)),
@@ -230,6 +334,9 @@ struct ViewerState {
     Palette palette;
     int dpi = 96;
     HFONT font = nullptr, fontBold = nullptr, fontSmall = nullptr;
+
+    // The host's new look, waited for by the window thread (under `m`).
+    winshun::Json pendingAppearance;
 
     std::shared_ptr<Node> tree; // the last completed scan (immutable once set)
     bool scanning = false;
@@ -478,7 +585,6 @@ inline void saveConfigNow(const ViewerState& s)
 {
     ViewConfig c;
     c.lastPath = s.lastPath;
-    c.sunburst = s.sunburst;
     c.hasFile = true;
     saveViewConfig(s.spec.dataDir, c);
 }
@@ -510,10 +616,10 @@ inline void drawTextIn(HDC hdc, const std::wstring& text, RECT r, COLORREF color
 inline void drawButton(ViewerState& s, HDC hdc, const RECT& r, const std::wstring& label, bool active,
                        bool hover)
 {
-    fillWith(hdc, r, active ? s.palette.accent
-                            : hover ? lighten(s.palette.panel, s.palette.dark ? 14 : -10) : s.palette.panel);
-    frameWith(hdc, r, active ? s.palette.accent : s.palette.border);
-    const COLORREF text = active ? tileText(s.palette.accent) : s.palette.text;
+    fillWith(hdc, r, active ? s.palette.accentFill
+                            : hover ? s.palette.hover : s.palette.panel);
+    frameWith(hdc, r, active ? s.palette.accentFill : s.palette.border);
+    const COLORREF text = active ? s.palette.accentText : s.palette.text;
     RECT tr = r;
     ::OffsetRect(&tr, 0, 1);
     drawTextIn(hdc, label, tr, text, DT_CENTER | DT_VCENTER);
@@ -650,7 +756,7 @@ inline void drawTopList(ViewerState& s, HDC hdc)
         rr.left += S(8, s);
         rr.right -= S(8, s);
         if (static_cast<int>(idx) == s.hoverTop)
-            fillWith(hdc, rr, lighten(s.palette.panel, s.palette.dark ? 14 : -10));
+            fillWith(hdc, rr, s.palette.hover);
         RECT sw = rr;
         sw.right = sw.left + S(10, s);
         sw.top += (s.rowH - S(10, s)) / 2;
@@ -1065,6 +1171,9 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         const int w = static_cast<int>(std::max<LONG>(1, client.right - client.left));
         const int h = static_cast<int>(std::max<LONG>(1, client.bottom - client.top));
         HDC mem = ::CreateCompatibleDC(dc);
+        // Transparent text background: otherwise DrawTextW paints an opaque
+        // rectangle (the DC background colour) behind every string.
+        ::SetBkMode(mem, TRANSPARENT);
         HBITMAP bmp = ::CreateCompatibleBitmap(dc, w, h);
         HBITMAP oldBmp = static_cast<HBITMAP>(::SelectObject(mem, bmp));
         paintAll(s, mem, client);
@@ -1192,7 +1301,7 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_CTLCOLOREDIT:
         if (reinterpret_cast<HWND>(lp) == s.edit) {
-            const COLORREF back = s.palette.dark ? RGB(20, 22, 26) : RGB(255, 255, 255);
+            const COLORREF back = s.palette.input;
             if (!s.editBrush)
                 s.editBrush = ::CreateSolidBrush(back);
             ::SetTextColor(reinterpret_cast<HDC>(wp), s.palette.text);
@@ -1211,6 +1320,25 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
         mmi->ptMinTrackSize = {S(680, s), S(460, s)};
+        return 0;
+    }
+    case WM_APP_APPEARANCE: {
+        // The host's look changed (its theme or its style): the window takes
+        // the new colours.
+        winshun::Json appearance;
+        {
+            std::lock_guard<std::mutex> lk(s.m);
+            appearance = s.pendingAppearance;
+        }
+        const std::string theme = appearance["theme"].isString() ? appearance["theme"].toString()
+                                                                 : s.spec.theme;
+        s.spec.theme = theme;
+        s.palette = hostPalette(appearance, theme == "light" ? lightPalette() : darkPalette());
+        if (s.editBrush) { // the path box's fill changed with the palette
+            ::DeleteObject(s.editBrush);
+            s.editBrush = nullptr;
+        }
+        ::InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
     case WM_APP_PROGRESS:
@@ -1272,14 +1400,17 @@ inline void threadMain(ViewerSpec spec)
     ensureDpiAwareness();
     s.spec = std::move(spec);
     s.palette = s.spec.theme == "light" ? lightPalette() : darkPalette();
+    // The host's own colours, when it sent them (an older host, or a test
+    // that runs the plugin on its own, sends none: the built-in palettes stay).
+    s.palette = hostPalette(s.spec.appearance, s.palette);
     if (const HDC dc = ::GetDC(nullptr)) {
         s.dpi = ::GetDeviceCaps(dc, LOGPIXELSX);
         ::ReleaseDC(nullptr, dc);
     }
+    // The defaultView setting decides which view the window opens with; the
+    // saved file keeps only the last scanned path.
     s.sunburst = s.spec.defaultSunburst;
     const ViewConfig cfg = loadViewConfig(s.spec.dataDir);
-    if (cfg.hasFile)
-        s.sunburst = cfg.sunburst;
     makeFonts(s);
 
     WNDCLASSEXW wc {};
@@ -1427,6 +1558,17 @@ bool viewerVisible()
     detail::ViewerState& s = detail::state();
     std::lock_guard<std::mutex> lk(s.m);
     return s.visible;
+}
+
+bool updateViewerAppearance(const winshun::Json& appearance)
+{
+    detail::ViewerState& s = detail::state();
+    std::lock_guard<std::mutex> lk(s.m);
+    if (!s.hwnd)
+        return false;
+    s.pendingAppearance = appearance;
+    ::PostMessageW(s.hwnd, detail::WM_APP_APPEARANCE, 0, 0);
+    return true;
 }
 
 void closeViewerAndWait(unsigned timeoutMs)

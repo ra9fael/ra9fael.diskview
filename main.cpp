@@ -135,6 +135,9 @@ struct DiskView : winshun::Plugin {
         spec.theme = theme();
         spec.dataDir = dataDir();
         spec.defaultSunburst = defaultSunburst(settings());
+        // The host's look (nativeLook and the rest): the window paints itself
+        // with it, so it looks like Win顺. An older host sends none.
+        spec.appearance = appearance();
 
         std::string error;
         if (!diskview::openViewerWindow(spec, error)) {
@@ -153,6 +156,14 @@ struct DiskView : winshun::Plugin {
         // The base class already replaced settings(); nothing cached here.
         winshun::debug("ra9fael.diskview: settingsChanged");
         (void)s;
+    }
+
+    void appearanceChanged() override
+    {
+        // The host changed its look (theme or style): the open window takes
+        // the new colours.
+        winshun::debug("ra9fael.diskview: appearanceChanged");
+        diskview::updateViewerAppearance(appearance());
     }
 
     void cancel(long long queryId) override

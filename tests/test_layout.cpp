@@ -2,6 +2,7 @@
 // real temp-directory round trip for scan.h. No window, no plugin process.
 #include "scan.h"
 #include "tree.h"
+#include "viewer.h"
 
 #include <windows.h>
 
@@ -377,6 +378,120 @@ static void testNormalize()
     CHECK(diskview::normalizePath(L"  \"\"  ", nullptr).empty());
 }
 
+// ---- the host's look (appearance().nativeLook) ----------------------------------------
+
+static void testArgbParsing()
+{
+    // The host writes the alpha first: "#AARRGGBB" (docs/plugins.md, 外观).
+    CHECK(diskview::detail::argbOf("#ffa8402c") == 0xffa8402cu);
+    CHECK(diskview::detail::argbOf("#FFA8402C") == 0xffa8402cu);
+    CHECK(diskview::detail::argbOf("#aabbcc") == 0xffaabbccu); // no alpha: opaque
+    CHECK(diskview::detail::argbOf("") == 0u);
+    CHECK(diskview::detail::argbOf("transparent") == 0u);
+    CHECK(diskview::detail::argbOf("#gg1122") == 0u);
+    CHECK(diskview::detail::argbOf("#ff11223344") == 0u);
+}
+
+static void testOverBase()
+{
+    // A half transparent colour over an opaque one.
+    CHECK(diskview::detail::over(RGB(0, 0, 0), 0x80ffffffu) == RGB(128, 128, 128));
+    CHECK(diskview::detail::over(RGB(255, 255, 255), 0x80ffffffu) == RGB(255, 255, 255));
+    CHECK(diskview::detail::over(RGB(0, 0, 0), 0xffffffffu) == RGB(255, 255, 255));
+    CHECK(diskview::detail::over(RGB(10, 20, 30), 0x00000000u) == RGB(10, 20, 30));
+}
+
+static void testHostPalette()
+{
+    using diskview::detail::hostPalette;
+    using diskview::detail::lightPalette;
+    using diskview::detail::darkPalette;
+
+    // No look at all (an older host, or a test that runs the plugin alone):
+    // the built-in palette stays.
+    const winshun::Json empty;
+    const auto kept = hostPalette(empty, darkPalette());
+    CHECK(kept.bg == darkPalette().bg);
+    CHECK(kept.accentFill == darkPalette().accentFill);
+    CHECK(kept.accentText == darkPalette().accentText);
+
+    // The host's own colours (Win顺's brand style, dark).
+    const winshun::Json look(winshun::Json::Object {
+        {"nativeLook", winshun::Json::Object {
+                          {"dark", true},
+                          {"background", "#ff1d1d20"},
+                          {"layer", "#80202024"},
+                          {"text", "#fff2f2f5"},
+                          {"subtext", "#ffb6b6bf"},
+                          {"accent", "#ffe06a5a"},
+                          {"accentFill", "#ffa8402c"},
+                          {"accentText", "#ffffffff"},
+                          {"divider", "#ff3a3a40"},
+                          {"danger", "#ffff7a80"},
+                          {"control", "#ff2b2b31"},
+                      }},
+    });
+    const auto p = hostPalette(look, darkPalette());
+    CHECK(p.bg == RGB(0x1d, 0x1d, 0x20));
+    CHECK(p.text == RGB(0xf2, 0xf2, 0xf5));
+    CHECK(p.muted == RGB(0xb6, 0xb6, 0xbf));
+    CHECK(p.accent == RGB(0xe0, 0x6a, 0x5a));
+    CHECK(p.accentFill == RGB(0xa8, 0x40, 0x2c));
+    CHECK(p.accentText == RGB(255, 255, 255));
+    CHECK(p.border == RGB(0x3a, 0x3a, 0x40));
+    CHECK(p.danger == RGB(0xff, 0x7a, 0x80));
+    CHECK(p.input == RGB(0x2b, 0x2b, 0x31));
+    // A half transparent layer lies over the background.
+    CHECK(p.panel != RGB(0x20, 0x20, 0x24));
+    CHECK(p.panel != p.bg);
+    CHECK(p.hover != p.panel);
+
+    // A look written for the other theme is not used.
+    winshun::Json other = look;
+    other.set("nativeLook", winshun::Json(winshun::Json::Object {
+                                 {"dark", false},
+                                 {"background", "#ffffffff"},
+                             }));
+    const auto p2 = hostPalette(other, darkPalette());
+    CHECK(p2.bg == darkPalette().bg);
+
+    // A missing colour keeps the built-in one.
+    const winshun::Json partial(winshun::Json::Object {
+        {"nativeLook", winshun::Json::Object {
+                          {"dark", true},
+                          {"background", "#ff101010"},
+                      }},
+    });
+    const auto p3 = hostPalette(partial, darkPalette());
+    CHECK(p3.bg == RGB(0x10, 0x10, 0x10));
+    CHECK(p3.text == darkPalette().text);
+    CHECK(p3.accentFill == darkPalette().accentFill);
+}
+
+// ---- the saved config (only the last path) ---------------------------------------------
+
+static void testViewConfigKeepsOnlyThePath()
+{
+    // A file from before still carries "sunburst": it is read, and ignored.
+    TempDir tmp;
+    const std::string dir = winshun::utf8(tmp.path().wstring());
+    {
+        std::ofstream f(tmp.path() / L"diskview.json", std::ios::binary | std::ios::trunc);
+        f << "{\"path\":\"D:\\\\work\",\"sunburst\":true}";
+    }
+    const auto c = diskview::loadViewConfig(dir);
+    CHECK(c.hasFile);
+    CHECK(c.lastPath == L"D:\\work");
+
+    // What is written now holds the path alone.
+    diskview::ViewConfig out;
+    out.lastPath = L"D:\\other";
+    out.hasFile = true;
+    diskview::saveViewConfig(dir, out);
+    const auto c2 = diskview::loadViewConfig(dir);
+    CHECK(c2.lastPath == L"D:\\other");
+}
+
 int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -397,6 +512,10 @@ int main()
     RUN(testScanMissingAndEmpty);
     RUN(testScanCancel);
     RUN(testNormalize);
+    RUN(testArgbParsing);
+    RUN(testOverBase);
+    RUN(testHostPalette);
+    RUN(testViewConfigKeepsOnlyThePath);
 #undef RUN
 
     if (g_failures == 0) {

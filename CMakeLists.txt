@@ -30,7 +30,9 @@ endforeach()
 # exercised against a real temporary directory the test creates itself.
 add_executable(diskview_tests tests/test_layout.cpp)
 target_include_directories(diskview_tests PRIVATE "${CMAKE_SOURCE_DIR}")
-target_compile_definitions(diskview_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_definitions(diskview_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+# viewer.h (the window's colours) needs the same windows libraries as the exe.
+target_link_libraries(diskview_tests PRIVATE user32 gdi32)
 if(MSVC)
     target_compile_options(diskview_tests PRIVATE /utf-8 /W4 /permissive-)
     # Static CRT, like the plugin exe: the test binary must run on a machine
