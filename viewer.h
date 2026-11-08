@@ -631,6 +631,11 @@ inline std::wstring describe(const ViewerState& s, const Node* n)
     const bool zh = s.spec.zh;
     std::wstring t = n->dir ? (zh ? L"文件夹 · " : L"folder · ") : (zh ? L"文件 · " : L"file · ");
     t += winshun::wide(formatBytes(n->logical, zh));
+    // The share of the node inside its parent, when it is a child in the
+    // displayed tree (the view root itself has no parent there).
+    if (s.viewRoot && n != s.viewRoot && s.viewRoot->logical > 0 && n->logical > 0)
+        t += (zh ? L" · 占本层 " : L" · ") + std::to_wstring(n->logical * 100 / s.viewRoot->logical)
+             + L"%";
     if (n->dir) {
         t += (zh ? L" · " : L" · ") + winshun::wide(formatCount(n->files)) + (zh ? L" 个文件" : L" files");
         t += (zh ? L" · " : L" · ") + winshun::wide(formatCount(n->dirs)) + (zh ? L" 个文件夹" : L" folders");

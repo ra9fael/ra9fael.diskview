@@ -29,10 +29,31 @@ bool defaultSunburst(const winshun::Json& s)
     return v.isString() && v.toString() == "sunburst";
 }
 
-// The empty query gets one entry row that opens the window with the last
-// scanned path seeded (not auto-scanned), plus a usage hint below it.
+// The empty query gets one row per fixed drive (volume-level usage, not a
+// scan), largest used first, then a row that opens the window with the last
+// scanned path and a usage hint.
 winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
 {
+    winshun::Items items;
+    int score = 100;
+    for (const diskview::Drive& d : diskview::listFixedDrives()) {
+        const std::string used = winshun::utf8(winshun::wide(diskview::formatBytes(d.used(), zh)));
+        const std::string total = winshun::utf8(winshun::wide(diskview::formatBytes(d.total, zh)));
+        const unsigned percent = d.total > 0 ? static_cast<unsigned>(d.used() * 100 / d.total) : 0;
+        const std::string letter = std::string(1, static_cast<char>(d.letter)) + ":";
+        winshun::Item item("disk.drive." + std::string(1, static_cast<char>(d.letter)),
+                           tr(zh, "扫描 ", "Scan ") + letter,
+                           used + tr(zh, " 已用 · ", " used · ") + total + tr(zh, " 总容量 · ",
+                           " total · ") + std::to_string(percent) + tr(zh, "%", "%"));
+        item.withIcon("color:#0F766E")
+            .withScore(score--)
+            .withData(winshun::Json(winshun::Json::Object {
+                {"kind", "open"},
+                {"path", letter + "\\"},
+            }));
+        items.push_back(std::move(item));
+    }
+
     std::string title = tr(zh, "打开磁盘透视", "Open Disk View");
     std::string subtitle = tr(zh, "Enter 打开窗口 · 输入 disk <路径> 可直接开始扫描，如 disk D:\\工作",
                               "Enter opens the window · type disk <path> to scan right away, e.g. disk D:\\work");
@@ -42,12 +63,11 @@ winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
     }
     winshun::Item item("disk.open", title, subtitle);
     item.withIcon("color:#0F766E")
-        .withScore(100)
+        .withScore(50)
         .withData(winshun::Json(winshun::Json::Object {
             {"kind", "open"},
             {"path", ""},
         }));
-    winshun::Items items;
     items.push_back(std::move(item));
 
     const std::string usage = "disk C:\\";

@@ -492,6 +492,27 @@ static void testViewConfigKeepsOnlyThePath()
     CHECK(c2.lastPath == L"D:\\other");
 }
 
+// ---- the fixed-drive list ------------------------------------------------------------
+
+static void testListFixedDrives()
+{
+    // Volume facts only (two system calls per drive); this machine has at
+    // least one fixed NTFS drive, and every drive that comes back must be a
+    // real lettered root with a nonzero total.
+    const auto drives = diskview::listFixedDrives();
+    CHECK(!drives.empty());
+    for (const diskview::Drive& d : drives) {
+        CHECK(d.letter >= L'A' && d.letter <= L'Z');
+        CHECK(d.root.size() == 3 && d.root[1] == L':' && d.root[2] == L'\\');
+        CHECK(d.total > 0);
+        CHECK(d.used() <= d.total);
+    }
+    bool sawC = false;
+    for (const diskview::Drive& d : drives)
+        sawC = sawC || d.letter == L'C';
+    CHECK(sawC); // the system drive is always fixed
+}
+
 int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -512,6 +533,7 @@ int main()
     RUN(testScanMissingAndEmpty);
     RUN(testScanCancel);
     RUN(testNormalize);
+    RUN(testListFixedDrives);
     RUN(testArgbParsing);
     RUN(testOverBase);
     RUN(testHostPalette);

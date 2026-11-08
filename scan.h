@@ -35,6 +35,39 @@
 
 namespace diskview {
 
+// One fixed drive and its volume-level numbers. This is two system calls per
+// drive, not a scan: nothing is enumerated, so it is safe to answer while the
+// user is still typing.
+struct Drive {
+    wchar_t letter = 0;     // 'C'
+    std::wstring root;      // "C:\\"
+    std::uint64_t total = 0;
+    std::uint64_t free = 0;
+    std::uint64_t used() const noexcept { return total >= free ? total - free : 0; }
+};
+
+// The fixed drives of this machine, in drive-letter order. Network, removable
+// and optical drives are left out: a treemap of them is a long wait at best,
+// and the plugin is about local folders.
+inline std::vector<Drive> listFixedDrives()
+{
+    std::vector<Drive> drives;
+    DWORD mask = ::GetLogicalDrives();
+    for (int i = 0; i < 26; ++i, mask >>= 1) {
+        if (!(mask & 1))
+            continue;
+        const wchar_t letter = static_cast<wchar_t>(L'A' + i);
+        const std::wstring root = std::wstring(1, letter) + L":\\";
+        if (::GetDriveTypeW(root.c_str()) != DRIVE_FIXED)
+            continue;
+        ULARGE_INTEGER total {}, free {};
+        if (!::GetDiskFreeSpaceExW(root.c_str(), nullptr, &total, &free))
+            continue; // no medium, or the drive went away between the two calls
+        drives.push_back(Drive {letter, root, total.QuadPart, free.QuadPart});
+    }
+    return drives;
+}
+
 struct LargeFile {
     std::uint64_t logical = 0;
     std::wstring path; // display path, without the \\?\ prefix
