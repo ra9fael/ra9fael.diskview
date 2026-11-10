@@ -3,7 +3,7 @@
 // check the sums, counts and the largest-file list against what they wrote.
 //
 // What it guarantees:
-//   * depth-first with FindFirstFileExW (large fetch), never opening a file:
+//   * bounded directory workers using FindFirstFileExW (large fetch), never opening a file:
 //     cloud placeholders are not downloaded, file contents are never touched;
 //   * reparse points (junctions, symlinks) are counted, never followed: no
 //     loops and no double-counting through links;
@@ -93,6 +93,9 @@ struct ScanResult {
     bool cancelled = false;
     bool fast = false;
     std::uint32_t unknownSizes = 0, orphanRecords = 0;
+    std::uint32_t pendingRecords = 0, excludedItems = 0;
+    unsigned workers = 1;
+    std::uint64_t workerMs = 0, mergeMs = 0, snapshotMs = 0;
     std::wstring fallbackReason;
     std::string error; // fatal (root unreadable, path empty); UTF-8
 };
@@ -105,6 +108,15 @@ struct ScanProgress {
     bool fast = false;
     std::uint64_t recordsDone = 0, recordsTotal = 0;
     std::wstring fallbackReason;
+};
+
+struct ScanOptions {
+    enum class Media { Automatic, Ssd, Hdd, Network };
+    unsigned workers = 0; // 0: choose a conservative starting point for this device.
+    Media media = Media::Automatic;
+    const std::atomic<bool>* paused = nullptr;
+    std::vector<std::wstring> excludedPaths;
+    unsigned previewIntervalMs = 1500;
 };
 
 // Return false to cancel.
@@ -367,7 +379,7 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
 // the tree partial. Cancellation is checked between entries and inside the
 // progress callback; a cancelled scan sets result->cancelled and keeps what it
 // gathered. Callers must label this as incomplete when displaying it.
-inline void scanPath(const std::wstring& path, const ProgressFn& progress,
+inline void scanPathSerial(const std::wstring& path, const ProgressFn& progress,
                      const std::atomic<bool>& cancel, ScanResult* result, const SnapshotFn& snapshot = {})
 {
     *result = ScanResult {};
@@ -428,5 +440,7 @@ inline void scanPath(const std::wstring& path, const ProgressFn& progress,
 }
 
 } // namespace diskview
+
+#include "parallel_scan.h"
 
 #endif // DISKVIEW_SCAN_H

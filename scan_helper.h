@@ -1,6 +1,7 @@
 // Short-lived, read-only elevated helper. Only a local NTFS drive letter and
 // a single private pipe are accepted; the GUI process never elevates.
 #pragma once
+#include <future>
 #include "mft_scan.h"
 #include <shellapi.h>
 #include <sddl.h>
@@ -94,7 +95,7 @@ inline bool readAll(HANDLE pipe,HANDLE child,const std::atomic<bool>& cancel,voi
     return bytes==0;
 }
 enum class Outcome {Complete,Cancelled,Fallback};
-inline Outcome scan(HWND owner,const std::wstring& path,const ProgressFn& progress,const SnapshotFn& snapshot,const std::atomic<bool>& cancel,ScanResult& result,std::wstring& reason) {
+inline Outcome scan(HWND owner,const std::wstring& path,const ProgressFn& progress,const SnapshotFn& snapshot,const std::atomic<bool>& cancel,ScanResult& result,std::wstring& reason,const ScanOptions& options={}) {
     GUID guid{};if(FAILED(::CoCreateGuid(&guid))){reason=L"Cannot create scan session";return Outcome::Fallback;}
     wchar_t id[40]{};::StringFromGUID2(guid,id,40);const auto pipeName=std::wstring(L"\\\\.\\pipe\\DiskView.Scan.")+id;
     PSECURITY_DESCRIPTOR descriptor=nullptr;
@@ -119,8 +120,19 @@ inline Outcome scan(HWND owner,const std::wstring& path,const ProgressFn& progre
     ULONG client=0;
     if(!::GetNamedPipeClientProcessId(pipe.h,&client)||client!=::GetProcessId(child.h)){reason=L"Unexpected scan helper";return Outcome::Fallback;}
     std::vector<mft::Entry> entries;std::uint32_t cluster=4096;std::uint64_t files=0,bytes=0;
-    auto nextPublish=::GetTickCount64()+1500;
+    auto nextPublish=::GetTickCount64()+options.previewIntervalMs;
+    std::atomic<bool> stopPreview=false;
+    std::future<std::shared_ptr<ScanResult>> preview;
+    // Cancel construction before the future joins on every exit, including
+    // helper failure and exceptions. The stop flag outlives the future.
+    struct StopPreview {std::atomic<bool>& flag;~StopPreview(){flag=true;}} stop{stopPreview};
+    std::uint64_t previewMs=0;
     for(;;) {
+        while(options.paused&&*options.paused&&!cancel)std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if(cancel)return Outcome::Cancelled;
+        if(preview.valid()&&preview.wait_for(std::chrono::milliseconds(0))==std::future_status::ready) {
+            auto part=preview.get();previewMs+=part->snapshotMs;if(snapshot)snapshot(std::move(part));
+        }
         Header h;
         if(!readAll(pipe.h,child.h,cancel,&h,sizeof h)){reason=L"Scan helper disconnected";return cancel?Outcome::Cancelled:Outcome::Fallback;}
         if(h.magic!=kMagic||h.bytes>kMaxPacket||h.type<1||h.type>3){reason=L"Invalid scan helper response";return Outcome::Fallback;}
@@ -129,15 +141,26 @@ inline Outcome scan(HWND owner,const std::wstring& path,const ProgressFn& progre
         if(h.type==3){if(h.bytes%2){reason=L"Invalid scan error";return Outcome::Fallback;}reason.resize(h.bytes/2);std::memcpy(reason.data(),payload.data(),h.bytes);return Outcome::Fallback;}
         if(h.type==2) {
             if(h.bytes){reason=L"Invalid scan completion";return Outcome::Fallback;}
-            mft::build(path,entries,cluster,result);result.elapsedMs=::GetTickCount64()-start;
-            return Outcome::Complete;
+            stopPreview=true;
+            if(preview.valid()){auto discarded=preview.get();previewMs+=discarded->snapshotMs;}
+            const auto mergeStart=::GetTickCount64();mft::build(path,entries,cluster,result,true,options,&cancel);result.mergeMs=::GetTickCount64()-mergeStart;result.snapshotMs=previewMs;result.elapsedMs=::GetTickCount64()-start;
+            return result.cancelled?Outcome::Cancelled:Outcome::Complete;
         }
         mft::Batch batch;if(!decode(payload,batch)){reason=L"Invalid file metadata";return Outcome::Fallback;}cluster=batch.cluster;
         for(auto& e:batch.entries){if(!e.directory&&!e.name.empty()){++files;if(e.known)bytes+=e.bytes;}entries.push_back(std::move(e));}
         ScanProgress pg;pg.files=files;pg.bytes=bytes;pg.current=path;pg.fast=true;pg.recordsDone=batch.done;pg.recordsTotal=batch.total;
         if(progress&&!progress(pg))return Outcome::Cancelled;
         const auto now=::GetTickCount64();
-        if(snapshot&&now>=nextPublish){auto part=std::make_shared<ScanResult>();mft::build(path,entries,cluster,*part);snapshot(std::move(part));nextPublish=::GetTickCount64()+std::max<std::uint64_t>(1500,9*(::GetTickCount64()-now));}
+        if(snapshot&&now>=nextPublish&&!preview.valid()) {
+            // One background build at a time. Receive the next batch while it
+            // associates records and sorts the immutable preview tree.
+            auto copy=entries;
+            preview=std::async(std::launch::async,[path,cluster,options,start,&stopPreview,copy=std::move(copy)] {
+                const auto tick=::GetTickCount64();auto part=std::make_shared<ScanResult>();mft::build(path,copy,cluster,*part,false,options,&stopPreview);
+                part->snapshotMs=::GetTickCount64()-tick;part->elapsedMs=::GetTickCount64()-start;return part;
+            });
+            nextPublish=::GetTickCount64()+std::max<std::uint64_t>(options.previewIntervalMs,previewMs*9);
+        }
     }
 }
 } // namespace diskview::helper

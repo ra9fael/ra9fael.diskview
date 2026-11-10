@@ -59,13 +59,17 @@ inline bool read(ws::ntfs::RecordSource& reader,std::uint32_t cluster,const Sink
     if(rejected) {error=L"MFT contains unreadable records ("+std::to_wstring(rejected)+L"); use ordinary enumeration.";return false;}
     return true;
 }
-inline void build(const std::wstring& root,const std::vector<Entry>& entries,std::uint32_t cluster,ScanResult& out) {
+inline void build(const std::wstring& root,const std::vector<Entry>& entries,std::uint32_t cluster,ScanResult& out,bool complete=true,const ScanOptions& options={},const std::atomic<bool>* cancel=nullptr) {
     out=ScanResult{};out.displayRoot=root;out.clusterBytes=cluster;out.root.name=root;out.root.dir=true;out.fast=true;
+    const auto cancelled=[&]{return cancel&&cancel->load();};
+    const auto excluded=[&](const std::wstring& p){return std::any_of(options.excludedPaths.begin(),options.excludedPaths.end(),[&](const auto& base){return sameOrBelow(p,base);});};
+    if(excluded(root)){out.excludedItems=1;return;}
     std::unordered_map<std::uint64_t,std::uint64_t> sizes;
     std::unordered_map<std::uint64_t,std::vector<std::size_t>> children;
     std::unordered_map<std::uint64_t,std::uint32_t> directoryAttributes;
     std::uint64_t rootId=ws::ntfs::kRootRecord;
     for(std::size_t i=0;i<entries.size();++i) {
+        if(cancelled()){out.cancelled=true;return;}
         const auto& e=entries[i];if(e.known)sizes[e.id]=e.bytes;
         // Extension records need not repeat STANDARD_INFORMATION. Preserve
         // reparse attributes from the base record when merging their names.
@@ -75,13 +79,26 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
     }
     detail::Ctx ranking;std::unordered_set<std::uint64_t> active;
     std::unordered_set<std::size_t> visited;
+    // Excluded descendants are accounted for as excluded scope, never as
+    // unreadable/orphan records. An iterative walk also handles metadata cycles.
+    std::unordered_set<std::uint64_t> ignored;
+    const auto ignore=[&](std::uint64_t id) {
+        std::vector<std::uint64_t> pending{id};
+        while(!pending.empty()&&!cancelled()) {
+            const auto current=pending.back();pending.pop_back();if(!ignored.insert(current).second)continue;
+            const auto found=children.find(current);if(found==children.end())continue;
+            for(const auto index:found->second){visited.insert(index);if(directoryAttributes.count(entries[index].id))pending.push_back(entries[index].id);}
+        }
+    };
     const auto visit=[&](const auto& self,std::uint64_t id,Node& dir,const std::wstring& path,int depth)->void {
         if(depth>detail::kMaxDepth||!active.insert(id).second){++dir.skippedChildren;++out.skippedDirs;return;}
         const auto found=children.find(id);
         if(found!=children.end())for(const auto index:found->second) {
+            if(cancelled())break;
             if(!visited.insert(index).second)continue;
             const auto& e=entries[index];Node n;n.name=e.name;n.dir=directoryAttributes.count(e.id)!=0;
             const auto full=childPath(path,e.name);
+            if(excluded(full)){++out.excludedItems;if(n.dir)ignore(e.id);continue;}
             if(n.dir) {
                 ++out.dirs;
                 if(directoryAttributes[e.id]&FILE_ATTRIBUTE_REPARSE_POINT)++out.skippedLinks;
@@ -100,8 +117,10 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
         std::stable_sort(dir.children.begin(),dir.children.end(),[](const auto& a,const auto& b){return a.logical>b.logical;});active.erase(id);
     };
     visit(visit,rootId,out.root,root,0);
+    if(cancelled()){out.cancelled=true;return;}
     while(!ranking.top.empty()){out.largest.push_back(ranking.top.top());ranking.top.pop();}
     std::sort(out.largest.begin(),out.largest.end(),std::greater<>());
     for(std::size_t i=0;i<entries.size();++i)if(!entries[i].name.empty()&&ws::ntfs::recordOf(entries[i].id)!=ws::ntfs::kRootRecord&&!visited.count(i))++out.orphanRecords;
+    if(!complete){out.pendingRecords=out.orphanRecords;out.orphanRecords=0;}
 }
 } // namespace diskview::mft
