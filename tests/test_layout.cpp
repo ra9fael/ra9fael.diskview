@@ -480,7 +480,7 @@ static void testViewerNavigation()
     }
     CHECK(hitSlice(s, 501, 200) == -1);
     s.rcTopList = {500, 0, 800, 400};
-    s.listFolders = true;
+    setListMode(s,true);
     CHECK(hitTop(s, 510, s.topHeaderH + 1) == 0);
     CHECK(hitTop(s, 510, 1) == -1);
     s.lastScanError = "failed";
@@ -513,11 +513,12 @@ static void testViewerNavigation()
 
 // Exercise the real window procedure on this thread. The test window stays
 // hidden; optional snapshots render exactly the same paint path to a DIB.
-static void renderViewer(const char* name)
+static void renderViewer(const char* name,HWND window=nullptr)
 {
     using namespace diskview::detail;
     ViewerState& s = state();
-    const int w = s.rcClient.right, h = s.rcClient.bottom;
+    if(!window)window=s.hwnd;RECT client{};::GetClientRect(window,&client);
+    const int w = client.right, h = client.bottom;
     HDC dc = ::CreateCompatibleDC(nullptr);
     BITMAPINFO info {};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -532,12 +533,12 @@ static void renderViewer(const char* name)
     if (bitmap) {
         const auto old = ::SelectObject(dc, bitmap);
         ::SetBkMode(dc, TRANSPARENT);
-        ::SendMessageW(s.hwnd, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
-        for (const HWND child : {s.edit, s.filterEdit}) {
+        ::SendMessageW(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+        for (HWND child=::GetWindow(window,GW_CHILD);child;child=::GetWindow(child,GW_HWNDNEXT)) {
             if (!(::GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE)) continue;
             RECT bounds{};
             ::GetWindowRect(child, &bounds);
-            ::MapWindowPoints(nullptr, s.hwnd, reinterpret_cast<POINT*>(&bounds), 2);
+            ::MapWindowPoints(nullptr, window, reinterpret_cast<POINT*>(&bounds), 2);
             const int saved = ::SaveDC(dc);
             ::IntersectClipRect(dc, bounds.left, bounds.top, bounds.right, bounds.bottom);
             ::SetViewportOrgEx(dc, bounds.left, bounds.top, nullptr);
@@ -565,6 +566,8 @@ static void renderViewer(const char* name)
     }
     ::DeleteDC(dc);
 }
+
+#include "test_controls.h"
 
 static void testViewerMessages()
 {
@@ -668,9 +671,9 @@ static void testViewerMessages()
     CHECK(s.tipVisible && s.hoveredPath==L"C:\\Videos");
     renderViewer("hover-light");
     clearHover(s);
-    click(s.rcDepth);CHECK(s.depth==2 && s.tiles.size()>3);
+    click(s.rcDepth2);CHECK(s.depth==2 && s.tiles.size()>3);
     renderViewer("nested-light");
-    click(s.rcDepth);
+    click(s.rcDepth1);
     click(s.rcListFiles);CHECK(!s.listFolders);
     selectNode(s,s.rows.front().node,s.rows.front().path);
     CHECK(s.viewRoot==s.tree.get());locateSelected(s);
@@ -705,16 +708,28 @@ static void testViewerMessages()
     CHECK(s.lastScanError.empty() && !s.resultIncomplete);
     renderViewer("scan-cancelled");
     s.dpi=96;s.spec.zh=true;s.palette=lightPalette();s.notice.clear();makeFonts(s);
+    // The compact layout's whole point: the chart gets most of the window.
+    ::SetWindowPos(s.hwnd,nullptr,0,0,1184,761,SWP_NOMOVE|SWP_NOZORDER);
+    s.mobileList=false;computeLayout(s);relayoutView(s);
+    {
+        const int chartH=s.rcChart.bottom-s.rcChart.top;
+        const int share=chartH*100/std::max(1L,s.rcClient.bottom);
+        CHECK(share>=72); // was ~60% with the old toolbar and detail panel
+        CHECK(s.rcChartBar.bottom<=s.rcChart.top);
+        CHECK(s.rcChart.bottom<=s.rcStatus.top);
+        CHECK(s.rcStatus.bottom==s.rcClient.bottom);
+    }
     ::SetWindowPos(s.hwnd,nullptr,0,0,410,900,SWP_NOMOVE|SWP_NOZORDER);
     s.mobileList=true;computeLayout(s);relayoutView(s);
     CHECK(s.narrow && s.rcTopList.right>s.rcTopList.left && maxRows(s)>0);
-    CHECK(s.rcTopList.bottom<s.rcDetail.top);
+    CHECK(s.rcTopList.bottom<s.rcStatus.top);
     renderViewer("narrow-list");
     s.scanning=true;s.scanStarted=::GetTickCount64();s.progress.files=23456;s.progress.bytes=123456789;
     s.progress.current=L"C:\\Projects\\Disk View";computeLayout(s);relayoutView(s);
     CHECK(s.rcProgress.bottom<s.rcTopList.top && maxRows(s)>0);
     renderViewer("scan-progress-narrow");
     s.scanning=false;
+    testNewWindowControls();
     ::SendMessageW(s.hwnd, WM_CLOSE, 0, 0);
     MSG quit;
     ::PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
@@ -723,7 +738,7 @@ static void testViewerMessages()
         ::DeleteObject(s.editBrush);
         s.editBrush = nullptr;
     }
-    for (HFONT* font : {&s.font, &s.fontBold, &s.fontSmall, &s.editFont, &s.fontHeading}) {
+    for (HFONT* font : {&s.font, &s.fontMedium, &s.fontSmall, &s.editFont, &s.fontMicro}) {
         ::DeleteObject(*font);
         *font = nullptr;
     }
@@ -837,6 +852,7 @@ static void testHostPalette()
 static void testViewConfigKeepsOnlyThePath()
 {
     // A file from before still carries "sunburst": it is read, and ignored.
+    // Scan settings it does not carry fall back to the defaults.
     TempDir tmp;
     const std::string dir = winshun::utf8(tmp.path().wstring());
     {
@@ -846,14 +862,22 @@ static void testViewConfigKeepsOnlyThePath()
     const auto c = diskview::loadViewConfig(dir);
     CHECK(c.hasFile);
     CHECK(c.lastPath == L"D:\\work");
+    CHECK(c.scanMode == 0 && c.workers == 0 && c.media == 0 && c.excludedPaths.empty());
 
-    // What is written now holds the path alone.
+    // What is written now holds the path and the chosen scan settings.
     diskview::ViewConfig out;
     out.lastPath = L"D:\\other";
+    out.scanMode = 1;
+    out.workers = 2;
+    out.media = 2;
+    out.previewIntervalMs = 5000;
+    out.excludedPaths = {L"D:\\other\\cache"};
     out.hasFile = true;
     diskview::saveViewConfig(dir, out);
     const auto c2 = diskview::loadViewConfig(dir);
     CHECK(c2.lastPath == L"D:\\other");
+    CHECK(c2.scanMode == 1 && c2.workers == 2 && c2.media == 2 && c2.previewIntervalMs == 5000);
+    CHECK(c2.excludedPaths.size() == 1 && c2.excludedPaths.front() == L"D:\\other\\cache");
 }
 
 // ---- the fixed-drive list ------------------------------------------------------------
@@ -930,14 +954,16 @@ static void testMftMetadataAndTransport() {
 static void testPartialScanConsistency() {
     TempDir tmp;fs::create_directories(tmp.path()/L"nested");writeFile(tmp.path()/L"nested",L"a",16);writeFile(tmp.path(),L"b",32);
     std::shared_ptr<diskview::ScanResult> part;diskview::ScanResult result;std::atomic<bool> cancel=false;int calls=0;
-    diskview::scanPath(tmp.path().wstring(),[&](const auto&){if(++calls==1)::Sleep(1050);return true;},cancel,&result,[&](auto snapshot){part=std::move(snapshot);});
+    diskview::ScanOptions options;options.previewIntervalMs=10;
+    diskview::scanPath(tmp.path().wstring(),[&](const auto&){if(++calls==1)::Sleep(30);return true;},cancel,&result,[&](auto snapshot){if(!part)part=std::move(snapshot);},options);
     CHECK(part && part->root.logical<=result.root.logical);
     CHECK(result.root.logical==48 && result.files==result.root.files);
-    const auto bytes=part->root.logical;
-    CHECK(part->root.logical==bytes); // immutable after later scanner mutations
+    if(part){const auto bytes=part->root.logical;result.root.logical=999;CHECK(part->root.logical==bytes);}
 }
 int main(int argc,char** argv)
 {
+    if(argc==2&&std::string(argv[1])=="--verify-recycle")return verifyRecycle();
+    if(argc==3&&std::string(argv[1])=="--benchmark-ordinary")return benchmarkOrdinary(winshun::wide(argv[2]));
     if(argc==5&&std::string(argv[1])=="--scan-helper")return diskview::helper::run(diskview::normalizePath(winshun::wide(argv[2]),nullptr),winshun::wide(argv[3]),static_cast<DWORD>(std::stoul(argv[4])));
     if(argc==3&&std::string(argv[1])=="--benchmark-mft") {
         diskview::ScanResult result;std::wstring reason;std::atomic<bool> cancel=false;
@@ -965,6 +991,10 @@ int main(int argc,char** argv)
     RUN(testNormalize);
     RUN(testExtendedScanAndReuse);
     RUN(testPartialScanConsistency);
+    RUN(testParallelScan);
+    RUN(testPendingMftRecords);
+    RUN(testCommandModel);
+    RUN(testConfigRoundTrip);
     RUN(testMftMetadataAndTransport);
     RUN(testViewerNavigation);
     RUN(testViewerMessages);

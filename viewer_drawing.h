@@ -46,8 +46,11 @@ inline void drawSlices(ViewerState& s,HDC dc) {
     const int inner=int(std::min(s.slices.front().r0*s.zoom*.88,double(S(100,s))));
     if(inner>S(30,s)) {
         RECT r{LONG(cx-inner),LONG(cy-S(23,s)),LONG(cx+inner),LONG(cy)};
+        const auto oldFont=::SelectObject(dc,s.fontSmall);
         drawTextIn(dc,hasParent?(s.spec.zh?L"↑ 返回上一级":L"↑ Parent folder"):(s.spec.zh?L"扫描根目录":L"Scan root"),r,s.palette.accent,DT_CENTER|DT_VCENTER|DT_END_ELLIPSIS);
+        ::SelectObject(dc,s.fontMicro);
         r.top=r.bottom;r.bottom+=S(23,s);drawTextIn(dc,hasParent?parent->name:winshun::wide(formatBytes(s.viewRoot->logical,s.spec.zh)),r,s.palette.muted,DT_CENTER|DT_VCENTER|DT_END_ELLIPSIS);
+        ::SelectObject(dc,oldFont);
     }
     const auto old=::SelectObject(dc,s.fontSmall);
     for(const auto& sl:s.slices)if((sl.a1-sl.a0)>.35&&(sl.r1-sl.r0)*s.zoom>S(26,s)) {

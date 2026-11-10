@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(diskview main.cpp diskview.rc vendor/winshun/Ntfs.cpp)
 target_compile_definitions(diskview PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 # The viewer window: user32 (windows, DPI) and gdi32 (painting).
-target_link_libraries(diskview PRIVATE user32 gdi32 shell32 advapi32 ole32)
+target_link_libraries(diskview PRIVATE user32 gdi32 shell32 advapi32 ole32 d2d1 uuid)
 
 if(MSVC)
     target_compile_options(diskview PRIVATE /utf-8 /W4 /permissive-)
@@ -31,7 +31,7 @@ add_executable(diskview_tests tests/test_layout.cpp vendor/winshun/Ntfs.cpp)
 target_include_directories(diskview_tests PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_definitions(diskview_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 # viewer.h (the window's colours) needs the same windows libraries as the exe.
-target_link_libraries(diskview_tests PRIVATE user32 gdi32 shell32 advapi32 ole32)
+target_link_libraries(diskview_tests PRIVATE user32 gdi32 shell32 advapi32 ole32 d2d1 uuid)
 if(MSVC)
     target_compile_options(diskview_tests PRIVATE /utf-8 /W4 /permissive-)
     # Static CRT, like the plugin exe: the test binary must run on a machine

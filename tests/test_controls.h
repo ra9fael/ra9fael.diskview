@@ -71,6 +71,25 @@ static void testCommandModel() {    using namespace diskview;using namespace dis
     auto sink=Microsoft::WRL::Make<RecycleSink>();CHECK(FAILED(sink->PreDeleteItem(0,nullptr)));CHECK(SUCCEEDED(sink->PreDeleteItem(TSF_DELETE_RECYCLE_IF_POSSIBLE,nullptr)));
     sink->PostDeleteItem(0,nullptr,S_OK,nullptr);CHECK(sink->completed&&!sink->recycled);
     sink->PostDeleteItem(0,nullptr,E_ACCESSDENIED,nullptr);CHECK(!sink->recycled&&sink->itemResult==E_ACCESSDENIED);
+    auto permanent=Microsoft::WRL::Make<RecycleSink>();permanent->requireRecycle=false;
+    CHECK(SUCCEEDED(permanent->PreDeleteItem(0,nullptr)));
+    // An incomplete snapshot no longer blocks the destructive commands; a
+    // running scan or a protected path still does. protectedPath reads the
+    // real filesystem, so the selection must point at a real temp file.
+    s.resultIncomplete=true;
+    {
+        TempDir tmp;writeFile(tmp.path(),L"deletable.bin",5);
+        const auto keep=s.selectedPath;
+        s.selectedPath=tmp.path()/L"deletable.bin";
+        CHECK(commandEnabled(s,Command::Recycle)&&commandEnabled(s,Command::DeletePermanently));
+        s.resultIncomplete=false;s.scanning=true;
+        CHECK(!commandEnabled(s,Command::Recycle)&&!commandEnabled(s,Command::DeletePermanently));
+        s.scanning=false;
+        CHECK(commandEnabled(s,Command::CopyFile)&&commandEnabled(s,Command::CutFile));
+        s.selectedPath=keep;
+    }
+    s.selected=nullptr;
+    CHECK(!commandEnabled(s,Command::Recycle)&&!commandEnabled(s,Command::CopyFile)&&!commandEnabled(s,Command::DeletePermanently));
     CHECK(exclusionLines(L"C:\\one\r\nc:\\one\r\n  C:\\two  \r\n").size()==2);
 }
 static int verifyRecycle() {
@@ -95,6 +114,42 @@ static int verifyRecycle() {
                 if(fs::exists(path))CHECK(fs::file_size(fs::is_directory(path)?path/L"child.txt":path)==(fs::is_directory(path)?59u:37u));
                 std::printf("restore: success=%d HRESULT=0x%08lx\n",fs::exists(path),static_cast<unsigned long>(hr));
             }
+        }
+    }
+    // A permanent delete removes the file for real and never reports it as
+    // recycled; a protected path is refused before touching anything.
+    {
+        TempDir tmp;writeFile(tmp.path(),L"permanent-check.txt",73);
+        const auto path=tmp.path()/L"permanent-check.txt";
+        const auto result=deletePath(nullptr,path.wstring(),false);
+        std::printf("permanent: deleted=%d HRESULT=0x%08lx\n",result.deleted,static_cast<unsigned long>(result.error));
+        CHECK(result.deleted&&!fs::exists(path)&&!result.recycled);
+        CHECK(deletePath(nullptr,L"C:\\Windows",false).error==E_ACCESSDENIED);
+    }
+    // The clipboard round-trip: CF_HDROP the shell can paste, with the
+    // preferred effect telling copy from cut. Opt-in like the rest of this
+    // harness because it replaces the user's clipboard.
+    {
+        TempDir tmp;writeFile(tmp.path(),L"clipboard-check.txt",11);
+        const auto path=tmp.path()/L"clipboard-check.txt";
+        for(const bool cut:{false,true}) {
+            CHECK(putFilesOnClipboard(nullptr,path.wstring(),cut));
+            const UINT effectFormat=::RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+            CHECK(::IsClipboardFormatAvailable(CF_HDROP));
+            CHECK(effectFormat&&::IsClipboardFormatAvailable(effectFormat));
+            CHECK(::OpenClipboard(nullptr));
+            const auto drop=static_cast<HDROP>(::GetClipboardData(CF_HDROP));
+            CHECK(drop);
+            if(drop) {
+                wchar_t name[MAX_PATH]{};
+                CHECK(::DragQueryFileW(drop,0,name,MAX_PATH)>0);
+                CHECK(lower(name)==lower(path.wstring()));
+            }
+            DWORD effect=0;
+            if(effectFormat)if(const auto data=static_cast<const DWORD*>(::GetClipboardData(effectFormat)))effect=*data;
+            ::CloseClipboard();
+            std::printf("clipboard: cut=%d effect=%lu\n",cut,static_cast<unsigned long>(effect));
+            CHECK(effect==(cut?DROPEFFECT_MOVE:DROPEFFECT_COPY));
         }
     }
     if(SUCCEEDED(com))::CoUninitialize();return g_failures?1:0;
@@ -166,6 +221,8 @@ static void testNewWindowControls() {
     auto copy=std::make_shared<ScanResult>(*s.completeResult);adoptResult(s,copy,false);CHECK(s.editingAddress&&editText(s.edit)==L"C:\\typing");::SendMessageW(s.edit,WM_KEYDOWN,VK_ESCAPE,0);
     s.palette=darkPalette();renderViewer("controls-rings-dark");
     performCommand(s,Command::Rescan);renderViewer("controls-settings-dark",s.toolWindow);::DestroyWindow(s.toolWindow);
-    ::SetWindowPos(s.hwnd,nullptr,0,0,410,1100,SWP_NOMOVE|SWP_NOZORDER);s.mobileList=false;computeLayout(s);relayoutView(s);renderViewer("controls-narrow-chart");CHECK(s.rcFit.bottom<=s.rcChart.top&&s.rcPanUp.top>=s.rcChart.bottom);
-    s.mobileList=true;computeLayout(s);relayoutView(s);renderViewer("controls-narrow-list");CHECK(s.rcTopList.bottom<s.rcDetail.top);
-}
+    ::SetWindowPos(s.hwnd,nullptr,0,0,410,1100,SWP_NOMOVE|SWP_NOZORDER);s.mobileList=false;computeLayout(s);relayoutView(s);renderViewer("controls-narrow-chart");
+    // The compact layout has no in-pane zoom or pan buttons: the chart fills its pane.
+    CHECK(s.rcZoomIn.right<=s.rcZoomIn.left&&s.rcPanUp.right<=s.rcPanUp.left);
+    CHECK(s.rcChart.top>=s.rcChartBar.bottom&&s.rcChart.bottom<=s.rcStatus.top);
+    s.mobileList=true;computeLayout(s);relayoutView(s);renderViewer("controls-narrow-list");CHECK(s.rcTopList.bottom<s.rcStatus.top);}

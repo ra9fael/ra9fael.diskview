@@ -4,21 +4,26 @@ struct CommandItem {Command id;const wchar_t* zh;const wchar_t* en;const wchar_t
 inline const std::vector<CommandItem>& commandItems() {
     static const std::vector<CommandItem> items={
         {Command::Enter,L"进入目录 / 打开文件",L"Enter / open",L"Enter"},
-        {Command::Parent,L"返回父级",L"Parent folder",L"Alt+Up"},
+        {Command::Copy,L"复制完整路径",L"Copy full path",L"Ctrl+C"},
+        {Command::CopyFile,L"复制文件",L"Copy item",L"Ctrl+Shift+C"},
+        {Command::CutFile,L"剪切文件",L"Cut item",L"Ctrl+Shift+X"},
         {Command::Locate,L"定位到所在目录",L"Locate parent",L""},
         {Command::Explorer,L"在资源管理器中显示",L"Show in Explorer",L""},
-        {Command::Copy,L"复制完整路径",L"Copy full path",L"Ctrl+C"},
         {Command::Properties,L"属性",L"Properties",L"Alt+Enter"},
+        {Command::Recycle,L"移至回收站…",L"Move to Recycle Bin…",L"Delete"},
+        {Command::DeletePermanently,L"永久删除…",L"Delete permanently…",L""},
+        {Command::Parent,L"返回父级",L"Parent folder",L"Alt+Up"},
+        {Command::Ancestors,L"全部上级",L"All ancestors",L""},
         {Command::Rescan,L"扫描设置 / 重扫此目录",L"Scan settings",L"F5"},
         {Command::Exclude,L"切换下轮排除",L"Toggle exclusion",L""},
-        {Command::Recycle,L"移至回收站…",L"Move to Recycle Bin…",L"Delete"},
+        {Command::Help,L"快捷键帮助",L"Keyboard shortcuts",L"F1"},
+        {Command::Commands,L"搜索操作",L"Search actions",L"Ctrl+K"},
         {Command::FocusChart,L"聚焦空间图",L"Focus chart",L"F6"},
-        {Command::FocusList,L"聚焦目录列表",L"Focus list",L"F6"},
+        {Command::FocusList,L"聚焦目录列表",L"Focus list",L"Shift+F6"},
         {Command::Fit,L"适合窗口",L"Fit chart",L"0"},
         {Command::Diagnostics,L"扫描诊断",L"Scan diagnostics",L""},
         {Command::Issues,L"读取问题与覆盖范围",L"Read errors and coverage",L""},
-        {Command::Accounting,L"容量统计口径",L"Size accounting",L""},
-        {Command::Help,L"快捷键帮助",L"Keyboard shortcuts",L"F1"}
+        {Command::Accounting,L"容量统计口径",L"Size accounting",L""}
     };return items;
 }
 inline std::wstring actionPath(const ViewerState& s) {return s.selected?s.selectedPath:s.viewRoot?nodePath(s,s.viewRoot):s.lastPath;}
@@ -44,9 +49,13 @@ inline bool protectedPath(const std::wstring& raw) {
 inline bool commandEnabled(const ViewerState& s,Command command) {
     switch(command) {
     case Command::Parent:return s.viewRoot&&s.viewRoot!=s.tree.get();
-    case Command::Enter:case Command::Locate:case Command::Copy:case Command::Explorer:case Command::Properties:return s.selected!=nullptr;
+    case Command::Ancestors:return s.viewRoot&&s.viewRoot!=s.tree.get();
+    case Command::Enter:case Command::Locate:case Command::Copy:case Command::CopyFile:case Command::CutFile:case Command::Explorer:case Command::Properties:return s.selected!=nullptr;
     case Command::Exclude:return s.selected&&s.selected!=s.tree.get();
-    case Command::Recycle:return s.selected&&s.selected!=s.tree.get()&&!s.scanning&&!s.resultIncomplete&&!protectedPath(s.selectedPath);
+    // An incomplete snapshot says nothing about whether the file on disk can
+    // be deleted; only a running scan does. Protected paths are refused.
+    case Command::Recycle:case Command::DeletePermanently:
+        return s.selected&&s.selected!=s.tree.get()&&!s.scanning&&!protectedPath(s.selectedPath);
     case Command::Rescan:return !s.scanning;
     case Command::Fit:case Command::FocusChart:case Command::FocusList:return s.tree!=nullptr;
     default:return true;
@@ -54,9 +63,13 @@ inline bool commandEnabled(const ViewerState& s,Command command) {
 }
 inline HMENU makeContextMenu(const ViewerState& s) {
     const auto menu=::CreatePopupMenu();
+    const auto header=[&](const wchar_t* zh,const wchar_t* en){::AppendMenuW(menu,MF_STRING|MF_DISABLED|MF_GRAYED,0,s.spec.zh?zh:en);};
     for(const auto& item:commandItems()) {
         if(item.id==Command::FocusChart)break;
-        if(item.id==Command::Copy||item.id==Command::Rescan||item.id==Command::Recycle)::AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+        if(item.id==Command::Recycle||item.id==Command::Parent||item.id==Command::Rescan)::AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+        if(item.id==Command::Enter)header(L"文件操作",L"File actions");
+        if(item.id==Command::Parent)header(L"导航",L"Navigation");
+        if(item.id==Command::Rescan)header(L"扫描",L"Scanning");
         std::wstring title=s.spec.zh?item.zh:item.en;
         if(item.id==Command::Enter)title=s.selected&&s.selected->dir?(s.spec.zh?L"进入目录":L"Enter folder"):(s.spec.zh?L"打开文件":L"Open file");
         if(item.id==Command::Exclude)title=std::any_of(s.scanOptions.excludedPaths.begin(),s.scanOptions.excludedPaths.end(),[&](const auto& p){return lower(p)==lower(s.selectedPath);})?(s.spec.zh?L"取消下轮排除":L"Remove exclusion"):(s.spec.zh?L"下轮扫描排除此项":L"Exclude from next scan");
@@ -77,7 +90,7 @@ inline void showAncestors(ViewerState& s) {
     std::vector<std::wstring> paths{s.tree->name};std::wstring path=s.tree->name;
     for(auto* n:s.drill){path=childPath(path,n->name);paths.push_back(path);}
     HMENU menu=::CreatePopupMenu();for(std::size_t i=paths.size();i-->0;)::AppendMenuW(menu,MF_STRING,100+i,paths[i].c_str());
-    POINT p{s.rcAncestors.left,s.rcAncestors.bottom};::ClientToScreen(s.hwnd,&p);
+    POINT p{s.rcParent.left,s.rcParent.bottom};::ClientToScreen(s.hwnd,&p);
     const auto choice=::TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,p.x,p.y,0,s.hwnd,nullptr);::DestroyMenu(menu);
     if(choice>=100&&choice<100+paths.size())navigateTo(s,paths[choice-100]);
 }
@@ -127,6 +140,8 @@ class RecycleSink final : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::Ru
 public:
     HRESULT itemResult=E_PENDING;
     bool completed=false,recycled=false;
+    // When false the delete is allowed to bypass the Recycle Bin (permanent).
+    bool requireRecycle=true;
     Microsoft::WRL::ComPtr<IShellItem> destination;
     IFACEMETHODIMP StartOperations() override {return S_OK;}
     IFACEMETHODIMP FinishOperations(HRESULT) override {return S_OK;}
@@ -137,8 +152,9 @@ public:
     IFACEMETHODIMP PreCopyItem(DWORD,IShellItem*,IShellItem*,LPCWSTR) override {return E_ABORT;}
     IFACEMETHODIMP PostCopyItem(DWORD,IShellItem*,IShellItem*,LPCWSTR,HRESULT,IShellItem*) override {return S_OK;}
     IFACEMETHODIMP PreDeleteItem(DWORD flags,IShellItem*) override {
-        // Refuse a non-recycle retry, even if the shell can permanently delete it.
-        return (flags&TSF_DELETE_RECYCLE_IF_POSSIBLE)?S_OK:E_ABORT;
+        // Refuse a non-recycle retry unless the caller asked for a permanent
+        // delete, even if the shell could provide one.
+        return (!requireRecycle||(flags&TSF_DELETE_RECYCLE_IF_POSSIBLE))?S_OK:E_ABORT;
     }
     IFACEMETHODIMP PostDeleteItem(DWORD,IShellItem*,HRESULT hr,IShellItem* inRecycleBin) override {
         completed=true;itemResult=hr;recycled=SUCCEEDED(hr)&&hr!=S_FALSE&&inRecycleBin;
@@ -151,29 +167,66 @@ public:
     IFACEMETHODIMP PauseTimer() override {return S_OK;}
     IFACEMETHODIMP ResumeTimer() override {return S_OK;}
 };
-struct RecycleResult {
+struct DeleteResult {
     HRESULT error=E_FAIL;
-    bool recycled=false;
+    bool recycled=false,deleted=false;
     Microsoft::WRL::ComPtr<IShellItem> destination;
 };
-inline RecycleResult recyclePath(HWND owner,const std::wstring& path) {
-    RecycleResult result;
+// Deletes one path through the shell. With `recycle` the item must land in
+// the Recycle Bin; without it the delete is permanent and nothing else about
+// the call changes. No elevation prompt, no shell error UI: the caller owns
+// confirmation and reports failures.
+inline DeleteResult deletePath(HWND owner,const std::wstring& path,bool recycle) {
+    DeleteResult result;
     if(protectedPath(path)){result.error=E_ACCESSDENIED;return result;}
     Microsoft::WRL::ComPtr<IFileOperation> operation;Microsoft::WRL::ComPtr<IShellItem> item;
     auto sink=Microsoft::WRL::Make<RecycleSink>();
+    sink->requireRecycle=recycle;
     HRESULT hr=::CoCreateInstance(CLSID_FileOperation,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(operation.GetAddressOf()));
     if(SUCCEEDED(hr))hr=::SHCreateItemFromParsingName(path.c_str(),nullptr,IID_PPV_ARGS(item.GetAddressOf()));
     if(SUCCEEDED(hr))hr=operation->SetOwnerWindow(owner);
-    // Fail without offering a permanent-delete fallback or an elevation prompt.
-    // The caller owns confirmation and displays errors in the modeless panel.
-    if(SUCCEEDED(hr))hr=operation->SetOperationFlags(FOF_ALLOWUNDO|FOFX_RECYCLEONDELETE|FOF_NOCONFIRMATION|FOF_NOERRORUI|FOFX_EARLYFAILURE);
+    if(SUCCEEDED(hr))hr=operation->SetOperationFlags(recycle
+        ?(FOF_ALLOWUNDO|FOFX_RECYCLEONDELETE|FOF_NOCONFIRMATION|FOF_NOERRORUI|FOFX_EARLYFAILURE)
+        :(FOF_NOCONFIRMATION|FOF_NOERRORUI|FOFX_EARLYFAILURE));
     if(SUCCEEDED(hr))hr=operation->DeleteItem(item.Get(),sink.Get());
     if(SUCCEEDED(hr))hr=operation->PerformOperations();
     BOOL aborted=TRUE;if(SUCCEEDED(hr))hr=operation->GetAnyOperationsAborted(&aborted);
     result.recycled=SUCCEEDED(hr)&&!aborted&&sink->completed&&sink->recycled;
+    result.deleted=recycle?result.recycled:(SUCCEEDED(hr)&&!aborted&&sink->completed&&SUCCEEDED(sink->itemResult));
     result.error=FAILED(hr)?hr:aborted?HRESULT_FROM_WIN32(ERROR_CANCELLED):sink->itemResult;
-    if(!result.recycled&&SUCCEEDED(result.error))result.error=E_FAIL;
+    if(!result.deleted&&SUCCEEDED(result.error))result.error=E_FAIL;
     result.destination=sink->destination;return result;
+}
+inline DeleteResult recyclePath(HWND owner,const std::wstring& path) {return deletePath(owner,path,true);}
+// The file itself on the clipboard, so Explorer can paste it. Cutting adds
+// the Preferred DropEffect (move); without it pasting copies.
+inline bool putFilesOnClipboard(HWND owner,const std::wstring& path,bool cut) {
+    std::wstring list=path;list.push_back(L'\0');list.push_back(L'\0');
+    const SIZE_T bytes=sizeof(DROPFILES)+list.size()*sizeof(wchar_t);
+    HGLOBAL drop=::GlobalAlloc(GMEM_MOVEABLE,bytes);
+    // The preferred effect is written for both copy and cut: Explorer only
+    // treats an absent effect as a copy, and being explicit is testable.
+    HGLOBAL effect=::GlobalAlloc(GMEM_MOVEABLE,sizeof(DWORD));
+    if(!drop||!effect){if(drop)::GlobalFree(drop);if(effect)::GlobalFree(effect);return false;}
+    if(auto* header=static_cast<DROPFILES*>(::GlobalLock(drop))) {
+        header->pFiles=sizeof(DROPFILES);header->fWide=TRUE;
+        std::memcpy(reinterpret_cast<char*>(header)+sizeof(DROPFILES),list.c_str(),list.size()*sizeof(wchar_t));
+        ::GlobalUnlock(drop);
+    }
+    if(effect)if(auto* value=static_cast<DWORD*>(::GlobalLock(effect))) {
+        *value=cut?static_cast<DWORD>(DROPEFFECT_MOVE):static_cast<DWORD>(DROPEFFECT_COPY);
+        ::GlobalUnlock(effect);
+    }
+    if(!::OpenClipboard(owner)) {::GlobalFree(drop);if(effect)::GlobalFree(effect);return false;}
+    bool ok=false;
+    ::EmptyClipboard();
+    if(::SetClipboardData(CF_HDROP,drop))ok=true;else ::GlobalFree(drop);
+    if(effect) {
+        const UINT format=::RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        if(!(ok&&format&&::SetClipboardData(format,effect)))::GlobalFree(effect);
+    }
+    ::CloseClipboard();
+    return ok;
 }
 inline bool removeSnapshotItem(ScanResult& result,const std::wstring& path) {
     if(!sameOrBelow(path,result.root.name)||lower(path)==lower(result.root.name))return false;
@@ -193,7 +246,97 @@ inline void recycleSelected(ViewerState& s) {
     const auto result=recyclePath(s.hwnd,path);
     if(!result.recycled){showTools(s,1,(s.spec.zh?L"未确认回收成功，统计保持不变；可重新扫描核对。\r\n":L"Recycle was not confirmed. Snapshot retained; rescan to verify.\r\n")+errorText(result.error));return;}
     if(original&&s.completeResult==original){auto updated=std::make_shared<ScanResult>(*original);if(removeSnapshotItem(*updated,path)){s.completeResult=updated;adoptResult(s,updated,false);}}
-    s.notice=s.spec.zh?L"已移至回收站；还原后按 F5 重新扫描。":L"Moved to Recycle Bin. Rescan after restoring.";computeLayout(s);relayoutView(s);::InvalidateRect(s.hwnd,nullptr,FALSE);
+    setNotice(s,s.spec.zh?L"已移至回收站；还原后按 F5 重新扫描。":L"Moved to Recycle Bin. Rescan after restoring.");
+    computeLayout(s);relayoutView(s);::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+
+// The permanent delete has no undo, so confirming takes two steps: a warning,
+// then the item's own name typed back. The dialog is small and modal.
+struct ConfirmState {ViewerState* s;std::wstring expected;bool confirmed=false;HBRUSH brush=nullptr;};
+inline LRESULT CALLBACK confirmProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
+    auto* ctx=reinterpret_cast<ConfirmState*>(::GetWindowLongPtrW(hwnd,GWLP_USERDATA));
+    switch(msg) {
+    case WM_COMMAND:
+        if(LOWORD(wp)==1&&ctx) {
+            wchar_t typed[256]{};
+            ::GetDlgItemTextW(hwnd,101,typed,256);
+            if(lower(typed)==lower(ctx->expected)) {ctx->confirmed=true;::DestroyWindow(hwnd);}
+            else if(HWND hint=::GetDlgItem(hwnd,104))::SetWindowTextW(hint,ctx->s->spec.zh?L"名称不一致；请照原样输入。":L"The name does not match; type it exactly.");
+            return 0;
+        }
+        if(LOWORD(wp)==2){::DestroyWindow(hwnd);return 0;}
+        break;
+    case WM_CLOSE: ::DestroyWindow(hwnd);return 0;
+    case WM_CTLCOLOREDIT:case WM_CTLCOLORSTATIC:
+        if(ctx&&ctx->s) {
+            if(msg==WM_CTLCOLORSTATIC&&HWND(::GetDlgItem(hwnd,100))==reinterpret_cast<HWND>(lp))
+                ::SetTextColor(reinterpret_cast<HDC>(wp),ctx->s->palette.danger);
+            else ::SetTextColor(reinterpret_cast<HDC>(wp),ctx->s->palette.text);
+            ::SetBkColor(reinterpret_cast<HDC>(wp),ctx->s->palette.panel);
+            if(ctx->brush)::DeleteObject(ctx->brush);
+            ctx->brush=::CreateSolidBrush(ctx->s->palette.panel);
+            return reinterpret_cast<LRESULT>(ctx->brush);
+        }
+        break;
+    case WM_DESTROY:
+        if(ctx&&ctx->brush){::DeleteObject(ctx->brush);ctx->brush=nullptr;}
+        return 0;
+    }
+    return ::DefWindowProcW(hwnd,msg,wp,lp);
+}
+inline bool confirmPermanentDelete(ViewerState& s,const std::wstring& path) {
+    const std::wstring name=fileNameOf(path);
+    ConfirmState ctx{&s,s.spec.zh?name:L"delete "+name,false};
+    WNDCLASSW wc{};
+    wc.lpfnWndProc=confirmProc;wc.hInstance=::GetModuleHandleW(nullptr);
+    wc.hCursor=::LoadCursorW(nullptr,IDC_ARROW);wc.hbrBackground=HBRUSH(COLOR_WINDOW+1);
+    wc.lpszClassName=L"DiskViewConfirm";::RegisterClassW(&wc);
+    const int w=S(440,s),h=S(210,s);
+    const auto dialog=::CreateWindowExW(0,wc.lpszClassName,s.spec.zh?L"永久删除":L"Delete permanently",
+        WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,w,h,s.hwnd,nullptr,wc.hInstance,nullptr);
+    if(!dialog)return false;
+    ::SetWindowLongPtrW(dialog,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(&ctx));
+    const auto child=[&](const wchar_t* type,const std::wstring& label,DWORD style,int id,int x,int y,int cw,int ch) {
+        auto* c=::CreateWindowExW(0,type,label.c_str(),WS_CHILD|WS_VISIBLE|style,S(x,s),S(y,s),S(cw,s),S(ch,s),
+            dialog,reinterpret_cast<HMENU>(INT_PTR(id)),wc.hInstance,nullptr);
+        ::SendMessageW(c,WM_SETFONT,reinterpret_cast<WPARAM>(s.font),TRUE);return c;
+    };
+    child(L"STATIC",s.spec.zh?L"此操作不可恢复，条目不会进入回收站。":L"This cannot be undone; the item will not go to the Recycle Bin.",0,100,12,12,w-24,20);
+    child(L"STATIC",path,0,102,12,S(36,s),w-24,20);
+    child(L"STATIC",s.spec.zh?L"输入「"+name+L"」以确认：":L"Type \""+name+L"\" to confirm:",0,103,12,S(60,s),w-24,20);
+    child(L"EDIT",L"",WS_TABSTOP|ES_AUTOHSCROLL,101,12,S(82,s),w-24-S(100,s),24);
+    child(L"BUTTON",s.spec.zh?L"永久删除":L"Delete",WS_TABSTOP|BS_DEFPUSHBUTTON,1,w-S(206,s),S(80,s),S(92,s),26);
+    child(L"BUTTON",s.spec.zh?L"取消":L"Cancel",WS_TABSTOP,2,w-S(106,s),S(80,s),S(92,s),26);
+    child(L"STATIC",L"",0,104,12,S(112,s),w-24,20);
+    RECT owner{},self{};::GetWindowRect(s.hwnd,&owner);
+    ::GetWindowRect(dialog,&self);
+    ::SetWindowPos(dialog,nullptr,(owner.left+owner.right-self.right+self.left)/2,(owner.top+owner.bottom-self.bottom+self.top)/2,0,0,SWP_NOZORDER|SWP_NOSIZE);
+    ::EnableWindow(s.hwnd,FALSE);
+    ::ShowWindow(dialog,SW_SHOW);
+    MSG msg;
+    while(::GetMessageW(&msg,nullptr,0,0)>0) {
+        if(msg.message==WM_QUIT){::PostQuitMessage(int(msg.wParam));break;}
+        ::TranslateMessage(&msg);::DispatchMessageW(&msg);
+        if(!::IsWindow(dialog))break;
+    }
+    ::EnableWindow(s.hwnd,TRUE);
+    if(::IsWindow(dialog))::DestroyWindow(dialog);
+    ::SetFocus(s.hwnd);
+    return ctx.confirmed;
+}
+inline void deletePermanentlySelected(ViewerState& s) {
+    if(!commandEnabled(s,Command::DeletePermanently))return;
+    const auto path=s.selectedPath;
+    const auto warning=path+L"\r\n\r\n"+sizeLabel(s,*s.selected)+(s.spec.zh?L"（扫描时）\r\n此操作不可恢复，条目不会进入回收站。":L" (at scan time)\r\nThis cannot be undone; the item will not go to the Recycle Bin.");
+    if(::MessageBoxW(s.hwnd,warning.c_str(),s.spec.zh?L"永久删除":L"Delete permanently",MB_OKCANCEL|MB_ICONWARNING|MB_DEFBUTTON2)!=IDOK)return;
+    if(!confirmPermanentDelete(s,path))return;
+    if(!commandEnabled(s,Command::DeletePermanently)||s.selectedPath!=path)return;
+    const auto original=s.completeResult;
+    const auto result=deletePath(s.hwnd,path,false);
+    if(!result.deleted){showTools(s,1,(s.spec.zh?L"未确认删除成功，统计保持不变；可重新扫描核对。\r\n":L"The delete was not confirmed. Snapshot retained; rescan to verify.\r\n")+errorText(result.error));return;}
+    if(original&&s.completeResult==original){auto updated=std::make_shared<ScanResult>(*original);if(removeSnapshotItem(*updated,path)){s.completeResult=updated;adoptResult(s,updated,false);}}
+    setNotice(s,s.spec.zh?L"已永久删除。":L"Deleted permanently.");
+    computeLayout(s);relayoutView(s);::InvalidateRect(s.hwnd,nullptr,FALSE);
 }
 inline void fillCommandList(ViewerState& s) {
     if(!s.toolList)return;const auto query=lower(editText(s.toolInput));::SendMessageW(s.toolList,LB_RESETCONTENT,0,0);
@@ -318,14 +461,22 @@ inline void performCommand(ViewerState& s,Command command) {
     const auto path=actionPath(s);
     switch(command) {
     case Command::Parent:goUp(s);break;
+    case Command::Ancestors:showAncestors(s);break;
     case Command::Enter:if(s.selected->dir)navigateTo(s,path);else if(reinterpret_cast<INT_PTR>(::ShellExecuteW(s.hwnd,L"open",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32)showTools(s,1,s.spec.zh?L"无法使用默认程序打开此文件。":L"Unable to open with the default application.");break;
     case Command::Locate:locateSelected(s);s.focusList=true;s.mobileList=true;computeLayout(s);relayoutView(s);ensureSelectedVisible(s);break;
-    case Command::Copy:s.notice=copyText(s.hwnd,path)?(s.spec.zh?L"已复制完整路径。":L"Path copied."):(s.spec.zh?L"无法打开剪贴板，请重试。":L"Clipboard unavailable.");break;
+    case Command::Copy:setNotice(s,copyText(s.hwnd,path)?(s.spec.zh?L"已复制完整路径。":L"Path copied."):(s.spec.zh?L"无法打开剪贴板，请重试。":L"Clipboard unavailable."));break;
+    case Command::CopyFile:case Command::CutFile:
+        setNotice(s,putFilesOnClipboard(s.hwnd,path,command==Command::CutFile)
+            ?(command==Command::CutFile?(s.spec.zh?L"已剪切，到资源管理器粘贴即移动。":L"Cut. Paste in Explorer to move.")
+                                       :(s.spec.zh?L"已复制，到资源管理器粘贴即复制。":L"Copied. Paste in Explorer to copy."))
+            :(s.spec.zh?L"无法写入剪贴板，请重试。":L"Clipboard unavailable."));
+        break;
     case Command::Explorer:{PIDLIST_ABSOLUTE full=nullptr;auto hr=::SHParseDisplayName(path.c_str(),nullptr,&full,0,nullptr);if(SUCCEEDED(hr)){auto parent=::ILCloneFull(full);if(parent){::ILRemoveLastID(parent);PCUITEMID_CHILD child=::ILFindLastID(full);hr=::SHOpenFolderAndSelectItems(parent,1,&child,0);::CoTaskMemFree(parent);}::CoTaskMemFree(full);}if(FAILED(hr))showTools(s,1,errorText(hr));break;}
     case Command::Properties:{SHELLEXECUTEINFOW info{sizeof info};info.fMask=SEE_MASK_INVOKEIDLIST;info.hwnd=s.hwnd;info.lpVerb=L"properties";info.lpFile=path.c_str();info.nShow=SW_SHOWNORMAL;if(!::ShellExecuteExW(&info))showTools(s,1,errorText(HRESULT_FROM_WIN32(::GetLastError())));break;}
     case Command::Rescan:{const auto slash=path.find_last_of(L'\\');s.toolPath=s.selected&&!s.selected->dir?(slash==2?path.substr(0,3):path.substr(0,slash)):path;showTools(s,4);break;}
-    case Command::Exclude:{auto& paths=s.scanOptions.excludedPaths;auto it=std::find_if(paths.begin(),paths.end(),[&](const auto& p){return lower(p)==lower(path);});if(it==paths.end())paths.push_back(path);else paths.erase(it);saveConfigNow(s);s.notice=s.spec.zh?L"已更新下轮排除范围，当前统计保持不变。":L"Next-scan exclusions updated; current snapshot unchanged.";break;}
+    case Command::Exclude:{auto& paths=s.scanOptions.excludedPaths;auto it=std::find_if(paths.begin(),paths.end(),[&](const auto& p){return lower(p)==lower(path);});if(it==paths.end())paths.push_back(path);else paths.erase(it);saveConfigNow(s);setNotice(s,s.spec.zh?L"已更新下轮排除范围，当前统计保持不变。":L"Next-scan exclusions updated; current snapshot unchanged.");break;}
     case Command::Recycle:recycleSelected(s);break;
+    case Command::DeletePermanently:deletePermanentlySelected(s);break;
     case Command::Commands:showTools(s,3);break;
     case Command::FocusChart:focusPane(s,false);break;
     case Command::FocusList:focusPane(s,true);break;
@@ -333,7 +484,7 @@ inline void performCommand(ViewerState& s,Command command) {
     case Command::Issues:showIssues(s);break;
     case Command::Accounting:showTools(s,1,s.spec.zh?L"图表使用逻辑大小（1024 进制）。硬链接按路径计数，目录重解析点不跟随。\r\n\r\n按簇取整只是近似占用，不等于稀疏、压缩文件的实际占用。文件总计可能不含无法读取区域或系统元数据，因此不等于磁盘已用空间。\r\n\r\n局部结果占比只以当前已发现内容计算。此窗口不阻塞主窗口导航。":L"Charts use logical bytes (base 1024). Hard links count per path; directory reparse points are not followed.\r\n\r\nCluster-rounded allocation is approximate. Unreadable areas and system metadata may be missing. Partial shares only cover discovered entries.");break;
     case Command::Diagnostics:{const auto r=s.resultIncomplete?s.partialResult:s.completeResult;std::wstring text=s.spec.zh?L"阶段计时（毫秒）\r\n":L"Stage timings (milliseconds)\r\n";if(r)text+=L"Total: "+std::to_wstring(r->elapsedMs)+L"\r\nWorkers: "+std::to_wstring(r->workers)+L"\r\nWorker time (sum, includes pause): "+std::to_wstring(r->workerMs)+L"\r\nMerge: "+std::to_wstring(r->mergeMs)+L"\r\nPreview: "+std::to_wstring(r->snapshotMs);text+=s.spec.zh?L"\r\n\r\n并发累计工作时间不等于总耗时，不可相加比较。MFT 读取方式保持不变。":L"\r\n\r\nWorker times overlap and cannot be added to elapsed time. MFT reading is unchanged.";showTools(s,1,text);break;}
-    case Command::Help:showTools(s,2,s.spec.zh?L"图表 ↑↓←→：选择邻近条目\r\n列表 ↑↓：上一项 / 下一项\r\n列表 ← / →：返回父级 / 进入目录\r\nEnter：进入目录 / 打开文件\r\nAlt+↑ / Backspace：返回父级\r\nAlt+← / Alt+→：后退 / 前进\r\nF6 / Shift+F6：切换图表和列表\r\nShift+F10 / 菜单键：右键菜单\r\nCtrl+L：编辑路径\r\nCtrl+F：筛选列表\r\nCtrl+K：搜索操作\r\nCtrl+C：复制完整路径\r\nAlt+Enter：属性\r\nF5：扫描设置\r\n+ / − / 0：缩放 / 适合窗口\r\nCtrl+滚轮：图表缩放\r\n空格+拖动 / 中键拖动：图表平移\r\nDelete：确认移至回收站\r\nEsc：关闭工具或退出编辑\r\n\r\n输入框里的方向键、退格和 Ctrl+C 用于编辑文字。":L"Chart arrows: nearest item\r\nList Up/Down: previous/next\r\nList Left/Right: parent/enter\r\nEnter: enter/open\r\nAlt+Up / Backspace: parent\r\nAlt+Left/Right: history\r\nF6 / Shift+F6: chart/list focus\r\nShift+F10: context menu\r\nCtrl+L: address\r\nCtrl+F: filter\r\nCtrl+K: commands\r\nCtrl+C: copy path\r\nAlt+Enter: properties\r\nF5: scan settings\r\n+ / - / 0: zoom/fit\r\nCtrl+wheel: zoom\r\nSpace+drag / middle drag: pan\r\nDelete: recycle confirmation\r\nEsc: close/exit editing\r\n\r\nText inputs keep native editing shortcuts.");break;
+    case Command::Help:showTools(s,2,s.spec.zh?L"图表 ↑↓←→：选择邻近条目\r\n列表 ↑↓：上一项 / 下一项\r\n列表 ← / →：返回父级 / 进入目录\r\nEnter：进入目录 / 打开文件\r\nAlt+↑ / Backspace：返回父级\r\nAlt+← / Alt+→：后退 / 前进\r\nF6 / Shift+F6：切换图表和列表\r\nShift+F10 / 菜单键：右键菜单\r\nCtrl+L：编辑路径\r\nCtrl+F：筛选列表\r\nCtrl+K：搜索操作\r\nCtrl+C：复制完整路径\r\nCtrl+Shift+C：复制文件\r\nCtrl+Shift+X：剪切文件\r\nAlt+Enter：属性\r\nF5：扫描设置\r\n+ / − / 0：缩放 / 适合窗口\r\nCtrl+滚轮：图表缩放\r\n空格+拖动 / 中键拖动：图表平移\r\nDelete：确认移至回收站\r\nEsc：关闭工具或退出编辑\r\n\r\n输入框里的方向键、退格和 Ctrl+C 用于编辑文字。\r\n永久删除没有快捷键：在右键菜单里选择，并输入条目名确认。":L"Chart arrows: nearest item\r\nList Up/Down: previous/next\r\nList Left/Right: parent/enter\r\nEnter: enter/open\r\nAlt+Up / Backspace: parent\r\nAlt+Left/Right: history\r\nF6 / Shift+F6: chart/list focus\r\nShift+F10: context menu\r\nCtrl+L: address\r\nCtrl+F: filter\r\nCtrl+K: commands\r\nCtrl+C: copy path\r\nCtrl+Shift+C: copy item\r\nCtrl+Shift+X: cut item\r\nAlt+Enter: properties\r\nF5: scan settings\r\n+ / - / 0: zoom/fit\r\nCtrl+wheel: zoom\r\nSpace+drag / middle drag: pan\r\nDelete: recycle confirmation\r\nEsc: close/exit editing\r\n\r\nText inputs keep native editing shortcuts.\r\nPermanent delete has no shortcut: pick it in the context menu and confirm by typing the name.");break;
     }
     if(s.hwnd){computeLayout(s);::InvalidateRect(s.hwnd,nullptr,FALSE);}
 }

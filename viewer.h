@@ -3,7 +3,7 @@
 // One dedicated GUI thread owns the window and all drawing state; the serve()
 // thread only calls openViewerWindow()/closeViewerAndWait() under the state
 // mutex. Scans run on their own thread and post WM_APP_* messages, never
-// touching GUI state directly. All painting is GDI into a memory bitmap.
+// touching GUI state directly. GDI paints the frame; Direct2D paints smooth arcs.
 // The window follows the host's theme snapshot taken when it opens.
 //
 // This file must not write to stdout; report problems through `error` and
@@ -20,6 +20,12 @@
 #include <windows.h>
 #include "window_icons.h"
 #include <windowsx.h>
+#include <d2d1.h>
+#include <wrl/client.h>
+#include <wrl/implements.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <unordered_map>
 
 #include <algorithm>
 #include <atomic>
@@ -57,10 +63,16 @@ bool updateViewerAppearance(const winshun::Json& appearance);
 
 // ---- persisted configuration (WS_DATA_DIR/diskview.json) --------------------------
 
-// Only the last scanned path is kept. Which view the window opens with is the
-// `defaultView` setting, not something a file may decide.
+// The last scanned path plus the scan settings the user chose in the scan
+// settings panel. Which view the window opens with is the `defaultView`
+// setting, not something a file may decide.
 struct ViewConfig {
     std::wstring lastPath;
+    int scanMode = 0;              // 0 automatic, 1 NTFS/MFT, 2 ordinary
+    unsigned workers = 0;          // 0 lets the device decide
+    int media = 0;                 // ScanOptions::Media
+    unsigned previewIntervalMs = 1500;
+    std::vector<std::wstring> excludedPaths;
     bool hasFile = false; // a config file existed at all
 };
 
@@ -85,6 +97,17 @@ inline ViewConfig loadViewConfig(const std::string& dataDir)
     if (j && j->isObject()) {
         if ((*j)["path"].isString())
             c.lastPath = winshun::wide((*j)["path"].toString());
+        // Scan settings are optional: a file written by an older build keeps
+        // the defaults for everything it does not carry.
+        c.scanMode = static_cast<int>(std::clamp<long long>((*j)["scanMode"].toInt(0), 0, 2));
+        c.workers = static_cast<unsigned>(std::clamp<long long>((*j)["workers"].toInt(0), 0, 8));
+        c.media = static_cast<int>(std::clamp<long long>((*j)["media"].toInt(0), 0, 3));
+        c.previewIntervalMs = (*j)["previewIntervalMs"].toInt(1500) >= 5000 ? 5000u : 1500u;
+        for (const auto& item : (*j)["excludedPaths"].toArray())
+            if (item.isString()) {
+                const auto value = winshun::wide(item.toString());
+                if (!value.empty()) c.excludedPaths.push_back(value);
+            }
         c.hasFile = true; // a file from before still carries "sunburst"; it is ignored
     }
     return c;
@@ -95,8 +118,16 @@ inline void saveViewConfig(const std::string& dataDir, const ViewConfig& c)
     const std::wstring path = configPath(dataDir);
     if (path.empty())
         return;
+    winshun::Json::Array exclusions;
+    for (const auto& p : c.excludedPaths)
+        exclusions.push_back(winshun::utf8(p));
     const winshun::Json j(winshun::Json::Object {
         {"path", winshun::utf8(c.lastPath)},
+        {"scanMode", c.scanMode},
+        {"workers", static_cast<long long>(c.workers)},
+        {"media", c.media},
+        {"previewIntervalMs", static_cast<long long>(c.previewIntervalMs)},
+        {"excludedPaths", winshun::Json(std::move(exclusions))},
     });
     std::ofstream f(path.c_str(), std::ios::binary | std::ios::trunc);
     if (f)
@@ -335,7 +366,7 @@ struct ViewerState {
     ViewerSpec spec;
     Palette palette;
     int dpi = 96;
-    HFONT font = nullptr, fontBold = nullptr, fontSmall = nullptr, fontHeading = nullptr;
+    HFONT font = nullptr, fontMedium = nullptr, fontSmall = nullptr, fontMicro = nullptr;
 
     // The host's new look, waited for by the window thread (under `m`).
     winshun::Json pendingAppearance;
@@ -344,6 +375,9 @@ struct ViewerState {
     bool scanning = false;
     bool cancelled = false;
     std::atomic<bool> cancelFlag {false};
+    std::atomic<bool> pauseFlag {false}, snapshotPending {false};
+    ScanOptions scanOptions;
+    int scanMode=0; // automatic, requested MFT, ordinary
     std::thread scanThread;
     ScanProgress progress;
     std::string lastScanError; // UTF-8, shown in the content area
@@ -388,6 +422,9 @@ struct ViewerState {
     WNDPROC origEditProc = nullptr;
     HFONT editFont = nullptr;
     HBRUSH editBrush = nullptr;
+    // The last rectangle handed to the child edits. Moving them on every
+    // layout pass would repaint them, and the filter's hint would flash.
+    RECT lastEditRect={}, lastFilterRect={};
 
     struct Row { const Node* node; std::wstring path; };
     std::vector<Row> rows;
@@ -404,6 +441,21 @@ struct ViewerState {
     bool suppressClick = false, fastResult = false;
     bool keyboardFocus = false;
     int focusIndex = -1;
+    bool focusList=false, spaceHeld=false, panning=false;
+    double zoom=1,panX=0,panY=0,dragPanX=0,dragPanY=0;
+    POINT dragStart{};
+    std::uint32_t pendingRecords=0,excludedItems=0;
+    struct ViewMemory {std::wstring selected,filter;int scroll=0;bool list=true;};
+    std::unordered_map<std::wstring,ViewMemory> viewMemory;
+    Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory;
+    Microsoft::WRL::ComPtr<ID2D1DCRenderTarget> d2dTarget;
+    bool smoothRendering=false;
+    HWND toolWindow=nullptr,toolInput=nullptr,toolList=nullptr;
+    HFONT toolFont=nullptr;
+    HBRUSH toolBrush=nullptr;
+    int toolDpi=96;
+    int toolPage=0;
+    std::wstring toolPath;
     std::uint32_t unknownSizes=0, orphanRecords=0;
     int depth = 1;
     double splitRatio = .58;
@@ -411,9 +463,15 @@ struct ViewerState {
     ULONGLONG scanStarted = 0;
     std::shared_ptr<ScanResult> completeResult, partialResult;
     RECT rcHistBack={}, rcHistForward={}, rcAddressEdit={}, rcSource={}, rcProgress={}, rcPreview={};
-    RECT rcOverview={}, rcChartPane={}, rcChartTools={}, rcDepth={}, rcDivider={}, rcDetail={};
-    RECT rcEnter={}, rcLocate={}, rcFilter={}, rcSortName={}, rcSortSize={}, rcListFoot={};
+    RECT rcOverview={}, rcChartPane={}, rcChartTools={}, rcDepth1={}, rcDepth2={}, rcDivider={}, rcDetail={};
+    RECT rcEnter={}, rcLocate={}, rcFilter={}, rcSortName={}, rcSortSize={}, rcSortPct={}, rcListFoot={};
     RECT rcPrevious={}, rcNext={}, rcShowChart={}, rcShowList={}, rcTheme={}, rcAccounting={}, rcDrive={};
+    RECT rcParent={},rcParentRow={},rcAncestors={},rcHelp={},rcCommands={},rcMore={},rcPause={};
+    RECT rcZoomIn={},rcZoomOut={},rcFit={},rcZoomLabel={},rcPanUp={},rcPanDown={},rcPanLeft={},rcPanRight={},rcPanHome={};
+    // Compact layout: one title row, one nav row, one chart toolbar row, and a
+    // two-line status bar. The old source/overview/detail rows are gone; their
+    // information lives in the toolbar and the status bar.
+    RECT rcTitle={}, rcNav={}, rcChartBar={}, rcHeading={}, rcStatusKeys={}, rcBudget={}, rcIssues={};
     // Aggregation owns only minorItems synthetic nodes; data nodes remain in the immutable scan tree.
     std::deque<Node> groups;
     std::vector<std::pair<const Node*, std::vector<const Node*>>> groupMembers;
@@ -430,6 +488,49 @@ inline ViewerState& state()
 }
 
 inline int S(int v, const ViewerState& s) { return MulDiv(v, s.dpi, 96); }
+
+// Transient messages surface as a toast in the chart pane's corner and clear
+// themselves; nothing is reserved for them in the layout.
+inline void setNotice(ViewerState& s,const std::wstring& text)
+{
+    if(s.hwnd)::KillTimer(s.hwnd,3);
+    s.notice=text;
+    if(!text.empty()&&s.hwnd)::SetTimer(s.hwnd,3,4000,nullptr);
+    if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+inline void clearNotice(ViewerState& s)
+{
+    if(s.notice.empty())return;
+    s.notice.clear();
+    if(s.hwnd)::KillTimer(s.hwnd,3);
+    if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+
+enum class Command : UINT { Enter=2000,Parent,Ancestors,Locate,Explorer,Copy,CopyFile,CutFile,Properties,Rescan,Exclude,Recycle,DeletePermanently,Help,Commands,FocusChart,FocusList,Fit,Issues,Accounting,Diagnostics };
+inline void performCommand(ViewerState&,Command);
+inline void showTools(ViewerState&,int,const std::wstring& = L"");
+inline void contextMenu(ViewerState&,POINT);
+inline void focusPane(ViewerState&,bool);
+inline void directionSelect(ViewerState&,UINT);
+inline void showAncestors(ViewerState&);
+inline void clampPan(ViewerState& s) {
+    const double x=std::max(0.0,(s.rcChart.right-s.rcChart.left)*(s.zoom-1)/2);
+    const double y=std::max(0.0,(s.rcChart.bottom-s.rcChart.top)*(s.zoom-1)/2);
+    s.panX=std::clamp(s.panX,-x,x);s.panY=std::clamp(s.panY,-y,y);
+}
+inline void chartZoom(ViewerState& s,double amount,bool fit=false) {
+    s.zoom=fit?1:std::clamp(s.zoom+amount,1.0,4.0);if(fit)s.panX=s.panY=0;clampPan(s);
+    s.tipVisible=false;if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);
+}
+inline Rect chartRect(const ViewerState& s,Rect r) {
+    const double cx=(s.rcChart.left+s.rcChart.right)/2.0,cy=(s.rcChart.top+s.rcChart.bottom)/2.0;
+    return {cx+(r.x-cx)*s.zoom+s.panX,cy+(r.y-cy)*s.zoom+s.panY,r.w*s.zoom,r.h*s.zoom};
+}
+struct ChartPoint {double x,y;};
+inline ChartPoint chartInverse(const ViewerState& s,int x,int y) {
+    const double cx=(s.rcChart.left+s.rcChart.right)/2.0,cy=(s.rcChart.top+s.rcChart.bottom)/2.0;
+    return {cx+(x-cx-s.panX)/s.zoom,cy+(y-cy-s.panY)/s.zoom};
+}
 
 inline std::wstring joinPath(const std::wstring& base, const std::wstring& name)
 {
@@ -533,12 +634,25 @@ inline void ensureDpiAwareness()
     (void)done;
 }
 
-inline HFONT makeOneFont(int pt, bool bold, int dpi, bool zh=false)
+// Font tokens, in CSS pixels at 96 dpi, the same scale the HTML prototype
+// uses. Everything else in the window is measured in these pixels too, so
+// the native build and the prototype stay comparable.
+namespace fontpx {
+inline constexpr int body = 13;   // body text, list rows, buttons
+inline constexpr int caption = 12;  // column heads, hints, secondary text
+inline constexpr int micro = 11;  // tile labels, the chart budget
+}
+
+// The HTML prototype's font stack is "Segoe UI","Microsoft YaHei UI". Asking
+// GDI for Segoe UI and letting it link the Chinese glyphs to YaHei UI gives
+// the same mix: Latin from Segoe UI, Chinese from YaHei UI.
+inline constexpr const wchar_t* kUiFontFace = L"Segoe UI";
+
+inline HFONT makeOneFont(int px, int weight, int dpi)
 {
-    const int px = -MulDiv(pt, dpi, 72);
-    return ::CreateFontW(px, 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                         DEFAULT_PITCH | FF_DONTCARE, zh?L"Microsoft YaHei UI":L"Segoe UI");
+    return ::CreateFontW(-MulDiv(px, dpi, 96), 0, 0, 0, weight, FALSE, FALSE, FALSE,
+                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, kUiFontFace);
 }
 
 inline void applyEditFont(ViewerState& s)
@@ -547,7 +661,7 @@ inline void applyEditFont(ViewerState& s)
         return;
     if (s.editFont)
         ::DeleteObject(s.editFont);
-    s.editFont = makeOneFont(10, false, s.dpi, s.spec.zh);
+    s.editFont = makeOneFont(fontpx::body, FW_NORMAL, s.dpi);
     ::SendMessageW(s.edit, WM_SETFONT, reinterpret_cast<WPARAM>(s.editFont), TRUE);
 }
 
@@ -555,15 +669,16 @@ inline void makeFonts(ViewerState& s)
 {
     if (s.font)
         ::DeleteObject(s.font);
-    if (s.fontBold)
-        ::DeleteObject(s.fontBold);
+    if (s.fontMedium)
+        ::DeleteObject(s.fontMedium);
     if (s.fontSmall)
         ::DeleteObject(s.fontSmall);
-    s.font = makeOneFont(10, false, s.dpi, s.spec.zh);
-    s.fontBold = makeOneFont(11, true, s.dpi, s.spec.zh);
-    s.fontSmall = makeOneFont(9, false, s.dpi, s.spec.zh);
-    if(s.fontHeading)::DeleteObject(s.fontHeading);
-    s.fontHeading=makeOneFont(15,true,s.dpi,s.spec.zh);
+    if (s.fontMicro)
+        ::DeleteObject(s.fontMicro);
+    s.font = makeOneFont(fontpx::body, FW_NORMAL, s.dpi);
+    s.fontMedium = makeOneFont(fontpx::body, FW_SEMIBOLD, s.dpi);
+    s.fontSmall = makeOneFont(fontpx::caption, FW_NORMAL, s.dpi);
+    s.fontMicro = makeOneFont(fontpx::micro, FW_NORMAL, s.dpi);
     applyEditFont(s);
     if(s.filterEdit)::SendMessageW(s.filterEdit,WM_SETFONT,reinterpret_cast<WPARAM>(s.font),TRUE);
 }
@@ -574,39 +689,96 @@ inline int maxRows(const ViewerState& s) {
 }
 inline void computeLayout(ViewerState& s) {
     ::GetClientRect(s.hwnd,&s.rcClient);
-    const int w=s.rcClient.right,h=s.rcClient.bottom,m=S(16,s),gap=S(6,s),bh=S(32,s);
+    const int w=s.rcClient.right,h=s.rcClient.bottom,m=S(8,s),gap=S(6,s);
     const bool compact=w<S(560,s);
-    s.narrow=w<S(760,s); s.rowH=S(37,s); s.topHeaderH=S(122,s);s.statusH=S(26,s);
-    const int nav=S(52,s), addressY=compact?nav+bh+gap:nav;
-    s.rcHistBack={m,nav,m+bh,nav+bh};
-    s.rcHistForward={m+bh+gap,nav,m+2*bh+gap,nav+bh};
-    s.rcBack={m+2*(bh+gap),nav,m+3*bh+2*gap,nav+bh};
-    s.rcScan={w-m-S(100,s),nav,w-m,nav+bh};
-    s.rcTheme={w-m-S(60,s),S(8,s),w-m,S(38,s)};
-    s.rcEdit={compact?m:s.rcBack.right+gap,addressY,compact?w-m:s.rcScan.left-gap,addressY+bh};
-    s.rcAddressEdit={s.rcEdit.right-S(66,s),addressY,s.rcEdit.right,addressY+bh};
-    s.rcSource={m,s.rcEdit.bottom+S(10,s),w-m,s.rcEdit.bottom+S(40,s)};
-    s.rcDrive={m,s.rcSource.top,m+S(100,s),s.rcSource.bottom};
-    s.rcAccounting={s.rcDrive.right+S(8,s),s.rcSource.top,w-m-S(110,s),s.rcSource.bottom};
-    s.rcSkipped={w-m-S(110,s),s.rcSource.top,w-m,s.rcSource.bottom};
-    int y=s.rcSource.bottom+S(10,s);
-    s.rcProgress={};s.rcPreview={};
-    if(s.scanning) {
-        s.rcProgress={m,y,w-m,y+S(compact?110:92,s)};
-        s.rcPreview={w-m-S(142,s),y+S(10,s),w-m-S(10,s),y+S(38,s)};
-        y=s.rcProgress.bottom+S(10,s);
-    }
-    if(!s.notice.empty()) y+=S(28,s);
-    s.rcOverview={m,y,w-m,y+S(38,s)}; y=s.rcOverview.bottom;
+    s.narrow=w<S(760,s); s.rowH=S(28,s); s.statusH=S(26,s);
+
+    // ---- row 1: title bar (brand, theme, keys, actions) ----
+    const int titleH=S(32,s);
+    s.rcTitle={0,0,w,titleH};
+    s.rcTheme={w-m-S(60,s),S(3,s),w-m,S(29,s)};
+    s.rcHelp={s.rcTheme.left-S(62,s),S(3,s),s.rcTheme.left-S(5,s),S(29,s)};
+    s.rcCommands={s.rcHelp.left-S(62,s),S(3,s),s.rcHelp.left-S(5,s),S(29,s)};
+
+    // ---- row 2: history, address, drive, scan ----
+    const int navY=titleH, navH=S(34,s);
+    s.rcNav={0,navY,w,navY+navH};
+    const int ny=navY+S(4,s), nb=navH-S(8,s);
+    s.rcHistBack={m,ny,m+nb,ny+nb};
+    s.rcHistForward={m+nb+gap,ny,m+2*nb+gap,ny+nb};
+    s.rcBack={m+2*(nb+gap),ny,m+3*nb+2*gap,ny+nb};
+    s.rcScan={w-m-S(96,s),ny,w-m,ny+nb};
+    // The drive button widens for the "pick a drive" label, which is longer than "C: ▾".
+    s.rcDrive={s.rcScan.left-gap-S(s.tree?74:104,s),ny,s.rcScan.left-gap,ny+nb};
+    s.rcEdit={compact?m:s.rcBack.right+gap,ny,s.rcDrive.left-gap,ny+nb};
+    if(compact){s.rcEdit={m,ny+S(30,s),w-m,ny+S(30,s)+nb};}
+    s.rcAddressEdit={}; // editing starts by clicking the address bar or Ctrl+L
+
+    // ---- row 3: one compact chart toolbar ----
+    const int barY=compact?navY+navH+S(34,s):navY+navH;
+    const int barH=s.narrow?S(60,s):S(30,s);
+    s.rcChartBar={0,barY,w,barY+barH};
+    const int by=barY+S(3,s), bb=S(24,s);
+    s.rcParent={m,by,m+S(compact?150:190,s),by+bb};
+    s.rcAncestors={}; // folded into the breadcrumb's "…" entry
+    s.rcHeading={s.rcParent.right+S(8,s),by,0,by+bb};
     s.rcShowChart=s.rcShowList={};
-    if(s.narrow && s.tree) {
-        s.rcShowChart={m,y,m+S(80,s),y+bh};s.rcShowList={m+S(84,s),y,m+S(164,s),y+bh};y+=bh+S(8,s);
+    // Right-hand view controls, laid out from the right edge backwards. The
+    // order matches the prototype: [方块|圆盘] then [1层|2层].
+    int rx=w-m;
+    s.rcSunburstBtn={};s.rcTreemapBtn={};s.rcDepth1={};s.rcDepth2={};
+    if(s.tree){
+        // The two segmented pairs sit flush like the prototype's .seg.
+        s.rcSunburstBtn={rx-S(50,s),by,rx,by+bb};rx=s.rcSunburstBtn.left;
+        s.rcTreemapBtn={rx-S(50,s),by,rx,by+bb};rx=s.rcTreemapBtn.left-gap;
+        s.rcDepth2={rx-S(44,s),by,rx,by+bb};rx=s.rcDepth2.left;
+        s.rcDepth1={rx-S(44,s),by,rx,by+bb};rx=s.rcDepth1.left-gap;
+        if(s.narrow) {
+            // Narrow: the view controls move to their own second line so the
+            // current folder name keeps real width. Same order, wrapped.
+            const int ry=by+bb+S(4,s);
+            rx=w-m;
+            s.rcShowList={rx-S(64,s),ry,rx,ry+bb};rx=s.rcShowList.left-gap;
+            s.rcShowChart={rx-S(64,s),ry,rx,ry+bb};rx=s.rcShowChart.left;
+            s.rcDepth2={rx-S(44,s),ry,rx,ry+bb};rx=s.rcDepth2.left;
+            s.rcDepth1={rx-S(44,s),ry,rx,ry+bb};rx=s.rcDepth1.left;
+            s.rcSunburstBtn={rx-S(50,s),ry,rx,ry+bb};rx=s.rcSunburstBtn.left;
+            s.rcTreemapBtn={rx-S(50,s),ry,rx,ry+bb};rx=s.rcTreemapBtn.left-gap;
+            s.rcHeading.right=w-m;
+        } else {
+            s.rcHeading.right=s.rcDepth1.left-gap;
+        }
+    } else s.rcHeading.right=w-m;
+    if(s.rcHeading.right<s.rcHeading.left)s.rcHeading.right=s.rcHeading.left;
+
+    // ---- content ----
+    int y=s.rcChartBar.bottom;
+    s.rcProgress={};s.rcPreview={};s.rcPause={};
+    if(s.scanning) {
+        s.rcProgress={m,y,w-m,y+S(compact?104:88,s)};
+        s.rcPreview={w-m-S(136,s),y+S(8,s),w-m-S(8,s),y+S(34,s)};
+        s.rcPause={s.rcPreview.left-S(56,s),y+S(8,s),s.rcPreview.left-S(5,s),y+S(34,s)};
+        y=s.rcProgress.bottom+S(6,s);
     }
+    s.rcSource={};s.rcOverview={};s.rcSkipped={};s.rcAccounting={};
     s.toolbarH=y;s.rcToolbar={0,0,w,y};
-    s.rcStatus={m,h-s.statusH,w-m,h};
-    const int detailHeight=S(s.narrow?146:108,s);
-    s.rcDetail={m,h-s.statusH-detailHeight,w-m,h-s.statusH-S(8,s)};
-    const int bottom=s.tree?s.rcDetail.top-S(12,s):h-s.statusH-S(10,s);
+
+    // ---- status bar: two lines, replaces the old detail panel ----
+    const int statusH=S(compact?52:44,s);
+    s.rcStatus={0,h-statusH,w,h};
+    s.rcStatusKeys={m,h-S(20,s),w-m,h-S(4,s)};
+    s.rcBudget={w-m-S(compact?0:170,s),s.rcStatusKeys.top,w-m,s.rcStatusKeys.bottom};
+    s.rcDetail={}; // folded into the status bar
+    s.rcEnter={};s.rcLocate={};s.rcMore={};s.rcIssues={};
+    // The status bar's own action buttons live on its first line, right-aligned,
+    // with the read-issue badge in front of them.
+    const int actY=s.rcStatus.top+S(3,s), actB=S(22,s);
+    s.rcMore={w-m-S(58,s),actY,w-m,actY+actB};
+    s.rcLocate={s.rcMore.left-gap-S(52,s),actY,s.rcMore.left-gap,actY+actB};
+    s.rcEnter={s.rcLocate.left-gap-S(52,s),actY,s.rcLocate.left-gap,actY+actB};
+    s.rcIssues={s.rcEnter.left-gap-S(118,s),actY,s.rcEnter.left-gap,actY+actB};
+
+    const int bottom=s.tree?s.rcStatus.top-S(6,s):s.rcStatus.top-S(6,s);
     s.rcContent={m,y,w-m,std::max(y+S(80,s),bottom)};
     s.rcTopList={};s.rcDivider={};s.rcChartPane=s.rcContent;
     if(s.tree) {
@@ -619,38 +791,51 @@ inline void computeLayout(ViewerState& s) {
             s.rcTopList={s.rcDivider.right,y,w-m,s.rcContent.bottom};
         }
     }
+    // The chart fills its pane: no in-pane tool rows and no pan/zoom buttons.
     s.rcChart=s.rcChartPane;
-    s.rcChart.top+=S(94,s);s.rcChart.bottom-=S(32,s);
-    s.rcChart.left+=S(10,s);s.rcChart.right-=S(10,s);
-    s.rcTreemapBtn=s.rcSunburstBtn=s.rcDepth={};
-    if(s.rcChartPane.right>s.rcChartPane.left) {
-        const int right=s.rcChartPane.right-S(12,s);
-        s.rcSunburstBtn={right-S(54,s),y+S(9,s),right,y+S(38,s)};
-        s.rcTreemapBtn={right-S(112,s),y+S(9,s),right-S(58,s),y+S(38,s)};
-        s.rcDepth={s.rcChartPane.left+S(12,s),y+S(55,s),s.rcChartPane.left+S(122,s),y+S(82,s)};
-    }
-    s.rcListFiles=s.rcListFolders=s.rcFilter=s.rcSortName=s.rcSortSize=s.rcListFoot=s.rcPrevious=s.rcNext={};
+    ::InflateRect(&s.rcChart,-1,-1);
+    s.rcZoomIn=s.rcZoomOut=s.rcZoomLabel=s.rcFit={};
+    s.rcPanUp=s.rcPanDown=s.rcPanLeft=s.rcPanRight=s.rcPanHome={};
+
+    s.rcParentRow={};
+    s.rcListFiles=s.rcListFolders=s.rcFilter=s.rcSortName=s.rcSortSize=s.rcSortPct=s.rcListFoot=s.rcPrevious=s.rcNext={};
+    s.topHeaderH=0;
     if(s.rcTopList.right>s.rcTopList.left) {
-        const int left=s.rcTopList.left+S(12,s),right=s.rcTopList.right-S(12,s);
-        s.rcListFolders={left,y+S(9,s),left+S(70,s),y+S(38,s)};
-        s.rcListFiles={left+S(74,s),y+S(9,s),left+S(158,s),y+S(38,s)};
-        s.rcFilter={left,y+S(58,s),right,y+S(86,s)};
-        s.rcSortName={left,y+S(96,s),right-S(140,s),y+S(122,s)};
-        s.rcSortSize={right-S(140,s),y+S(96,s),right,y+S(122,s)};
-        s.rcListFoot={left,s.rcTopList.bottom-S(30,s),right,s.rcTopList.bottom};
-        s.rcNext={right-S(54,s),s.rcListFoot.top,right,s.rcListFoot.bottom};
-        s.rcPrevious={right-S(112,s),s.rcListFoot.top,right-S(58,s),s.rcListFoot.bottom};
+        const int left=s.rcTopList.left+S(8,s),right=s.rcTopList.right-S(8,s);
+        // The head is one row: the mode tabs and the filter field side by
+        // side, then the column heads, like the prototype's list pane.
+        const int headTop=s.rcTopList.top+S(6,s),headH=S(24,s);
+        s.rcListFolders={left,headTop,left+S(66,s),headTop+headH};
+        s.rcListFiles={left+S(66,s),headTop,left+S(132,s),headTop+headH};
+        s.rcFilter={left+S(138,s),headTop,right,headTop+headH};
+        const int colTop=headTop+headH+S(6,s),colH=S(22,s);
+        s.rcSortName={left,colTop,right-S(144,s),colTop+colH};
+        s.rcSortSize={right-S(136,s),colTop,right-S(52,s),colTop+colH};
+        s.rcSortPct={right-S(52,s),colTop,right,colTop+colH};
+        const int headBottom=colTop+colH;
+        s.topHeaderH=headBottom-s.rcTopList.top;
+        if(s.viewRoot!=s.tree.get()) {
+            s.rcParentRow={s.rcTopList.left+1,headBottom,s.rcTopList.right-1,headBottom+s.rowH};
+            s.topHeaderH+=s.rowH;
+        }
+        s.rcListFoot={left,s.rcTopList.bottom-S(28,s),right,s.rcTopList.bottom};
+        s.rcNext={right-S(52,s),s.rcListFoot.top,right,s.rcListFoot.bottom};
+        s.rcPrevious={right-S(108,s),s.rcListFoot.top,right-S(56,s),s.rcListFoot.bottom};
     }
-    const int actionY=s.narrow?s.rcDetail.bottom-S(38,s):s.rcDetail.top+S(12,s);
-    const int actionX=s.narrow?s.rcDetail.left+S(12,s):s.rcDetail.right-S(232,s);
-    s.rcEnter={actionX,actionY,actionX+S(100,s),actionY+bh};
-    s.rcLocate={actionX+S(106,s),actionY,actionX+S(220,s),actionY+bh};
+    clampPan(s);
+    // Move the child edits only when their rectangle really changed: a move
+    // repaints them, and the filter field's hint flashes on every repaint.
+    const auto placeChild=[](HWND child,RECT& last,const RECT& target) {
+        if(last.left==target.left&&last.top==target.top&&last.right==target.right&&last.bottom==target.bottom)return;
+        last=target;
+        ::MoveWindow(child,target.left,target.top,std::max(1L,target.right-target.left),std::max(1L,target.bottom-target.top),FALSE);
+    };
     if(s.edit) {
-        ::MoveWindow(s.edit,s.rcEdit.left+1,s.rcEdit.top+1,s.rcEdit.right-s.rcEdit.left-2,bh-2,TRUE);
+        placeChild(s.edit,s.lastEditRect,{s.rcEdit.left+1,s.rcEdit.top+1,std::max(s.rcEdit.left+2,s.rcEdit.right-1),std::max(s.rcEdit.top+2,s.rcEdit.bottom-1)});
         ::ShowWindow(s.edit,(!s.tree||s.editingAddress)?SW_SHOW:SW_HIDE);
     }
     if(s.filterEdit) {
-        ::MoveWindow(s.filterEdit,s.rcFilter.left+1,s.rcFilter.top+1,std::max(0L,s.rcFilter.right-s.rcFilter.left-2),S(28,s)-2,TRUE);
+        placeChild(s.filterEdit,s.lastFilterRect,{s.rcFilter.left+1,s.rcFilter.top+1,std::max(s.rcFilter.left+2,s.rcFilter.right-1),std::max(s.rcFilter.top+2,s.rcFilter.bottom-1)});
         ::ShowWindow(s.filterEdit,s.rcFilter.right>s.rcFilter.left?SW_SHOW:SW_HIDE);
     }
 }
@@ -668,9 +853,13 @@ inline std::vector<FocusTarget> focusTargets(const ViewerState& s) {
         for(const auto& crumb:s.crumbRects)add(crumb);
         add(s.rcAddressEdit);
     }
-    add(s.rcScan);add(s.rcDrive);add(s.rcAccounting);add(s.rcSkipped);add(s.rcTheme);
+    add(s.rcParent,s.viewRoot&&s.viewRoot!=s.tree.get());
+    add(s.rcHelp);add(s.rcCommands);add(s.rcMore,s.selected!=nullptr);
+    add(s.rcPause,s.scanning);add(s.rcParentRow);
+    add(s.rcChart,s.tree!=nullptr);
+    add(s.rcScan);add(s.rcDrive);add(s.rcTheme);add(s.rcIssues);
     add(s.rcPreview,s.scanning);add(s.rcShowChart);add(s.rcShowList);
-    add(s.rcTreemapBtn,s.tree!=nullptr);add(s.rcSunburstBtn,s.tree!=nullptr);add(s.rcDepth,s.tree!=nullptr);
+    add(s.rcTreemapBtn,s.tree!=nullptr);add(s.rcSunburstBtn,s.tree!=nullptr);add(s.rcDepth1,s.tree!=nullptr);add(s.rcDepth2,s.tree!=nullptr);
     add(s.rcListFolders);add(s.rcListFiles);add(s.rcFilter,true,s.filterEdit);
     add(s.rcSortName);add(s.rcSortSize);
     RECT rows=s.rcTopList;rows.top+=s.topHeaderH;rows.bottom=s.rcListFoot.top;
@@ -690,6 +879,7 @@ inline void cycleFocus(ViewerState& s,int direction) {
     s.focusIndex=(index+direction+int(targets.size()))%int(targets.size());
     s.keyboardFocus=true;
     const auto& target=targets[s.focusIndex];
+    if(target.list)s.focusList=true;else if(::EqualRect(&target.rect,&s.rcChart))s.focusList=false;
     ::SetFocus(target.child?target.child:s.hwnd);
     ::InvalidateRect(s.hwnd,nullptr,FALSE);
 }
@@ -762,7 +952,7 @@ inline void joinScanThread(ViewerState& s)
 }
 
 
-inline void scanThreadMain(HWND hwnd,std::wstring path,bool fast) {
+inline void scanThreadMain(HWND hwnd,std::wstring path,bool fast,ScanOptions options) {
     ViewerState& s=state();auto* result=new ScanResult();
     try {
         ULONGLONG lastPost=0;
@@ -772,19 +962,20 @@ inline void scanThreadMain(HWND hwnd,std::wstring path,bool fast) {
             const auto now=::GetTickCount64();if(now-lastPost<100)return true;lastPost=now;
             auto* copy=new ScanProgress(p);copy->fallbackReason=fallback;if(!::PostMessageW(hwnd,WM_APP_PROGRESS,0,reinterpret_cast<LPARAM>(copy)))delete copy;return true;
         };
-        const SnapshotFn snapshot=[hwnd](std::shared_ptr<ScanResult> part) {
+        const SnapshotFn snapshot=[hwnd,&s](std::shared_ptr<ScanResult> part) {
+            if(s.snapshotPending.exchange(true))return;
             auto* packet=new std::shared_ptr<ScanResult>(std::move(part));
-            if(!::PostMessageW(hwnd,WM_APP_PARTIAL,0,reinterpret_cast<LPARAM>(packet)))delete packet;
+            if(!::PostMessageW(hwnd,WM_APP_PARTIAL,0,reinterpret_cast<LPARAM>(packet))){delete packet;s.snapshotPending=false;}
         };
         bool ordinary=true;
         if(fast) {
             std::wstring reason;
-            const auto outcome=helper::scan(hwnd,path,progress,snapshot,s.cancelFlag,*result,reason);
+            const auto outcome=helper::scan(hwnd,path,progress,snapshot,s.cancelFlag,*result,reason,options);
             ordinary=outcome==helper::Outcome::Fallback;
             if(outcome==helper::Outcome::Cancelled)result->cancelled=true;
             if(ordinary){fallback=reason;ScanProgress pg;pg.current=path;lastPost=0;progress(pg);}
         }
-        if(ordinary&&!s.cancelFlag)scanPath(path,progress,s.cancelFlag,result,snapshot);
+        if(ordinary&&!s.cancelFlag)scanPath(path,progress,s.cancelFlag,result,snapshot,options);
         else if(s.cancelFlag)result->cancelled=true;
         result->fallbackReason=fallback;
     } catch(const std::exception& e){result->error=std::string("Scan failed: ")+e.what();}
@@ -807,17 +998,11 @@ inline void startScan(ViewerState& s, const std::wstring& rawPath)
         return;
     }
 
-    bool fast=false;
-    if(mft::eligible(display)) {
-        const int choice=::MessageBoxW(s.hwnd,s.spec.zh?
-            L"快速扫描只读取 NTFS 文件记录，不读取文件内容。\r\n仅独立扫描助手按需申请管理员权限，主界面保持普通权限。\r\n\r\n是：授权快速扫描\r\n否：普通扫描\r\n取消：返回\r\n拒绝 Windows 授权或助手失败时将自动使用普通扫描。":
-            L"Fast scanning reads NTFS metadata only. Only the short-lived helper requests administrator access; this window stays unelevated.\r\n\r\nYes: fast scan\r\nNo: standard scan\r\nCancel: return\r\nDeclining Windows authorization or a helper failure falls back to standard scanning.",
-            s.spec.zh?L"选择扫描方式":L"Choose scan mode",MB_YESNOCANCEL|MB_ICONINFORMATION);
-        if(choice==IDCANCEL)return;fast=choice==IDYES;
-    }
+    const bool fast=s.scanMode!=2&&mft::eligible(display);
+    s.pauseFlag=false;s.snapshotPending=false;s.scanOptions.paused=&s.pauseFlag;
     s.scanning = true;
     s.scanStarted=::GetTickCount64();s.partialResult.reset();s.partialView=!s.completeResult;
-    s.notice.clear();s.pendingPath.clear();s.editingAddress=false;
+    clearNotice(s);s.pendingPath.clear();s.editingAddress=false;
     ::SetTimer(s.hwnd,1,100,nullptr);
     s.cancelled = false;
     s.lastScanError.clear();
@@ -831,7 +1016,7 @@ inline void startScan(ViewerState& s, const std::wstring& rawPath)
     computeLayout(s);
     relayoutView(s);
     joinScanThread(s);
-    s.scanThread = std::thread(scanThreadMain, s.hwnd, display,fast);
+    s.scanThread = std::thread(scanThreadMain, s.hwnd, display,fast,s.scanOptions);
     ::InvalidateRect(s.hwnd, nullptr, FALSE);
 }
 
@@ -839,6 +1024,11 @@ inline void saveConfigNow(const ViewerState& s)
 {
     ViewConfig c;
     c.lastPath = s.lastPath;
+    c.scanMode = s.scanMode;
+    c.workers = s.scanOptions.workers;
+    c.media = int(s.scanOptions.media);
+    c.previewIntervalMs = s.scanOptions.previewIntervalMs;
+    c.excludedPaths = s.scanOptions.excludedPaths;
     c.hasFile = true;
     saveViewConfig(s.spec.dataDir, c);
 }
@@ -873,6 +1063,7 @@ inline void drawButton(ViewerState& s, HDC hdc, const RECT& r, const std::wstrin
     const bool disabled=(&r==&s.rcHistBack&&s.historyIndex<=0)
         ||(&r==&s.rcHistForward&&s.historyIndex+1>=int(s.history.size()))
         ||(&r==&s.rcBack&&(!s.viewRoot||s.viewRoot==s.tree.get()))
+        ||((&r==&s.rcParent||&r==&s.rcAncestors)&&(!s.viewRoot||s.viewRoot==s.tree.get()))
         ||(&r==&s.rcEnter&&(!s.selected||!s.selected->dir))
         ||(&r==&s.rcLocate&&!s.selected)
         ||(&r==&s.rcPrevious&&s.topScroll==0)
@@ -922,7 +1113,7 @@ inline void drawTiles(ViewerState& s, HDC hdc)
 {
     for (std::size_t i = 0; i < s.tiles.size(); ++i) {
         const Tile& t = s.tiles[i];
-        const RECT r = toRect(t.rect);
+        const RECT r = toRect(chartRect(s,t.rect));
         if (r.right <= r.left || r.bottom <= r.top)
             continue;
         COLORREF fill =
@@ -934,16 +1125,19 @@ inline void drawTiles(ViewerState& s, HDC hdc)
         RECT rr = r;
         ::InflateRect(&rr, -S(4, s), -S(2, s));
         const int w = rr.right - rr.left, h = rr.bottom - rr.top;
-        if (w >= S(48, s) && h >= S(15, s)) {
+        if (w >= S(48, s) && h >= S(14, s)) {
             const COLORREF text = tileText(fill);
+            // Tile labels are micro sized, like the prototype's canvas labels.
+            const auto oldFont = ::SelectObject(hdc, s.fontMicro);
             drawTextIn(hdc, t.node->name, rr, text, DT_LEFT | DT_END_ELLIPSIS);
-            if (h >= S(40, s) && !(t.node->dir && s.depth==2 && t.depth==0)) {
+            if (h >= S(32, s) && !(t.node->dir && s.depth==2 && t.depth==0)) {
                 RECT sr = rr;
-                sr.top += S(14, s);
+                sr.top += S(13, s);
                 const COLORREF sub = s.palette.dark ? lighten(text, -70) : lighten(text, 70);
                 drawTextIn(hdc, winshun::wide(formatBytes(t.node->logical, s.spec.zh)), sr, sub,
                            DT_LEFT | DT_END_ELLIPSIS);
             }
+            ::SelectObject(hdc, oldFont);
         }
         if (t.node == s.hovered || t.node == s.selected) {
             frameWith(hdc, r, s.palette.accent);
@@ -954,12 +1148,12 @@ inline void drawTiles(ViewerState& s, HDC hdc)
     }
 }
 
-inline void drawSlices(ViewerState& s, HDC hdc)
+inline void drawSlicesFallback(ViewerState& s, HDC hdc)
 {
     if (s.slices.empty())
         return;
-    const double cx = (s.rcChart.left + s.rcChart.right) / 2.0;
-    const double cy = (s.rcChart.top + s.rcChart.bottom) / 2.0;
+    const double cx = (s.rcChart.left + s.rcChart.right) / 2.0+s.panX;
+    const double cy = (s.rcChart.top + s.rcChart.bottom) / 2.0+s.panY;
     HGDIOBJ oldBrush = ::SelectObject(hdc, ::GetStockObject(DC_BRUSH));
     HGDIOBJ oldPen = ::SelectObject(hdc, ::GetStockObject(DC_PEN));
     for (std::size_t i = 0; i < s.slices.size(); ++i) {
@@ -975,67 +1169,84 @@ inline void drawSlices(ViewerState& s, HDC hdc)
         pts.reserve(static_cast<std::size_t>(steps) * 2 + 2);
         for (int k = 0; k <= steps; ++k) {
             const double a = sl.a0 + (sl.a1 - sl.a0) * k / steps;
-            pts.push_back({static_cast<LONG>(std::lround(cx + std::cos(a) * sl.r1)),
-                           static_cast<LONG>(std::lround(cy + std::sin(a) * sl.r1))});
+            pts.push_back({static_cast<LONG>(std::lround(cx + std::cos(a) * sl.r1*s.zoom)),
+                           static_cast<LONG>(std::lround(cy + std::sin(a) * sl.r1*s.zoom))});
         }
         for (int k = steps; k >= 0; --k) {
             const double a = sl.a0 + (sl.a1 - sl.a0) * k / steps;
-            pts.push_back({static_cast<LONG>(std::lround(cx + std::cos(a) * sl.r0)),
-                           static_cast<LONG>(std::lround(cy + std::sin(a) * sl.r0))});
+            pts.push_back({static_cast<LONG>(std::lround(cx + std::cos(a) * sl.r0*s.zoom)),
+                           static_cast<LONG>(std::lround(cy + std::sin(a) * sl.r0*s.zoom))});
         }
         ::Polygon(hdc, pts.data(), static_cast<int>(pts.size()));
     }
     ::SelectObject(hdc, oldBrush);
     ::SelectObject(hdc, oldPen);
 
-    // The center hole names what is on display and its total: the name above
-    // the center line, the total below.
-    const std::wstring name = s.viewRoot ? s.viewRoot->name : std::wstring();
-    const std::wstring total = winshun::wide(formatBytes(s.viewRoot ? s.viewRoot->logical : 0, s.spec.zh));
-    if(s.slices.front().r0<S(32,s))return;
-    const auto inner=std::min<double>(s.slices.front().r0*.8,S(80,s));
-    const RECT hole {static_cast<LONG>(cx - inner), static_cast<LONG>(cy - S(26, s)),
-                     static_cast<LONG>(cx + inner), static_cast<LONG>(cy + S(26, s))};
-    RECT nr = hole;
-    nr.bottom = static_cast<LONG>(cy);
-    RECT tr = hole;
-    tr.top = static_cast<LONG>(cy);
-    HGDIOBJ oldFont = ::SelectObject(hdc, s.fontBold);
-    drawTextIn(hdc, name, nr, s.palette.text, DT_CENTER | DT_BOTTOM | DT_END_ELLIPSIS);
-    ::SelectObject(hdc, oldFont);
-    drawTextIn(hdc, total, tr, s.palette.muted, DT_CENTER | DT_TOP | DT_END_ELLIPSIS);
 }
 
+
+#include "viewer_drawing.h"
 
 inline std::wstring share(const ViewerState& s,std::uint64_t bytes) {
     wchar_t b[40];std::swprintf(b,40,L"%.1f%%",s.viewRoot&&s.viewRoot->logical?100.0*bytes/s.viewRoot->logical:0.0);return b;
 }
+// The three list columns. The head and the rows share them, so the headings
+// always line up with the values under them.
+struct ListColumns { RECT name, size, pct; };
+inline ListColumns listColumns(const ViewerState& s) {
+    const int right=s.rcTopList.right-S(8,s);
+    ListColumns c;
+    c.pct={right-S(52,s),0,right,0};
+    c.size={right-S(136,s),0,right-S(52,s),0};
+    c.name={s.rcTopList.left+S(8,s),0,c.size.left-S(8,s),0};
+    return c;
+}
 inline void drawTopList(ViewerState& s,HDC dc) {
     fillWith(dc,s.rcTopList,s.palette.panel);frameWith(dc,s.rcTopList,s.palette.border);
-    fillWith(dc,s.rcFilter,s.palette.input);frameWith(dc,s.rcFilter,s.palette.border);
+    const auto cols=listColumns(s);
+    // The head row: the mode tabs and the filter field, side by side.
+    frameWith(dc,{s.rcListFolders.left,s.rcListFolders.top,s.rcListFiles.right,s.rcListFolders.bottom},s.palette.border);
     drawButton(s,dc,s.rcListFolders,s.spec.zh?L"当前层":L"Current",s.listFolders,false);
     drawButton(s,dc,s.rcListFiles,s.spec.zh?L"最大文件":L"Largest",!s.listFolders,false);
-    drawTextIn(dc,(s.spec.zh?L"名称":L"Name")+std::wstring(s.sortName?(s.ascending?L" ↑":L" ↓"):L""),s.rcSortName,s.palette.muted,DT_VCENTER);
-    drawTextIn(dc,(s.spec.zh?L"大小":L"Size")+std::wstring(!s.sortName?(s.ascending?L" ↑":L" ↓"):L"")+L"          %",s.rcSortSize,s.palette.muted,DT_RIGHT|DT_VCENTER);
+    fillWith(dc,s.rcFilter,s.palette.input);frameWith(dc,s.rcFilter,s.palette.border);
+    // The column heads.
+    const auto oldHeadFont=::SelectObject(dc,s.fontSmall);
+    drawTextIn(dc,(s.spec.zh?L"名称":L"Name")+std::wstring(s.sortName?(s.ascending?L" ↑":L" ↓"):L""),s.rcSortName,s.palette.muted,DT_LEFT|DT_VCENTER);
+    drawTextIn(dc,(s.spec.zh?L"大小":L"Size")+std::wstring(!s.sortName?(s.ascending?L" ↑":L" ↓"):L""),s.rcSortSize,s.palette.muted,DT_RIGHT|DT_VCENTER);
+    drawTextIn(dc,L"%",s.rcSortPct,s.palette.muted,DT_RIGHT|DT_VCENTER);
+    ::SelectObject(dc,oldHeadFont);
+    frameWith(dc,{cols.name.left,s.rcSortName.bottom,cols.pct.right,s.rcSortName.bottom+1},s.palette.border);
+    if(s.rcParentRow.right>s.rcParentRow.left) {
+        const Node* parent=s.drill.empty()?s.tree.get():s.drill.back();
+        drawButton(s,dc,s.rcParentRow,(s.spec.zh?L"↑ .. 返回 ":L"↑ .. Parent: ")+parent->name,true,false);
+    }
     const int count=listCount(s),rows=maxRows(s);s.topScroll=std::clamp(s.topScroll,0,std::max(0,count-rows));
     for(int i=0;i<rows&&i+s.topScroll<count;++i) {
         const auto& item=s.rows[i+s.topScroll];const auto* n=item.node;
         RECT row{s.rcTopList.left+1,s.rcTopList.top+s.topHeaderH+i*s.rowH,s.rcTopList.right-1,s.rcTopList.top+s.topHeaderH+(i+1)*s.rowH};
-        if(s.selected==n) fillWith(dc,row,s.palette.hover);
-        else if(s.hovered==n) fillWith(dc,row,s.palette.bg);
-        fillWith(dc,{row.left,row.bottom-1,row.right,row.bottom},s.palette.border);
-        RECT sw{row.left+S(12,s),row.top+S(15,s),row.left+S(21,s),row.top+S(24,s)};
-        fillWith(dc,sw,n->dir?dirColor(0,s.palette):fileColor(n->name,0,s.palette));
-        RECT name{sw.right+S(8,s),row.top,row.right-S(155,s),row.bottom};
-        drawTextIn(dc,(n->dir?L"› ":L"")+n->name,name,s.selected==n?s.palette.accent:s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
-        RECT size{row.right-S(153,s),row.top,row.right-S(68,s),row.bottom};
+        const bool selected=s.selected==n;
+        if(selected||s.hovered==n) fillWith(dc,row,s.palette.hover);
+        if(selected) fillWith(dc,{row.left,row.top,row.left+S(2,s),row.bottom},s.palette.accent);
+        // The swatch: 8 px, rounded, 7 px from the name.
+        RECT sw{row.left+S(8,s),row.top+(s.rowH-S(8,s))/2,row.left+S(16,s),row.top+(s.rowH-S(8,s))/2+S(8,s)};
+        HBRUSH swBrush=::CreateSolidBrush(n->dir?dirColor(0,s.palette):fileColor(n->name,0,s.palette));
+        HGDIOBJ oldBrush=::SelectObject(dc,swBrush);
+        ::RoundRect(dc,sw.left,sw.top,sw.right,sw.bottom,S(2,s),S(2,s));
+        ::SelectObject(dc,oldBrush);::DeleteObject(swBrush);
+        RECT name{cols.name.left+S(15,s),row.top,cols.size.left-S(8,s),row.bottom};
+        const auto oldRowFont=::SelectObject(dc,selected?s.fontMedium:s.font);
+        drawTextIn(dc,(n->dir?L"› ":L"")+n->name,name,selected?s.palette.accent:s.palette.text,DT_LEFT|DT_VCENTER|DT_END_ELLIPSIS);
+        ::SelectObject(dc,oldRowFont);
+        RECT size{cols.size.left,row.top,cols.size.right,row.bottom};
         drawTextIn(dc,n->skippedChildren&&n->logical==0?L"—":winshun::wide(formatBytes(n->logical,s.spec.zh)),size,s.palette.text,DT_RIGHT|DT_VCENTER);
-        RECT percent{size.right+S(5,s),row.top,row.right-S(10,s),row.bottom};
+        RECT percent{cols.pct.left,row.top,cols.pct.right,row.bottom};
         drawTextIn(dc,n->skippedChildren&&n->logical==0?L"—":share(s,n->logical),percent,s.palette.muted,DT_RIGHT|DT_VCENTER);
     }
     if(!count) {RECT r=s.rcTopList;r.top+=s.topHeaderH+S(12,s);drawTextIn(dc,s.spec.zh?L"没有匹配的条目":L"No matching items",r,s.palette.muted,DT_CENTER);}
     RECT foot=s.rcListFoot;foot.right=s.rcPrevious.left-S(6,s);
-    drawTextIn(dc,std::to_wstring(count)+(s.spec.zh?L" 项 · 双击目录进入":L" items · double-click to enter"),foot,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+    const auto oldFootFont=::SelectObject(dc,s.fontSmall);
+    drawTextIn(dc,std::to_wstring(count)+(s.spec.zh?L" 项 · 双击目录进入":L" items · double-click to enter"),foot,s.palette.muted,DT_LEFT|DT_VCENTER|DT_END_ELLIPSIS);
+    ::SelectObject(dc,oldFootFont);
     drawButton(s,dc,s.rcPrevious,s.spec.zh?L"上一页":L"Prev",false,false);
     drawButton(s,dc,s.rcNext,s.spec.zh?L"下一页":L"Next",false,false);
 }
@@ -1045,7 +1256,7 @@ inline void drawBreadcrumb(ViewerState& s,HDC dc) {
     fillWith(dc,s.rcEdit,s.palette.panel);frameWith(dc,s.rcEdit,s.palette.border);
     std::vector<const Node*> chain{s.tree.get()};for(auto n:s.drill)chain.push_back(n);
     if(s.viewRoot!=s.tree.get())chain.push_back(s.viewRoot);
-    const int available=s.rcAddressEdit.left-s.rcEdit.left-S(10,s);
+    const int available=s.rcEdit.right-s.rcEdit.left-S(10,s);
     auto needed=[&](const std::vector<const Node*>& nodes){int total=0;for(auto n:nodes){SIZE z{};::GetTextExtentPoint32W(dc,n->name.c_str(),int(n->name.size()),&z);total+=std::min<int>(z.cx+S(22,s),S(150,s));}return total;};
     bool collapsed=false;
     while(chain.size()>3 && needed(chain)>available) {chain.erase(chain.begin()+1);collapsed=true;}
@@ -1054,40 +1265,81 @@ inline void drawBreadcrumb(ViewerState& s,HDC dc) {
         const auto n=chain[i];const std::wstring label=(collapsed&&i==1?L"… › ":i>0?L"› ":L"")+n->name;
         SIZE z{};::GetTextExtentPoint32W(dc,label.c_str(),int(label.size()),&z);
         const int reserve=int(chain.size()-i-1)*S(55,s);
-        const int width=std::min<int>({z.cx+S(22,s),S(190,s),std::max<int>(S(25,s),s.rcAddressEdit.left-x-reserve)});
+        const int width=std::min<int>({z.cx+S(22,s),S(190,s),std::max<int>(S(25,s),s.rcEdit.right-x-reserve)});
         RECT r{x,s.rcEdit.top,x+width,s.rcEdit.bottom};
         drawTextIn(dc,label,r,n==s.viewRoot?s.palette.accent:s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
         s.crumbNodes.push_back(n);s.crumbRects.push_back(r);x+=width;
     }
-    drawTextIn(dc,s.spec.zh?L"编辑路径":L"Edit path",s.rcAddressEdit,s.palette.muted,DT_CENTER|DT_VCENTER);
 }
 inline void drawStatusRows(ViewerState& s,HDC dc) {
-    if(s.tree&&s.viewRoot) {
-        fillWith(dc,s.rcDetail,s.palette.panel);frameWith(dc,s.rcDetail,s.palette.border);
-        const Node* n=s.selected?s.selected:s.viewRoot;
+    // Two-line status bar: the selection facts on line 1, the key hints and the
+    // chart budget on line 2. This replaces the old detail panel entirely.
+    fillWith(dc,s.rcStatus,s.palette.panel);
+    fillWith(dc,{0,s.rcStatus.top,s.rcClient.right,s.rcStatus.top+1},s.palette.border);
+    const bool hasNode=s.tree&&s.viewRoot;
+    const Node* n=hasNode?(s.selected?s.selected:s.viewRoot):nullptr;
+    if(n) {
         const auto path=s.selected?s.selectedPath:nodePath(s,s.viewRoot);
-        RECT line=s.rcDetail;::InflateRect(&line,-S(12,s),-S(8,s));
-        if(!s.narrow)line.right=s.rcEnter.left-S(12,s);
-        line.bottom=line.top+S(24,s);
-        drawTextIn(dc,(s.selected?(s.spec.zh?L"已选中 · ":L"Selected · "):(s.spec.zh?L"当前目录 · ":L"Current · "))+n->name,line,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
-        line.top+=S(26,s);line.bottom+=S(26,s);line.right=s.rcDetail.right-S(12,s);
-        drawTextIn(dc,path,line,s.palette.muted,DT_VCENTER|DT_PATH_ELLIPSIS);
-        line.top+=S(25,s);line.bottom+=S(25,s);
-        drawTextIn(dc,sizeLabel(s,*n)+(sizeUnknown(*n)?L"":(s.spec.zh?L" 逻辑大小 · ":L" logical · ")+share(s,n->logical))+L" · "+winshun::wide(formatCount(n->dir?n->files:1))+(s.spec.zh?L" 个文件":L" files"),line,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
-        drawButton(s,dc,s.rcEnter,s.spec.zh?L"进入文件夹":L"Enter folder",s.selected&&s.selected->dir,false);
-        drawButton(s,dc,s.rcLocate,s.spec.zh?L"定位到所在目录":L"Locate parent",false,false);
+        RECT line=s.rcStatus;::InflateRect(&line,-S(10,s),0);
+        line.top=s.rcStatus.top+S(3,s);line.bottom=line.top+S(22,s);
+        line.right=s.rcIssues.left-S(8,s);
+        const auto what=(s.selected?(s.spec.zh?L"已选中 · ":L"Selected · "):(s.spec.zh?L"当前目录 · ":L"Current · "))+n->name;
+        // The name is medium weight, the rest of the line body size.
+        const auto oldWhat=::SelectObject(dc,s.fontMedium);
+        drawTextIn(dc,what,line,s.palette.text,DT_LEFT|DT_VCENTER|DT_END_ELLIPSIS);
+        SIZE z{};::GetTextExtentPoint32W(dc,what.c_str(),int(what.size()),&z);
+        ::SelectObject(dc,s.font);
+        const int nameRight=std::min<int>(line.right,line.left+z.cx+S(16,s));
+        const bool pathRepeats=lower(path)==lower(n->name);
+        const auto facts=sizeLabel(s,*n)+(sizeUnknown(*n)?L"":(s.spec.zh?L" · ":L" · ")+share(s,n->logical))+L" · "+winshun::wide(formatCount(n->dir?n->files:1))+(s.spec.zh?L" 个文件":L" files");
+        SIZE fz{};::GetTextExtentPoint32W(dc,facts.c_str(),int(facts.size()),&fz);
+        RECT factRect{line.right-fz.cx-S(8,s),line.top,line.right,line.bottom};
+        if(factRect.left>nameRight+S(20,s)) {
+            drawTextIn(dc,facts,factRect,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+            RECT pathRect{nameRight,line.top,factRect.left-S(10,s),line.bottom};
+            if(!pathRepeats&&pathRect.right>pathRect.left)drawTextIn(dc,path,pathRect,s.palette.muted,DT_VCENTER|DT_PATH_ELLIPSIS);
+        } else {
+            RECT pathRect{nameRight,line.top,line.right,line.bottom};
+            if(!pathRepeats&&pathRect.right>pathRect.left)drawTextIn(dc,path,pathRect,s.palette.muted,DT_VCENTER|DT_PATH_ELLIPSIS);
+        }
+        ::SelectObject(dc,oldWhat);
+        drawButton(s,dc,s.rcEnter,s.spec.zh?L"进入":L"Enter",s.selected&&s.selected->dir,false);
+        drawButton(s,dc,s.rcLocate,s.spec.zh?L"定位":L"Locate",false,false);
+        drawButton(s,dc,s.rcMore,s.spec.zh?L"更多 ⋯":L"More ⋯",false,false);
+    } else {
+        RECT line=s.rcStatus;::InflateRect(&line,-S(10,s),0);
+        line.top=s.rcStatus.top+S(3,s);line.bottom=line.top+S(22,s);
+        drawTextIn(dc,s.spec.zh?L"输入路径回车扫描，或选择一个磁盘":L"Type a path and press Enter, or pick a drive",line,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
     }
-    std::wstring status=s.hovered?s.hoveredPath+(s.spec.zh?L" · ":L" · ")+describe(s,s.hovered):s.selected?s.selectedPath:(s.spec.zh?L"悬停查看完整路径；单击后详情保持":L"Hover for path; click to keep details");
-    RECT r=s.rcStatus;
-    if(!s.narrow)r.right-=S(180,s);
-    drawTextIn(dc,status,r,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
-    if(!s.narrow){r.left=r.right;r.right=s.rcStatus.right;drawTextIn(dc,L"Alt+←  /  Alt+→    Ctrl+L",r,s.palette.muted,DT_RIGHT|DT_VCENTER);}
+    // Line 1's right end: the read-issue badge, then the action buttons. It is
+    // the single place the scan state is reported.
+    const int issueCount=int(s.skippedDirs)+(!s.lastScanError.empty()?1:0);
+    if(issueCount) {
+        const auto oldBadge=::SelectObject(dc,s.fontSmall);
+        drawTextIn(dc,std::to_wstring(issueCount)+(s.spec.zh?L" 个读取问题":L" read errors"),s.rcIssues,s.palette.danger,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
+        ::SelectObject(dc,oldBadge);
+    }
+    // Line 2: key hints, and the chart budget on the right.
+    RECT keys=s.rcStatusKeys;keys.right=s.rcBudget.left-S(8,s);
+    if(keys.right>keys.left) {
+        const auto oldKeys=::SelectObject(dc,s.fontSmall);
+        drawTextIn(dc,s.spec.zh?L"滚轮缩放 · 空格拖动平移 · 方向键选择 · 右键操作 · F1 快捷键":L"Wheel zooms · Space+drag pans · Arrows select · Right-click · F1",keys,s.palette.muted,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
+        ::SelectObject(dc,oldKeys);
+    }
+    if(s.tree&&s.rcBudget.right>s.rcBudget.left) {
+        const int chartH=std::max(0L,s.rcChart.bottom-s.rcChart.top);
+        const int pct=s.rcClient.bottom>0?int(std::lround(100.0*chartH/s.rcClient.bottom)):0;
+        const auto oldBudget=::SelectObject(dc,s.fontMicro);
+        drawTextIn(dc,(s.spec.zh?L"图表 ":L"Chart ")+std::to_wstring(chartH)+L"px · "+std::to_wstring(pct)+L"%",s.rcBudget,s.palette.muted,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
+        ::SelectObject(dc,oldBudget);
+    }
 }
 inline void drawProgressBox(ViewerState& s,HDC dc) {
     if(!s.scanning)return;
     fillWith(dc,s.rcProgress,s.palette.hover);frameWith(dc,s.rcProgress,s.palette.border);
-    RECT r=s.rcProgress;::InflateRect(&r,-S(12,s),-S(8,s));r.right=s.rcPreview.left-S(8,s);r.bottom=r.top+S(26,s);
+    RECT r=s.rcProgress;::InflateRect(&r,-S(12,s),-S(8,s));r.right=s.rcPause.left-S(8,s);r.bottom=r.top+S(26,s);
     drawTextIn(dc,s.progress.fast?(s.spec.zh?L"NTFS 快速扫描 · 读取 MFT":L"NTFS fast scan · reading MFT"):(s.spec.zh?L"普通扫描 · 正在枚举目录":L"Standard scan · enumerating"),r,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
+    drawButton(s,dc,s.rcPause,s.pauseFlag?(s.spec.zh?L"继续":L"Resume"):(s.spec.zh?L"暂停":L"Pause"),false,false);
     drawButton(s,dc,s.rcPreview,s.partialView?(s.spec.zh?L"查看上次完成结果":L"Previous result"):(s.spec.zh?L"查看本轮已发现":L"View partial result"),false,false);
     r.top+=S(30,s);r.bottom+=S(30,s);r.right=s.rcProgress.right-S(12,s);
     drawTextIn(dc,winshun::wide(formatCount(s.progress.files))+(s.spec.zh?L" 个文件 · ":L" files · ")+winshun::wide(formatBytes(s.progress.bytes,s.spec.zh))+L" · "+std::to_wstring((::GetTickCount64()-s.scanStarted)/1000)+L" s",r,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
@@ -1097,6 +1349,22 @@ inline void drawProgressBox(ViewerState& s,HDC dc) {
     fillWith(dc,track,s.palette.border);const int span=(track.right-track.left)/5;
     track.left+=int((::GetTickCount64()/10)%800)*(track.right-track.left-span)/800;track.right=track.left+span;fillWith(dc,track,s.palette.accent);
 }
+// Transient messages: a small rounded toast at the bottom right of the
+// content area, like the prototype's. Nothing else moves for it.
+inline void drawToast(ViewerState& s,HDC dc)
+{
+    if(s.notice.empty())return;
+    RECT r{0,0,S(420,s),0};
+    ::DrawTextW(dc,s.notice.c_str(),-1,&r,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX);
+    const int boxW=static_cast<int>(r.right)+S(26,s),boxH=static_cast<int>(r.bottom)+S(16,s);
+    const int x=std::max(s.rcContent.left,s.rcContent.right-boxW-S(12,s));
+    const int y=std::max(s.rcContent.top,s.rcContent.bottom-boxH-S(12,s));
+    RECT box{x,y,x+boxW,y+boxH};
+    fillWith(dc,box,s.palette.panel);frameWith(dc,box,s.palette.accent);
+    RECT tr=box;::InflateRect(&tr,-S(12,s),-S(8,s));
+    drawTextIn(dc,s.notice,tr,s.palette.text,DT_LEFT|DT_WORDBREAK|DT_NOPREFIX);
+}
+
 inline void drawTooltip(ViewerState& s,HDC dc) {
     if(!s.tipVisible||!s.hovered)return;
     const int width=std::min<int>(S(340,s),s.rcClient.right-S(20,s));
@@ -1123,7 +1391,7 @@ inline void drawWelcome(ViewerState& s, HDC hdc)
     ::InflateRect(&r, -S(24, s), -S(24, s));
     RECT tr = r;
     tr.bottom = r.top + S(34, s);
-    HGDIOBJ old = ::SelectObject(hdc, s.fontBold);
+    HGDIOBJ old = ::SelectObject(hdc, s.fontMedium);
     drawTextIn(hdc, zh ? L"磁盘透视 Disk View" : L"Disk View", tr, s.palette.text, DT_LEFT);
     ::SelectObject(hdc, old);
 
@@ -1162,7 +1430,7 @@ inline void drawWelcome(ViewerState& s, HDC hdc)
         const std::wstring numbers = winshun::wide(formatBytes(d.used(), zh)) + L" / "
                                      + winshun::wide(formatBytes(d.total, zh)) + L" · "
                                      + std::to_wstring(d.total > 0 ? d.used() * 100 / d.total : 0) + L"%";
-        old = ::SelectObject(hdc, s.fontBold);
+        old = ::SelectObject(hdc, s.fontMedium);
         drawTextIn(hdc, label, lr, s.palette.text, DT_LEFT);
         ::SelectObject(hdc, old);
         RECT nr = lr;
@@ -1190,7 +1458,7 @@ inline void drawScanError(ViewerState& s, HDC hdc)
     ::InflateRect(&r, -S(24, s), -S(24, s));
     RECT tr = r;
     tr.bottom = r.top + S(34, s);
-    HGDIOBJ old = ::SelectObject(hdc, s.fontBold);
+    HGDIOBJ old = ::SelectObject(hdc, s.fontMedium);
     drawTextIn(hdc, zh ? L"扫描失败" : L"Scan failed", tr, s.palette.danger, DT_LEFT);
     ::SelectObject(hdc, old);
     RECT er = r;
@@ -1202,42 +1470,70 @@ inline void drawScanError(ViewerState& s, HDC hdc)
 
 inline void paintAll(ViewerState& s,HDC dc,const RECT& client) {
     s.driveRects.clear();const auto old=::SelectObject(dc,s.font);fillWith(dc,client,s.palette.bg);
-    fillWith(dc,{0,0,client.right,S(44,s)},s.palette.panel);
-    drawTextIn(dc,L"◩  Disk View  "+std::wstring(s.spec.zh?L"磁盘透视":L""),{S(16,s),0,s.rcTheme.left-S(10,s),S(44,s)},s.palette.text,DT_VCENTER);
+    // Row 1: title bar. Brand mark in the accent, name in medium, the
+    // localized suffix muted — the prototype's three-part brand.
+    fillWith(dc,s.rcTitle,s.palette.panel);
+    {
+        const auto brand=::SelectObject(dc,s.fontMedium);
+        RECT mark{s.rcTitle.left+S(10,s),0,s.rcTitle.left+S(28,s),s.rcTitle.bottom};
+        drawTextIn(dc,L"◩",mark,s.palette.accent,DT_VCENTER|DT_CENTER);
+        RECT name{mark.right,0,s.rcCommands.left-S(8,s),s.rcTitle.bottom};
+        drawTextIn(dc,L"Disk View",name,s.palette.text,DT_VCENTER|DT_LEFT);
+        SIZE z{};::GetTextExtentPoint32W(dc,L"Disk View",9,&z);
+        RECT sub{name.left+z.cx+S(7,s),0,name.right,s.rcTitle.bottom};
+        ::SelectObject(dc,s.fontSmall);
+        drawTextIn(dc,s.spec.zh?L"磁盘透视":L"",sub,s.palette.muted,DT_VCENTER|DT_LEFT);
+        ::SelectObject(dc,brand);
+    }
     drawButton(s,dc,s.rcTheme,s.palette.dark?(s.spec.zh?L"浅色":L"Light"):(s.spec.zh?L"深色":L"Dark"),false,false);
+    drawButton(s,dc,s.rcHelp,s.spec.zh?L"快捷键":L"Keys",false,false);drawButton(s,dc,s.rcCommands,s.spec.zh?L"操作":L"Actions",false,false);
+    fillWith(dc,{0,s.rcTitle.bottom-1,client.right,s.rcTitle.bottom},s.palette.border);
+    // Row 2: history, address, drive, scan.
+    fillWith(dc,s.rcNav,s.palette.panel);
     drawButton(s,dc,s.rcHistBack,L"←",false,false);drawButton(s,dc,s.rcHistForward,L"→",false,false);drawButton(s,dc,s.rcBack,L"↑",false,false);
-    drawButton(s,dc,s.rcScan,s.scanning?(s.spec.zh?L"取消扫描":L"Cancel"):(s.pendingPath.empty()?(s.spec.zh?L"重新扫描":L"Scan"):(s.spec.zh?L"扫描此路径":L"Scan path")),!s.scanning,s.hoverScan);
     drawBreadcrumb(s,dc);
     drawButton(s,dc,s.rcDrive,s.tree?s.tree->name.substr(0,2)+L" ▾":(s.spec.zh?L"选择磁盘 ▾":L"Drive ▾"),false,false);
-    const std::wstring source=s.resultIncomplete?(s.spec.zh?L"本轮未完成结果":L"Incomplete result"):s.scanning?(s.spec.zh?L"上次完整快照":L"Previous snapshot"):(s.spec.zh?L"完整快照":L"Complete snapshot");
-    drawTextIn(dc,(s.tree?source+(s.fastResult?L" · MFT · ":(s.spec.zh?L" · 普通 · ":L" · Standard · ")):L"")+(s.spec.zh?L"逻辑大小 ⓘ":L"Logical size ⓘ"),s.rcAccounting,s.resultIncomplete?s.palette.danger:s.palette.accent,DT_VCENTER|DT_END_ELLIPSIS);
-    drawTextIn(dc,std::to_wstring(s.skippedDirs+s.unknownSizes+s.orphanRecords+(!s.lastScanError.empty()?1:0))+(s.spec.zh?L" 个扫描问题":L" scan issues"),s.rcSkipped,s.palette.accent,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
-    drawProgressBox(s,dc);
-    if(!s.notice.empty()){RECT r=s.rcOverview;r.top-=S(28,s);r.bottom=r.top+S(24,s);drawTextIn(dc,s.notice,r,s.palette.danger,DT_VCENTER|DT_END_ELLIPSIS);}
+    drawButton(s,dc,s.rcScan,s.scanning?(s.spec.zh?L"取消扫描":L"Cancel"):(s.pendingPath.empty()?(s.spec.zh?L"重新扫描":L"Scan"):(s.spec.zh?L"扫描此路径":L"Scan path")),!s.scanning,s.hoverScan);
+    fillWith(dc,{0,s.rcNav.bottom-1,client.right,s.rcNav.bottom},s.palette.border);
+    // Row 3: one compact chart toolbar. The folder name is medium, the size
+    // muted and small; the scan state lives in the status bar, not here.
+    fillWith(dc,s.rcChartBar,s.palette.panel);
     if(s.tree&&s.viewRoot) {
-        const auto f=::SelectObject(dc,s.fontHeading);
-        drawTextIn(dc,s.viewRoot->name+L"   "+winshun::wide(formatBytes(s.viewRoot->logical,s.spec.zh))+(s.resultIncomplete?(s.spec.zh?L" · 当前已发现":L" · discovered so far"):L""),s.rcOverview,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);::SelectObject(dc,f);
+        const bool parent=s.viewRoot!=s.tree.get();const auto* pn=s.drill.empty()?s.tree.get():s.drill.back();
+        drawButton(s,dc,s.rcParent,parent?(s.spec.zh?L"↑ 返回 ":L"↑ Parent: ")+pn->name:(s.spec.zh?L"扫描根目录":L"Scan root"),parent,false);
+        {
+            const auto heading=::SelectObject(dc,s.fontMedium);
+            drawTextIn(dc,s.viewRoot->name,s.rcHeading,s.palette.text,DT_LEFT|DT_VCENTER|DT_END_ELLIPSIS);
+            SIZE z{};::GetTextExtentPoint32W(dc,s.viewRoot->name.c_str(),int(s.viewRoot->name.size()),&z);
+            RECT sizeR{s.rcHeading.left+z.cx+S(7,s),s.rcHeading.top,s.rcHeading.right,s.rcHeading.bottom};
+            ::SelectObject(dc,s.fontSmall);
+            drawTextIn(dc,winshun::wide(formatBytes(s.viewRoot->logical,s.spec.zh)),sizeR,s.palette.muted,DT_LEFT|DT_VCENTER|DT_END_ELLIPSIS);
+            ::SelectObject(dc,heading);
+        }
         if(s.narrow){drawButton(s,dc,s.rcShowChart,s.spec.zh?L"空间图":L"Chart",!s.mobileList,false);drawButton(s,dc,s.rcShowList,s.spec.zh?L"目录列表":L"List",s.mobileList,false);}
+        drawButton(s,dc,s.rcTreemapBtn,s.spec.zh?L"方块":L"Tiles",!s.sunburst,false);drawButton(s,dc,s.rcSunburstBtn,s.spec.zh?L"圆盘":L"Rings",s.sunburst,false);
+        frameWith(dc,{s.rcDepth1.left,s.rcDepth1.top,s.rcDepth2.right,s.rcDepth2.bottom},s.palette.border);
+        drawButton(s,dc,s.rcDepth1,s.spec.zh?L"1 层":L"1",s.depth==1,false);
+        drawButton(s,dc,s.rcDepth2,s.spec.zh?L"2 层":L"2",s.depth==2,false);
+    } else {
+        const std::wstring source=s.resultIncomplete?(s.spec.zh?L"本轮未完成结果":L"Incomplete result"):s.scanning?(s.spec.zh?L"上次完整快照":L"Previous snapshot"):(s.spec.zh?L"完整快照":L"Complete snapshot");
+        drawTextIn(dc,s.tree?source+(s.fastResult?L" · MFT":(s.spec.zh?L" · 普通":L" · Standard")):(s.spec.zh?L"尚未扫描":L"Not scanned yet"),s.rcHeading,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+    }
+    fillWith(dc,{0,s.rcChartBar.bottom-1,client.right,s.rcChartBar.bottom},s.palette.border);
+    drawProgressBox(s,dc);
+    if(s.tree&&s.viewRoot) {
         if(s.rcChartPane.right>s.rcChartPane.left) {
             fillWith(dc,s.rcChartPane,s.palette.panel);frameWith(dc,s.rcChartPane,s.palette.border);
-            RECT title=s.rcChartPane;title.left+=S(12,s);title.bottom=title.top+S(48,s);title.right=s.rcTreemapBtn.left-S(8,s);
-            drawTextIn(dc,s.spec.zh?L"空间分布":L"Space distribution",title,s.palette.text,DT_VCENTER|DT_END_ELLIPSIS);
-            drawButton(s,dc,s.rcTreemapBtn,s.spec.zh?L"方块":L"Tiles",!s.sunburst,false);drawButton(s,dc,s.rcSunburstBtn,s.spec.zh?L"圆盘":L"Rings",s.sunburst,false);
-            drawButton(s,dc,s.rcDepth,s.depth==1?(s.spec.zh?L"展开：当前一层":L"Depth: 1"):(s.spec.zh?L"展开：两层":L"Depth: 2"),false,false);
-            RECT hint{s.rcDepth.right+S(10,s),s.rcDepth.top,s.rcChartPane.right-S(12,s),s.rcDepth.bottom};
-            drawTextIn(dc,s.spec.zh?L"单击选中 · 双击进入":L"Click select · double-click enter",hint,s.palette.muted,DT_RIGHT|DT_VCENTER|DT_END_ELLIPSIS);
             const int saved=::SaveDC(dc);::IntersectClipRect(dc,s.rcChart.left,s.rcChart.top,s.rcChart.right,s.rcChart.bottom);
             if(s.sunburst)drawSlices(s,dc);else drawTiles(s,dc);
             if(!s.viewRoot->logical)drawTextIn(dc,s.spec.zh?L"暂无可绘制大小，请查看列表":L"No sized entries; use the list",s.rcChart,s.palette.muted,DT_CENTER|DT_VCENTER);
             ::RestoreDC(dc,saved);
-            RECT legend{s.rcChartPane.left+S(12,s),s.rcChartPane.bottom-S(28,s),s.rcChartPane.right-S(12,s),s.rcChartPane.bottom};
-            drawTextIn(dc,s.spec.zh?L"文件夹  ·  文档  ·  视频  ·  压缩包  ·  其他":L"Folders · Documents · Media · Archives · Other",legend,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
         }
         if(s.rcDivider.right>s.rcDivider.left)fillWith(dc,s.rcDivider,s.palette.border);
         if(s.rcTopList.right>s.rcTopList.left)drawTopList(s,dc);
     } else if(!s.lastScanError.empty())drawScanError(s,dc);
     else if(!s.scanning)drawWelcome(s,dc);
-    drawStatusRows(s,dc);drawKeyboardFocus(s,dc);drawTooltip(s,dc);::SelectObject(dc,old);
+    drawStatusRows(s,dc);drawKeyboardFocus(s,dc);drawToast(s,dc);drawTooltip(s,dc);::SelectObject(dc,old);
 }
 
 
@@ -1250,7 +1546,7 @@ inline int hitTile(const ViewerState& s, int x, int y)
     // Children are appended after their parent, so the reverse scan finds the
     // innermost (topmost) tile first.
     for (std::size_t i = s.tiles.size(); i-- > 0;)
-        if (s.tiles[i].rect.contains(static_cast<double>(x), static_cast<double>(y)))
+        if (s.tiles[i].rect.contains(chartInverse(s,x,y).x, chartInverse(s,x,y).y))
             return static_cast<int>(i);
     return -1;
 }
@@ -1261,7 +1557,8 @@ inline int hitSlice(const ViewerState& s, int x, int y)
         return -1;
     const double cx = (s.rcChart.left + s.rcChart.right) / 2.0;
     const double cy = (s.rcChart.top + s.rcChart.bottom) / 2.0;
-    const double dx = x - cx, dy = y - cy;
+    const auto point=chartInverse(s,x,y);
+    const double dx = point.x - cx, dy = point.y - cy;
     const double r = std::sqrt(dx * dx + dy * dy);
     double a = std::atan2(dy, dx);
     if (a < -3.14159265358979323846 / 2)
@@ -1306,12 +1603,12 @@ inline int hitDrive(const ViewerState& s, int x, int y)
 
 inline bool anyClickable(const ViewerState& s, int x, int y)
 {
-    for(const auto* r:{&s.rcHistBack,&s.rcHistForward,&s.rcAddressEdit,&s.rcDrive,&s.rcAccounting,&s.rcTheme,&s.rcPreview,&s.rcDepth,&s.rcShowChart,&s.rcShowList,&s.rcEnter,&s.rcLocate,&s.rcSortName,&s.rcSortSize,&s.rcPrevious,&s.rcNext})if(inRect(*r,x,y))return true;
+    for(const auto* r:{&s.rcParent,&s.rcParentRow,&s.rcHelp,&s.rcCommands,&s.rcMore,&s.rcPause,&s.rcHistBack,&s.rcHistForward,&s.rcAddressEdit,&s.rcDrive,&s.rcTheme,&s.rcPreview,&s.rcDepth1,&s.rcDepth2,&s.rcShowChart,&s.rcShowList,&s.rcEnter,&s.rcLocate,&s.rcSortName,&s.rcSortSize,&s.rcPrevious,&s.rcNext})if(inRect(*r,x,y))return true;
     return inRect(s.rcScan, x, y) || inRect(s.rcBack, x, y) || inRect(s.rcTreemapBtn, x, y)
            || inRect(s.rcSunburstBtn, x, y) || hitTop(s, x, y) >= 0 || hitCrumb(s, x, y) >= 0
            || inRect(s.rcListFiles, x, y) || inRect(s.rcListFolders, x, y)
-           || inRect(s.rcSkipped, x, y)
-           || hitTile(s, x, y) >= 0 || hitSlice(s, x, y) >= 0 || hitDrive(s, x, y) >= 0;
+           || inRect(s.rcIssues, x, y)
+           || hitCenter(s,x,y) || hitTile(s, x, y) >= 0 || hitSlice(s, x, y) >= 0 || hitDrive(s, x, y) >= 0;
 }
 
 // ---- navigation ---------------------------------------------------------------------
@@ -1360,7 +1657,9 @@ inline void clearHover(ViewerState& s) {
 inline bool navigateTo(ViewerState& s,const std::wstring& path) {
     std::vector<const Node*> chain;const Node* folder=descend(s,path,&chain);
     if(!folder||!folder->dir)return false;
+    if(s.viewRoot&&!s.replayHistory)s.viewMemory[lower(nodePath(s,s.viewRoot))]={s.selectedPath,s.filter,s.topScroll,s.listFolders};
     if(!chain.empty())chain.pop_back();s.drill=std::move(chain);s.viewRoot=folder;
+    s.zoom=1;s.panX=s.panY=0;
     s.selected=nullptr;s.selectedPath.clear();s.filter.clear();s.groupFilter.clear();
     if(s.filterEdit)::SetWindowTextW(s.filterEdit,L"");
     const auto canonical=nodePath(s,folder);
@@ -1368,16 +1667,29 @@ inline bool navigateTo(ViewerState& s,const std::wstring& path) {
         s.history.resize(static_cast<std::size_t>(s.historyIndex+1));s.history.push_back(canonical);s.historyIndex=int(s.history.size())-1;
     }
     if(s.edit)::SetWindowTextW(s.edit,canonical.c_str());
-    s.editingAddress=false;rebuildLists(s);relayoutView(s);
+    s.editingAddress=false;rebuildLists(s);
+    const auto saved=s.viewMemory.find(lower(canonical));
+    if(saved!=s.viewMemory.end()) {
+        s.filter=saved->second.filter;s.listFolders=saved->second.list;s.selectedPath=saved->second.selected;s.selected=descend(s,s.selectedPath,nullptr);
+        if(s.filterEdit)::SetWindowTextW(s.filterEdit,s.filter.c_str());rebuildLists(s);s.topScroll=saved->second.scroll;
+    }
+    if(s.hwnd)computeLayout(s);relayoutView(s);
     if(s.hwnd){computeLayout(s);::InvalidateRect(s.hwnd,nullptr,FALSE);}return true;
 }
 inline void goUp(ViewerState& s) {
     if(!s.viewRoot||s.viewRoot==s.tree.get())return;
     const auto path=nodePath(s,s.viewRoot);const auto slash=path.find_last_of(L'\\');
-    navigateTo(s,slash<s.tree->name.size()?s.tree->name:path.substr(0,slash));
+    if(navigateTo(s,slash<s.tree->name.size()?s.tree->name:path.substr(0,slash))) {
+        s.selected=descend(s,path,nullptr);s.selectedPath=s.selected?path:L"";
+        s.listFolders=true;refreshRows(s);
+        if(!s.filter.empty()){s.filter.clear();if(s.filterEdit)::SetWindowTextW(s.filterEdit,L"");refreshRows(s);}
+        for(int i=0;i<listCount(s);++i)if(s.rows[i].node==s.selected)s.topScroll=std::max(0,i-std::max(1,maxRows(s))+1);
+        if(s.hwnd)::SetFocus(s.hwnd);
+    }
 }
 inline void historyStep(ViewerState& s,int step) {
     const int next=s.historyIndex+step;if(next<0||next>=int(s.history.size()))return;
+    if(s.viewRoot)s.viewMemory[lower(nodePath(s,s.viewRoot))]={s.selectedPath,s.filter,s.topScroll,s.listFolders};
     const auto path=s.history[next];s.replayHistory=true;
     if(navigateTo(s,path))s.historyIndex=next;s.replayHistory=false;
 }
@@ -1391,7 +1703,7 @@ inline void drillTo(ViewerState& s,int index) {
     }
     navigateTo(s,path);
 }
-inline void setViewMode(ViewerState& s,bool sunburst){s.sunburst=sunburst;relayoutView(s);if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);}
+inline void setViewMode(ViewerState& s,bool sunburst){s.sunburst=sunburst;s.zoom=1;s.panX=s.panY=0;relayoutView(s);if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);}
 inline void setListMode(ViewerState& s,bool folders){s.listFolders=folders;s.groupFilter.clear();clearHover(s);rebuildLists(s);if(s.hwnd)::InvalidateRect(s.hwnd,nullptr,FALSE);}
 inline void selectNode(ViewerState& s,const Node* n,const std::wstring& path) {
     for(const auto& group:s.groupMembers)if(group.first==n) {
@@ -1456,20 +1768,21 @@ inline void editAddress(ViewerState& s) {
 }
 inline void submitAddress(ViewerState& s) {
     const auto path=normalizePath(editText(s.edit),nullptr);
-    if(path.empty()){s.notice=s.spec.zh?L"请输入有效路径":L"Enter a valid path";return;}
-    if(navigateTo(s,path)){s.pendingPath.clear();s.notice.clear();::SetFocus(s.hwnd);}
+    if(path.empty()){setNotice(s,s.spec.zh?L"请输入有效路径":L"Enter a valid path");return;}
+    if(navigateTo(s,path)){s.pendingPath.clear();clearNotice(s);::SetFocus(s.hwnd);}
     else if(!s.tree)startScan(s,path);
-    else {s.pendingPath=path;s.notice=s.spec.zh?L"该路径尚未索引；点击“扫描此路径”开始。":L"Path not indexed; choose Scan this path.";}
+    else {s.pendingPath=path;setNotice(s,s.spec.zh?L"该路径尚未索引；点击“扫描此路径”开始。":L"Path not indexed; choose Scan this path.");}
     computeLayout(s);relayoutView(s);::InvalidateRect(s.hwnd,nullptr,FALSE);
 }
 inline void adoptResult(ViewerState& s,const std::shared_ptr<ScanResult>& r,bool incomplete) {
     const auto previousRoot=s.tree?s.tree->name:std::wstring();
     const auto path=s.viewRoot?nodePath(s,s.viewRoot):std::wstring();
-    const auto selection=s.selectedPath,query=s.filter;const int scroll=s.topScroll;
+    const auto selection=s.selectedPath,query=s.filter,address=s.edit?editText(s.edit):L"";const int scroll=s.topScroll;
+    const bool editing=s.editingAddress,listFolders=s.listFolders;const double zoom=s.zoom,px=s.panX,py=s.panY;
     s.selected=nullptr;s.hovered=nullptr;s.viewRoot=nullptr;s.drill.clear();s.groupFilter.clear();
     s.tiles.clear();s.slices.clear();s.groups.clear();s.crumbNodes.clear();
     s.tree=std::shared_ptr<Node>(r,&r->root);s.viewRoot=s.tree.get();s.resultIncomplete=incomplete;
-    s.fastResult=r->fast;s.unknownSizes=r->unknownSizes;s.orphanRecords=r->orphanRecords;
+    s.fastResult=r->fast;s.unknownSizes=r->unknownSizes;s.orphanRecords=r->orphanRecords;s.pendingRecords=r->pendingRecords;s.excludedItems=r->excludedItems;
     s.rootLargest=r->largest;s.skippedList=r->skippedList;s.files=r->files;s.dirs=r->dirs;
     s.skippedDirs=r->skippedDirs;s.skippedLinks=r->skippedLinks;s.elapsedMs=r->elapsedMs;
     s.replayHistory=true;
@@ -1477,8 +1790,9 @@ inline void adoptResult(ViewerState& s,const std::shared_ptr<ScanResult>& r,bool
     s.replayHistory=false;
     if(s.history.empty() || lower(previousRoot)!=lower(s.tree->name)){s.history={nodePath(s,s.viewRoot)};s.historyIndex=0;}
     s.selected=descend(s,selection,nullptr);s.selectedPath=s.selected?selection:L"";
-    s.filter=query;if(s.filterEdit)::SetWindowTextW(s.filterEdit,query.c_str());refreshRows(s);s.topScroll=scroll;
-    computeLayout(s);relayoutView(s);
+    s.listFolders=listFolders;s.filter=query;if(s.filterEdit)::SetWindowTextW(s.filterEdit,query.c_str());rebuildLists(s);s.topScroll=scroll;
+    s.editingAddress=editing;if(editing&&s.edit)::SetWindowTextW(s.edit,address.c_str());
+    s.zoom=zoom;s.panX=px;s.panY=py;computeLayout(s);relayoutView(s);
 }
 inline void showIssues(ViewerState& s) {
     std::wstring text;
@@ -1489,7 +1803,9 @@ inline void showIssues(ViewerState& s) {
     if(s.unknownSizes)text+=L"\r\n"+std::to_wstring(s.unknownSizes)+(s.spec.zh?L" 个文件大小未知。":L" unknown file sizes.");
     if(s.orphanRecords)text+=L"\r\n"+std::to_wstring(s.orphanRecords)+(s.spec.zh?L" 条记录未能归属目录（包含未跟随的链接和扫描期间变更）。":L" unlinked records (including reparse targets and concurrent changes).");
     if(s.skippedLinks)text+=L"\r\n"+std::to_wstring(s.skippedLinks)+(s.spec.zh?L" 条重解析链接未跟随。":L" reparse links were not followed.");
-    ::MessageBoxW(s.hwnd,text.c_str(),s.spec.zh?L"扫描覆盖范围":L"Scan coverage",MB_OK|MB_ICONINFORMATION);
+    if(s.pendingRecords)text+=L"\r\n"+std::to_wstring(s.pendingRecords)+(s.spec.zh?L" 条记录等待关联（处理中，不计入读取错误）。":L" records awaiting association, not read errors.");
+    text+=L"\r\n"+std::to_wstring(s.excludedItems)+(s.spec.zh?L" 项主动排除。":L" excluded items.");
+    showTools(s,1,text);
 }
 inline void chooseDrive(ViewerState& s) {
     auto drives=listFixedDrives();HMENU menu=::CreatePopupMenu();
@@ -1505,25 +1821,29 @@ inline void activateAt(ViewerState& s,int x,int y,bool twice=false) {
         if(hit>=0){const auto* n=s.sunburst?s.slices[hit].node:s.tiles[hit].node;const auto path=s.sunburst?s.slices[hit].path:s.tiles[hit].path;if(n->dir)navigateTo(s,path);}
         return;
     }
-    if(inRect(s.rcScan,x,y)) {if(s.scanning)s.cancelFlag=true;else startScan(s,!s.pendingPath.empty()?s.pendingPath:!s.lastPath.empty()?s.lastPath:editText(s.edit));return;}
+    if(inRect(s.rcParent,x,y)||inRect(s.rcParentRow,x,y)||hitCenter(s,x,y)){goUp(s);return;}
+    if(inRect(s.rcHelp,x,y)){performCommand(s,Command::Help);return;}
+    if(inRect(s.rcCommands,x,y)){performCommand(s,Command::Commands);return;}
+    if(inRect(s.rcMore,x,y)){POINT p{x,y};::ClientToScreen(s.hwnd,&p);contextMenu(s,p);return;}
+    if(inRect(s.rcPause,x,y)&&s.scanning){s.pauseFlag=!s.pauseFlag.load();::InvalidateRect(s.hwnd,nullptr,FALSE);return;}
+    if(inRect(s.rcScan,x,y)) {if(s.scanning)s.cancelFlag=true;else {s.toolPath=!s.pendingPath.empty()?s.pendingPath:!s.lastPath.empty()?s.lastPath:editText(s.edit);showTools(s,4);} return;}
     if(inRect(s.rcHistBack,x,y)){historyStep(s,-1);return;}
     if(inRect(s.rcHistForward,x,y)){historyStep(s,1);return;}
     if(inRect(s.rcBack,x,y)){goUp(s);return;}
-    if(inRect(s.rcAddressEdit,x,y)){editAddress(s);return;}
+    if(inRect(s.rcEdit,x,y)&&hitCrumb(s,x,y)<0){editAddress(s);return;}
     if(inRect(s.rcDrive,x,y)){chooseDrive(s);return;}
     if(inRect(s.rcTheme,x,y)) {
         s.palette=s.palette.dark?lightPalette():darkPalette();if(s.editBrush){::DeleteObject(s.editBrush);s.editBrush=nullptr;}
         if(s.filterEdit)::InvalidateRect(s.filterEdit,nullptr,TRUE);if(s.edit)::InvalidateRect(s.edit,nullptr,TRUE);
-    } else if(inRect(s.rcSkipped,x,y)){showIssues(s);return;}
-    else if(inRect(s.rcAccounting,x,y)) {
-        ::MessageBoxW(s.hwnd,s.spec.zh?L"图表按逻辑大小绘制（1024 进制）。\r\n按簇取整只是占用空间近似值：稀疏、压缩文件及硬链接会影响结果。\r\n无法读取的区域和系统元数据可能未计入，因此文件合计不等于磁盘已用空间。\r\n局部结果占比只以本轮已发现的条目为基准。":L"Charts show logical bytes (base 1024).\r\nCluster-rounded allocation is approximate; sparse files, compression and hard links affect totals.\r\nUnreadable areas and filesystem metadata may be absent.\r\nPartial-result shares use discovered entries only.",s.spec.zh?L"容量统计口径":L"Size accounting",MB_OK|MB_ICONINFORMATION);return;
-    } else if(inRect(s.rcPreview,x,y)&&s.scanning) {
+    } else if(inRect(s.rcIssues,x,y)){showIssues(s);return;}
+    else if(inRect(s.rcPreview,x,y)&&s.scanning) {
         if(s.partialView&&s.completeResult){s.partialView=false;adoptResult(s,s.completeResult,false);}
         else if(s.partialResult){s.partialView=true;adoptResult(s,s.partialResult,true);}
-        else s.notice=s.spec.zh?L"正在准备本轮局部结果…":L"Preparing partial results…";
+        else setNotice(s,s.spec.zh?L"正在准备本轮局部结果…":L"Preparing partial results…");
     } else if(inRect(s.rcTreemapBtn,x,y)){setViewMode(s,false);return;}
     else if(inRect(s.rcSunburstBtn,x,y)){setViewMode(s,true);return;}
-    else if(inRect(s.rcDepth,x,y)){s.depth=s.depth==1?2:1;relayoutView(s);}
+    else if(inRect(s.rcDepth1,x,y)){if(s.depth!=1){s.depth=1;relayoutView(s);}}
+    else if(inRect(s.rcDepth2,x,y)){if(s.depth!=2){s.depth=2;relayoutView(s);}}
     else if(inRect(s.rcListFiles,x,y)||inRect(s.rcListFolders,x,y)){setListMode(s,inRect(s.rcListFolders,x,y));return;}
     else if(inRect(s.rcShowChart,x,y)||inRect(s.rcShowList,x,y)){s.mobileList=inRect(s.rcShowList,x,y);computeLayout(s);relayoutView(s);}
     else if(inRect(s.rcEnter,x,y)){if(s.selected&&s.selected->dir)navigateTo(s,s.selectedPath);return;}
@@ -1534,40 +1854,66 @@ inline void activateAt(ViewerState& s,int x,int y,bool twice=false) {
         s.topScroll=std::clamp(s.topScroll+(inRect(s.rcNext,x,y)?1:-1)*std::max(1,maxRows(s)),0,std::max(0,listCount(s)-maxRows(s)));clearHover(s);
     } else if(const int crumb=hitCrumb(s,x,y);crumb>=0){drillTo(s,crumb);return;}
     else if(const int drive=hitDrive(s,x,y);drive>=0){startScan(s,s.driveCards[drive].root);return;}
-    else if(const int row=hitTop(s,x,y);row>=0){const auto item=s.rows[row];selectNode(s,item.node,item.path);return;}
+    else if(const int row=hitTop(s,x,y);row>=0){s.focusList=true;const auto item=s.rows[row];selectNode(s,item.node,item.path);return;}
     else {
         const int hit=s.sunburst?hitSlice(s,x,y):hitTile(s,x,y);
-        if(hit>=0){const auto* n=s.sunburst?s.slices[hit].node:s.tiles[hit].node;const auto path=s.sunburst?s.slices[hit].path:s.tiles[hit].path;selectNode(s,n,path);return;}
+        if(hit>=0){s.focusList=false;const auto* n=s.sunburst?s.slices[hit].node:s.tiles[hit].node;const auto path=s.sunburst?s.slices[hit].path:s.tiles[hit].path;selectNode(s,n,path);return;}
     }
     ::InvalidateRect(s.hwnd,nullptr,FALSE);
 }
+#include "viewer_commands.h"
+
 inline LRESULT CALLBACK editProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     ViewerState& s=state();
+    if(msg==WM_KEYDOWN&&(wp==VK_F1||wp==VK_F6||wp==VK_F5||((wp=='K'||wp=='F'||wp=='L')&&(::GetKeyState(VK_CONTROL)&0x8000))))return ::SendMessageW(s.hwnd,msg,wp,lp);
     if(msg==WM_CHAR&&(wp==VK_TAB||wp==VK_RETURN||wp==VK_ESCAPE))return 0;
     if(msg==WM_KEYDOWN) {
         if(wp==VK_TAB){cycleFocus(s,(::GetKeyState(VK_SHIFT)&0x8000)?-1:1);return 0;}
         if(wp==VK_RETURN){submitAddress(s);return 0;}
-        if(wp==VK_ESCAPE){s.editingAddress=false;s.pendingPath.clear();s.notice.clear();if(s.viewRoot)::SetWindowTextW(s.edit,nodePath(s,s.viewRoot).c_str());computeLayout(s);::SetFocus(s.hwnd);::InvalidateRect(s.hwnd,nullptr,FALSE);return 0;}
-        if(wp==VK_F5){if(!s.scanning)startScan(s,s.lastPath);return 0;}
+        if(wp==VK_ESCAPE){s.editingAddress=false;s.pendingPath.clear();clearNotice(s);if(s.viewRoot)::SetWindowTextW(s.edit,nodePath(s,s.viewRoot).c_str());computeLayout(s);::SetFocus(s.hwnd);::InvalidateRect(s.hwnd,nullptr,FALSE);return 0;}
     }
     return ::CallWindowProcW(s.origEditProc,hwnd,msg,wp,lp);
 }
 inline LRESULT CALLBACK filterProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     auto& s=state();
-    if(msg==WM_PAINT||msg==WM_PRINT||msg==WM_PRINTCLIENT) {
+    // The hint must be drawn in the same pass as the control. Painting it
+    // from a second device context (or a second pass) makes it flash every
+    // time the parent repaints, because the parent repaint invalidates the
+    // child. While the field has focus the control draws the caret, so the
+    // hint stays away until the focus leaves.
+    if(msg==WM_PAINT) {
+        if(::GetWindowTextLengthW(hwnd)!=0||::GetFocus()==hwnd)
+            return ::CallWindowProcW(s.origFilterProc,hwnd,msg,wp,lp);
+        PAINTSTRUCT ps{};
+        HDC dc=::BeginPaint(hwnd,&ps);
+        RECT r{};::GetClientRect(hwnd,&r);
+        const HBRUSH back=::CreateSolidBrush(s.palette.input);
+        ::FillRect(dc,&r,back);::DeleteObject(back);
+        ::SetBkMode(dc,TRANSPARENT);
+        RECT tr=r;tr.left+=S(6,s);
+        drawTextIn(dc,s.spec.zh?L"筛选列表，图表保持完整":L"Filter list; chart stays complete",tr,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
+        ::EndPaint(hwnd,&ps);
+        return 0;
+    }
+    if(msg==WM_PRINT||msg==WM_PRINTCLIENT) {
         const auto result=::CallWindowProcW(s.origFilterProc,hwnd,msg,wp,lp);
         if(::GetWindowTextLengthW(hwnd)==0) {
-            const auto dc=msg==WM_PAINT?::GetDC(hwnd):reinterpret_cast<HDC>(wp);
+            const auto dc=reinterpret_cast<HDC>(wp);
             const int saved=::SaveDC(dc);
             RECT r{};::GetClientRect(hwnd,&r);r.left+=S(6,s);
             ::SelectObject(dc,s.font);::SetBkMode(dc,TRANSPARENT);
             drawTextIn(dc,s.spec.zh?L"筛选列表，图表保持完整":L"Filter list; chart stays complete",r,s.palette.muted,DT_VCENTER|DT_END_ELLIPSIS);
             ::RestoreDC(dc,saved);
-            if(msg==WM_PAINT)::ReleaseDC(hwnd,dc);
         }
         return result;
     }
+    if(msg==WM_SETFOCUS||msg==WM_KILLFOCUS) {
+        const auto result=::CallWindowProcW(s.origFilterProc,hwnd,msg,wp,lp);
+        ::InvalidateRect(hwnd,nullptr,FALSE);
+        return result;
+    }
     if(msg==WM_CHAR&&(wp==VK_TAB||wp==VK_RETURN||wp==VK_ESCAPE))return 0;
+    if(msg==WM_KEYDOWN&&(wp==VK_F1||wp==VK_F6||wp==VK_F5||((wp=='K'||wp=='F')&&(::GetKeyState(VK_CONTROL)&0x8000))))return ::SendMessageW(s.hwnd,msg,wp,lp);
     if(msg==WM_KEYDOWN&&wp==VK_TAB){cycleFocus(s,(::GetKeyState(VK_SHIFT)&0x8000)?-1:1);return 0;}
     if(msg==WM_KEYDOWN&&wp==VK_RETURN){::SetFocus(s.hwnd);return 0;}
     if(msg==WM_KEYDOWN&&wp==VK_ESCAPE){::SetWindowTextW(hwnd,L"");::SetFocus(s.hwnd);return 0;}
@@ -1611,36 +1957,57 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_TIMER:
         if(wp==2){::KillTimer(hwnd,2);s.tipVisible=s.hovered!=nullptr;}
+        else if(wp==3){::KillTimer(hwnd,3);s.notice.clear();}
         ::InvalidateRect(hwnd,nullptr,FALSE);return 0;
     case WM_COMMAND:
         if(reinterpret_cast<HWND>(lp)==s.filterEdit&&HIWORD(wp)==EN_CHANGE) {
             s.filter=editText(s.filterEdit);clearHover(s);refreshRows(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;
         }
         break;
+    case WM_CONTEXTMENU: {
+        if(!s.tree)return 0;
+        POINT point{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+        if(point.x==-1&&point.y==-1){point={s.focusList?s.rcTopList.left+S(20,s):s.rcChart.left+S(20,s),s.focusList?s.rcTopList.top+s.topHeaderH:s.rcChart.top+S(20,s)};::ClientToScreen(hwnd,&point);}
+        else {POINT client=point;::ScreenToClient(hwnd,&client);const int row=hitTop(s,client.x,client.y),hit=s.sunburst?hitSlice(s,client.x,client.y):hitTile(s,client.x,client.y);
+            if(row>=0){s.focusList=true;selectNode(s,s.rows[row].node,s.rows[row].path);}
+            else if(hit>=0){s.focusList=false;const auto* n=s.sunburst?s.slices[hit].node:s.tiles[hit].node;const auto path=s.sunburst?s.slices[hit].path:s.tiles[hit].path;selectNode(s,n,path);}
+            else if(!inRect(s.rcChart,client.x,client.y)&&!inRect(s.rcStatus,client.x,client.y)&&!inRect(s.rcTopList,client.x,client.y))return 0;
+        }
+        contextMenu(s,point);return 0;
+    }
     case WM_MOUSEMOVE: {
         const int x=GET_X_LPARAM(lp),y=GET_Y_LPARAM(lp);
+        if(s.panning){s.panX=s.dragPanX+x-s.dragStart.x;s.panY=s.dragPanY+y-s.dragStart.y;clampPan(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;}
         if(s.dragging){s.splitRatio=std::clamp(double(x-S(16,s))/std::max(1L,s.rcClient.right-S(32,s)),.38,.69);computeLayout(s);relayoutView(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;}
         TRACKMOUSEEVENT track{sizeof track,TME_LEAVE,hwnd,0};::TrackMouseEvent(&track);updateHover(s,x,y);return 0;
     }
     case WM_MOUSELEAVE:clearHover(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;
+    case WM_MBUTTONDOWN:
     case WM_LBUTTONDOWN:
         s.keyboardFocus=false;
+        if(inRect(s.rcChart,GET_X_LPARAM(lp),GET_Y_LPARAM(lp))&&s.zoom>1&&(msg==WM_MBUTTONDOWN||s.spaceHeld)){
+            s.panning=true;s.dragStart={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};s.dragPanX=s.panX;s.dragPanY=s.panY;clearHover(s);::SetCapture(hwnd);return 0;
+        }
         if(inRect(s.rcDivider,GET_X_LPARAM(lp),GET_Y_LPARAM(lp))){s.dragging=true;clearHover(s);::SetCapture(hwnd);}return 0;
-    case WM_CAPTURECHANGED:s.dragging=false;return 0;
+    case WM_CAPTURECHANGED:s.dragging=false;s.panning=false;return 0;
+    case WM_KILLFOCUS:s.spaceHeld=false;return 0;
+    case WM_KEYUP:if(wp==VK_SPACE)s.spaceHeld=false;return 0;
+    case WM_MBUTTONUP:if(s.panning){s.panning=false;::ReleaseCapture();}return 0;
     case WM_LBUTTONDBLCLK:
         s.suppressClick=true;activateAt(s,GET_X_LPARAM(lp),GET_Y_LPARAM(lp),true);return 0;
     case WM_LBUTTONUP:
         s.keyboardFocus=false;
+        if(s.panning){s.panning=false;::ReleaseCapture();return 0;}
         if(s.suppressClick){s.suppressClick=false;return 0;}
         if(s.dragging){s.dragging=false;::ReleaseCapture();return 0;}
         ::SetFocus(hwnd);activateAt(s,GET_X_LPARAM(lp),GET_Y_LPARAM(lp));return 0;
 
 
     case WM_MOUSEWHEEL: {
-        if (s.rcTopList.right <= s.rcTopList.left)
-            return 0;
         POINT p {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ::ScreenToClient(hwnd, &p);
+        if((GET_KEYSTATE_WPARAM(wp)&MK_CONTROL)&&inRect(s.rcChart,p.x,p.y)){chartZoom(s,GET_WHEEL_DELTA_WPARAM(wp)>0?.25:-.25);return 0;}
+        if(s.rcTopList.right<=s.rcTopList.left)return 0;
         if (!inRect(s.rcTopList, p.x, p.y))
             return 0;
         const int rows = maxRows(s);
@@ -1653,30 +2020,40 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_SYSKEYDOWN:
+        if(wp==VK_RETURN){performCommand(s,Command::Properties);return 0;}
         if(wp==VK_LEFT){historyStep(s,-1);return 0;}
         if(wp==VK_RIGHT){historyStep(s,1);return 0;}
         if(wp==VK_UP){goUp(s);return 0;}
         break;
     case WM_KEYDOWN:
+        if(wp==VK_F1){performCommand(s,Command::Help);return 0;}
+        if(wp==VK_F6){focusPane(s,!s.focusList);return 0;}
+        if(wp==VK_APPS||(wp==VK_F10&&(::GetKeyState(VK_SHIFT)&0x8000))){::SendMessageW(hwnd,WM_CONTEXTMENU,reinterpret_cast<WPARAM>(hwnd),MAKELPARAM(-1,-1));return 0;}
+        if(wp=='K'&&(::GetKeyState(VK_CONTROL)&0x8000)){performCommand(s,Command::Commands);return 0;}
+        {
+            const bool ctrl=::GetKeyState(VK_CONTROL)&0x8000,shift=::GetKeyState(VK_SHIFT)&0x8000;
+            if(wp=='C'&&ctrl&&shift){performCommand(s,Command::CopyFile);return 0;}
+            if(wp=='X'&&ctrl&&shift){performCommand(s,Command::CutFile);return 0;}
+            if(wp=='C'&&ctrl){performCommand(s,Command::Copy);return 0;}
+        }
+        if(wp==VK_DELETE){performCommand(s,Command::Recycle);return 0;}
+        if(wp==VK_SPACE&&!s.focusList&&!s.keyboardFocus){s.spaceHeld=true;return 0;}
+        if(!s.focusList&&(wp==VK_ADD||wp==VK_OEM_PLUS||wp==VK_SUBTRACT||wp==VK_OEM_MINUS||wp=='0')){chartZoom(s,wp==VK_SUBTRACT||wp==VK_OEM_MINUS?-.25:.25,wp=='0');return 0;}
         if(wp==VK_TAB){cycleFocus(s,(::GetKeyState(VK_SHIFT)&0x8000)?-1:1);return 0;}
         if((wp==VK_SPACE||wp==VK_RETURN)&&s.keyboardFocus) {
             const auto targets=focusTargets(s);
             if(s.focusIndex>=0&&s.focusIndex<int(targets.size())) {
                 const auto target=targets[s.focusIndex];
-                if(!target.child&&!target.list){activateAt(s,(target.rect.left+target.rect.right)/2,(target.rect.top+target.rect.bottom)/2);return 0;}
+                if(!target.child&&!target.list&&!::EqualRect(&target.rect,&s.rcChart)){activateAt(s,(target.rect.left+target.rect.right)/2,(target.rect.top+target.rect.bottom)/2);return 0;}
             }
         }
         if(wp=='L'&&(::GetKeyState(VK_CONTROL)&0x8000)){editAddress(s);return 0;}
         if(wp=='F'&&(::GetKeyState(VK_CONTROL)&0x8000)){s.mobileList=true;computeLayout(s);::SetFocus(s.filterEdit);return 0;}
-        if(wp==VK_ESCAPE){clearHover(s);s.selected=nullptr;s.selectedPath.clear();::InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+        if(wp==VK_ESCAPE){if(s.toolWindow)::DestroyWindow(s.toolWindow);s.spaceHeld=false;clearHover(s);::InvalidateRect(hwnd,nullptr,FALSE);return 0;}
         if(wp==VK_BACK){goUp(s);return 0;}
-        if(wp==VK_F5){if(!s.scanning)startScan(s,s.lastPath);return 0;}
-        if(wp==VK_RETURN&&s.selected&&s.selected->dir){navigateTo(s,s.selectedPath);return 0;}
-        if(wp==VK_UP||wp==VK_DOWN) {
-            int index=-1;for(int i=0;i<listCount(s);++i)if(s.rows[i].node==s.selected)index=i;
-            index=std::clamp(index+(wp==VK_DOWN?1:-1),0,std::max(0,listCount(s)-1));
-            if(listCount(s)){selectNode(s,s.rows[index].node,s.rows[index].path);if(index<s.topScroll)s.topScroll=index;if(index>=s.topScroll+maxRows(s))s.topScroll=index-std::max(1,maxRows(s))+1;}return 0;
-        }
+        if(wp==VK_F5){performCommand(s,Command::Rescan);return 0;}
+        if(wp==VK_RETURN){performCommand(s,Command::Enter);return 0;}
+        if(wp==VK_UP||wp==VK_DOWN||wp==VK_LEFT||wp==VK_RIGHT){directionSelect(s,UINT(wp));return 0;}
         break;
 
 
@@ -1723,7 +2100,7 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
-        mmi->ptMinTrackSize = {S(360, s), S(680, s)};
+        mmi->ptMinTrackSize = {S(360, s), S(780, s)};
         return 0;
     }
     case WM_APP_APPEARANCE: {
@@ -1752,7 +2129,7 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             s.progress = *reinterpret_cast<ScanProgress*>(lp);
             if(!s.progress.fallbackReason.empty()) {
                 const auto notice=(s.spec.zh?L"已回退普通扫描：":L"Using standard scan: ")+s.progress.fallbackReason;
-                if(notice!=s.notice){s.notice=notice;computeLayout(s);relayoutView(s);}
+                if(notice!=s.notice)setNotice(s,notice);
             }
             delete reinterpret_cast<ScanProgress*>(lp);
             ::InvalidateRect(hwnd, nullptr, FALSE);
@@ -1762,23 +2139,23 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_PARTIAL:
         if(lp) {
             std::unique_ptr<std::shared_ptr<ScanResult>> packet(reinterpret_cast<std::shared_ptr<ScanResult>*>(lp));
-            if(s.scanning){s.partialResult=*packet;if(s.partialView||!s.tree)adoptResult(s,s.partialResult,true);::InvalidateRect(hwnd,nullptr,FALSE);}
+            s.snapshotPending=false;if(s.scanning){s.partialResult=*packet;if(s.partialView||!s.tree)adoptResult(s,s.partialResult,true);::InvalidateRect(hwnd,nullptr,FALSE);}
         }
         return 0;
     case WM_APP_DONE:
         joinScanThread(s);
         if(lp) {
             std::shared_ptr<ScanResult> r(reinterpret_cast<ScanResult*>(lp));
-            s.scanning=false;::KillTimer(hwnd,1);s.cancelled=r->cancelled;clearHover(s);
+            s.scanning=false;s.pauseFlag=false;s.snapshotPending=false;::KillTimer(hwnd,1);s.cancelled=r->cancelled;clearHover(s);
             if(!r->error.empty()||r->cancelled) {
                 s.lastScanError=r->error;
-                if(s.completeResult){adoptResult(s,s.completeResult,false);s.notice=r->cancelled?(s.spec.zh?L"扫描已取消，已保留上次完成结果。":L"Cancelled; previous result retained."):(s.spec.zh?L"更新失败，已保留上次完成结果。点击重新扫描重试。":L"Update failed; previous result retained.");}
-                else if(s.partialResult && r->root.name.empty()){adoptResult(s,s.partialResult,true);s.notice=r->cancelled?(s.spec.zh?L"扫描已取消，仅保留已发现结果。":L"Cancelled; partial result retained."):(s.spec.zh?L"扫描失败，仅保留已发现结果。问题详情可查看失败原因。":L"Scan failed; partial result retained. See scan issues.");}
-                else if(!r->root.name.empty()&&r->root.files){s.partialResult=r;adoptResult(s,r,true);s.notice=s.spec.zh?L"扫描未完成，仅保留本轮已发现的局部结果。":L"Incomplete scan; discovered entries retained.";}
-                else {s.notice=winshun::wide(r->error);if(r->cancelled)s.notice=s.spec.zh?L"扫描已取消。":L"Scan cancelled.";}
+                if(s.completeResult){adoptResult(s,s.completeResult,false);setNotice(s,r->cancelled?(s.spec.zh?L"扫描已取消，已保留上次完成结果。":L"Cancelled; previous result retained."):(s.spec.zh?L"更新失败，已保留上次完成结果。点击重新扫描重试。":L"Update failed; previous result retained."));}
+                else if(s.partialResult && r->root.name.empty()){adoptResult(s,s.partialResult,true);setNotice(s,r->cancelled?(s.spec.zh?L"扫描已取消，仅保留已发现结果。":L"Cancelled; partial result retained."):(s.spec.zh?L"扫描失败，仅保留已发现结果。问题详情可查看失败原因。":L"Scan failed; partial result retained. See scan issues."));}
+                else if(!r->root.name.empty()&&r->root.files){s.partialResult=r;adoptResult(s,r,true);setNotice(s,s.spec.zh?L"扫描未完成，仅保留本轮已发现的局部结果。":L"Incomplete scan; discovered entries retained.");}
+                else setNotice(s,r->cancelled?(s.spec.zh?L"扫描已取消。":L"Scan cancelled."):winshun::wide(r->error));
             } else {
                 s.completeResult=r;s.partialResult.reset();s.partialView=false;s.lastScanError.clear();
-                adoptResult(s,r,false);s.notice=r->fallbackReason.empty()?L"":(s.spec.zh?L"本次使用普通扫描：":L"Standard scan used: ")+r->fallbackReason;saveConfigNow(s);
+                adoptResult(s,r,false);setNotice(s,r->fallbackReason.empty()?L"":(s.spec.zh?L"本次使用普通扫描：":L"Standard scan used: ")+r->fallbackReason);saveConfigNow(s);
             }
             if(!s.tree&&s.lastScanError.empty())s.driveCards=listFixedDrives();
             computeLayout(s);relayoutView(s);::InvalidateRect(hwnd,nullptr,FALSE);
@@ -1787,7 +2164,8 @@ inline LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 
     case WM_CLOSE:
-        s.cancelFlag = true;
+        s.cancelFlag = true;s.pauseFlag=false;
+        if(s.toolWindow)::DestroyWindow(s.toolWindow);
         joinScanThread(s);
         {
             MSG stale;
@@ -1812,6 +2190,8 @@ inline void threadMain(ViewerSpec spec)
 {
     ViewerState& s = state();
     ensureDpiAwareness();
+    const auto comResult=::CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    struct ComScope {HRESULT result;~ComScope(){if(SUCCEEDED(result))::CoUninitialize();}} comScope{comResult};
     s.spec = std::move(spec);
     s.palette = s.spec.theme == "light" ? lightPalette() : darkPalette();
     // The host's own colours, when it sent them (an older host, or a test
@@ -1826,14 +2206,20 @@ inline void threadMain(ViewerSpec spec)
     s.sunburst = s.spec.defaultSunburst;
     const ViewConfig cfg = loadViewConfig(s.spec.dataDir);
     s.lastPath = cfg.lastPath;
+    // Restore the scan settings the user last chose; the panel writes them back.
+    s.scanMode = cfg.scanMode;
+    s.scanOptions.workers = cfg.workers;
+    s.scanOptions.media = static_cast<ScanOptions::Media>(cfg.media);
+    s.scanOptions.previewIntervalMs = cfg.previewIntervalMs;
+    s.scanOptions.excludedPaths = cfg.excludedPaths;
     s.lastScanError.clear();
     s.cancelled = false;
     s.cancelFlag = false;
     s.listFolders = true;
-    s.history.clear();s.historyIndex=-1;s.selected=nullptr;s.selectedPath.clear();s.filter.clear();s.notice.clear();s.pendingPath.clear();
+    s.history.clear();s.historyIndex=-1;s.selected=nullptr;s.selectedPath.clear();s.filter.clear();clearNotice(s);s.pendingPath.clear();
     s.completeResult.reset();s.partialResult.reset();s.partialView=false;s.resultIncomplete=false;
     s.depth=1;s.splitRatio=.58;s.editingAddress=false;s.mobileList=false;s.groupFilter.clear();s.rows.clear();
-    s.keyboardFocus=false;s.focusIndex=-1;
+    s.keyboardFocus=false;s.focusIndex=-1;s.focusList=false;s.zoom=1;s.panX=s.panY=0;s.pauseFlag=false;s.snapshotPending=false;s.viewMemory.clear();
     s.topScroll = 0;
     s.hoverDrive = s.hoverFolder = -1;
     s.hoverScan = s.hoverBack = s.hoverTreemapBtn = s.hoverSunburstBtn = false;
@@ -1850,10 +2236,10 @@ inline void threadMain(ViewerSpec spec)
     wc.lpszClassName = L"WinShunDiskViewWindow";
     ::RegisterClassExW(&wc);
 
-    RECT wr {0, 0, S(1180, s), S(760, s)};
+    RECT wr {0, 0, S(1180, s), S(900, s)};
     ::AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
     s.hwnd = ::CreateWindowExW(0, wc.lpszClassName, s.spec.zh ? L"磁盘透视 · Win顺" : L"Disk View · WinShun",
-                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left,
                                wr.bottom - wr.top, nullptr, nullptr, wc.hInstance, nullptr);
     if (!s.hwnd) {
         std::lock_guard<std::mutex> lk(s.m);
@@ -1897,11 +2283,12 @@ inline void threadMain(ViewerSpec spec)
 
     MSG msg;
     while (::GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if(s.toolWindow&&(toolMessage(s,msg)||::IsDialogMessageW(s.toolWindow,&msg)))continue;
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
     }
 
-    s.windowIcons.clear();
+    s.d2dTarget.Reset();s.d2dFactory.Reset();s.windowIcons.clear();
 
     // Teardown: stop the scan first so the thread never posts into a dead
     // window, then release everything the GUI thread created.
@@ -1928,17 +2315,20 @@ inline void threadMain(ViewerSpec spec)
         ::DeleteObject(s.font);
         s.font = nullptr;
     }
-    if (s.fontBold) {
-        ::DeleteObject(s.fontBold);
-        s.fontBold = nullptr;
+    if (s.fontMedium) {
+        ::DeleteObject(s.fontMedium);
+        s.fontMedium = nullptr;
     }
     if (s.fontSmall) {
         ::DeleteObject(s.fontSmall);
         s.fontSmall = nullptr;
     }
+    if (s.fontMicro) {
+        ::DeleteObject(s.fontMicro);
+        s.fontMicro = nullptr;
+    }
     s.filterEdit=nullptr;s.origFilterProc=nullptr;s.completeResult.reset();s.partialResult.reset();s.rows.clear();s.groups.clear();
     s.edit = nullptr;
-    if(s.fontHeading){::DeleteObject(s.fontHeading);s.fontHeading=nullptr;}
     s.origEditProc = nullptr;
     s.tree.reset();
     s.viewRoot = nullptr;
