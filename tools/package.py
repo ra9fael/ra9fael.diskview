@@ -36,6 +36,9 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 MAX_BYTES = 256 << 20  # WinShun's archive limit (src/plugin/Install.h)
 REQUIRED_FILES = {
     "mft_scan.h", "scan_helper.h", "diskview.rc", "app.ico",
+    # Headers the sources include: the package must always carry every one,
+    # even before it is committed.
+    "parallel_scan.h", "viewer_commands.h", "viewer_drawing.h",
     "vendor/winshun/Ntfs.h", "vendor/winshun/Ntfs.cpp",
     "vendor/winshun/LICENSE", "vendor/winshun/README.md",
     "design/implementation-status.md",
