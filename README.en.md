@@ -6,7 +6,7 @@ A native disk-space viewer for WinShun. Explore a treemap or sunburst, hover for
 
 ## Install and update
 
-Obtain **ra9fael.diskview-0.2.0.wsplugin** from the repository release or local dist/. Verify the adjacent .sha256 with PowerShell's Get-FileHash if desired. In WinShun, open Settings → Plugins → Installed → Add plugin → Archive. Enable the locally installed plugin and review its permissions. Installing the same id updates it after the host's replacement prompt and preserves the plugin data directory.
+Obtain **ra9fael.diskview-0.3.0.wsplugin** from the repository release or local dist/. Verify the adjacent .sha256 with PowerShell's Get-FileHash if desired. In WinShun, open Settings → Plugins → Installed → Add plugin → Archive. Enable the locally installed plugin and review its permissions. Installing the same id updates it after the host's replacement prompt and preserves the plugin data directory.
 
 Version 0.2.0 adds **processes** for a short-lived scan helper. Windows administrator consent is separate. Uninstall through the host's plugin list. This native executable is outside the script-only community index.
 
@@ -29,15 +29,15 @@ Version 0.2.0 adds **processes** for a short-lived scan helper. Windows administ
 | Drag divider | Resizes panes; narrow windows offer Chart / List tabs |
 | Scan issues / Logical size | Explains coverage, read errors, unknown sizes, unattached records, skipped links and accounting |
 
-Keyboard: Alt+Left / Right for history; Backspace or Alt+Up for parent; Ctrl+F for filtering; arrows for list selection; Tab / Shift+Tab for controls; Enter / Space for focused buttons; F5 to rescan the scan root. Text inputs retain editing behavior. Esc exits address editing, clears filtering or selection; Alt+F4 closes the window.
+Keyboard: Alt+Left / Right for history; Backspace or Alt+Up for parent; F6 / Shift+F6 to switch focus between chart and list; Ctrl+F for filtering; Ctrl+K for command search; Ctrl+C to copy the full path; Ctrl+Shift+C to copy the item; Ctrl+Shift+X to cut it; arrows to pick the nearest item by screen position in the chart and to move through the list; Tab / Shift+Tab for controls; Enter / Space for focused buttons; + / - / 0 to zoom or fit; Shift+F10 for the item menu; Delete for the Recycle Bin confirmation; permanent delete has no shortcut (pick it in the item menu and confirm by typing the name); F1 for all shortcuts; F5 for scan settings. Text inputs retain editing behavior. Esc closes a tool window, exits address editing or clears filtering; Alt+F4 closes the window.
 
-The window follows host colors and offers a light/dark switch. The defaultView setting selects the initial chart.
+The window follows host colors and offers a light/dark switch. The defaultView setting selects the initial chart. Scan settings (scan mode, worker limit, media strategy, preview interval, next-scan exclusions) are stored beside the last scanned path in the plugin data directory and restored on the next start.
 
 ## Scanning and results
 
-- A whole fixed NTFS drive offers fast or standard scanning. Only the separate fast helper requests elevation; the UI stays unelevated. Declined consent or helper failure automatically falls back to standard scanning, with a visible reason.
-- Folders, other filesystems and UNC paths use directory enumeration, including extended-length paths. Directory reparse points are not followed.
-- During a scan, progress shows discovered items, bytes, time and path without inventing an ETA or completion percentage. Browse the previous result or explicitly switch to the current partial result.
+- A whole fixed NTFS drive uses the scan mode chosen in scan settings. Automatic uses the fast engine for a whole NTFS volume; it can also be pinned to fast or standard. Only the separate fast helper requests elevation; the UI stays unelevated. Declined consent or helper failure automatically falls back to standard scanning, with a visible reason.
+- Folders, other filesystems and UNC paths use directory enumeration, including extended-length paths. Directory reparse points are not followed. Standard scanning uses a bounded directory worker pool whose limit is set in scan settings; more workers are not promised to be faster.
+- During a scan, progress shows discovered items, bytes, time and path without inventing an ETA or completion percentage. It can be paused and resumed. Browse the previous result or explicitly switch to the current partial result.
 - Cancellation or failure restores the previous complete result when available. A first scan may keep discovered entries, explicitly marked incomplete. Scan issues includes the failure reason.
 - Snapshots exist only in the current window's memory. Persistent scan caches and USN incremental updates are not implemented.
 
@@ -51,9 +51,11 @@ Charts show logical bytes using base 1024. Cluster-rounded allocation is only an
 | --- | --- |
 | ui | Native Win32 / GDI window |
 | files:read | Directory and filesystem metadata |
+| files:write | Moving a selected item to the Recycle Bin, or deleting it permanently after a two-step confirmation |
+| clipboard:write | Putting the selected item on the clipboard as CF_HDROP (copy or cut) for Explorer to paste |
 | processes | Same-executable scan helper using a restricted local metadata pipe |
 
-Scanning is read-only: no file deletion, moving, content reads, networking, services or startup registration. The only saved plugin data is the last successful path in diskview.json in the host's plugin data directory. Trees are released on window close. The elevated helper does not stay resident after its work or connection ends.
+Scanning itself is read-only: no file content reads, networking, services or startup registration. There are exactly two writes, both picked explicitly in the item menu and confirmed: handing the item to the system Recycle Bin through IFileOperation, and "Delete permanently", which bypasses the Recycle Bin, requires reading a warning and typing the item's name, and cannot be undone. Protected system paths and their descendants are not offered; a failure keeps the item and shows the reason. Copying or cutting an item only writes its path to the clipboard as CF_HDROP (with the Preferred DropEffect); Explorer performs the actual paste. The plugin writes the last scanned path and the scan settings to diskview.json in the host's plugin data directory. Trees are released on window close. The elevated helper does not stay resident after its work or connection ends.
 
 ## Build and preview
 
