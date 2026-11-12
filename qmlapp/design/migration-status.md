@@ -79,8 +79,20 @@
 - 发现 fixture 的 `WinShun/build/debug` 子项总和比声明多 1 MiB，已修复样机 JSON 并加入 `tests/check-fixture.cjs` 递归检查。截图中的未填充扇区代表叶文件没有下一层子项，并非绘制断裂。
 - HTML 交互演示位于 `../ra9fael.diskview/design/compact-layout-prototype.html`，提示文案已区分浏览器仿真与 Qt 实测，并提供 Qt 截图及 QML 源码链接。`node build/compact-prototype-check.cjs`：26 项全部通过。
 
-## 验证结果（B1）
-- `tests/check-prototype.ps1` 全绿：`qml-treemap-native.png`（46967 字节）、`qml-sunburst-painted.png`（95237 字节）、`qml-scan-real.png`（45083 字节，自检里带 `pause=verified`）、`qml-scan-paused.png`（状态行 `scan	state=paused	mode=ordinary	workers=0	excluded=0	partials=0	files=0	dirs=0	skipped=0`）、helper 分派（`--scan-helper 'Z:' 坏管道名` 退出码 2，且不落进 GUI 的用法输出）。
+### 阶段 7：列表面板与导航（B2）
+
+对照原生 `viewer.h` 的列表面板逐条对齐，语义而不是外观照抄：
+
+- **排序**：原生只有两个排序列（名称、大小）。点击表头 `s.ascending = s.sortName==name ? !s.ascending : name`（`viewer.h:1852`），即同一列翻转方向、换列取该列的自然方向（名称升序、大小降序）。QML 侧 `DiskViewModel::toggleSort` 与之逐字对应。名称比较用 `QString::compare(..., Qt::CaseInsensitive)`，对应原生的 `CompareStringOrdinal(...,TRUE)`。
+- **过滤**：原生在 `EN_CHANGE` 时即过滤，比较的是整条路径的小写子串（`viewer.h:568-571`）。QML 侧 `setFilter` 用 `path.contains(filter, Qt::CaseInsensitive)`，`onTextEdited` 时写入，导航时清空（原生 `navigateTo` 也清空）。
+- **最大文件**：原生在每个视图根上重算当前子树的 1000 个最大文件（`viewer.h:600-620`），根上是扫描期缓存的那份。QML 侧 `rebuildLargest()` 用同样大小上限 1000 的最小堆遍历当前子树，根节点的结果与扫描期缓存等价，因此没有单独维护扫描期榜单。
+- **面包屑/历史**：原生是 `history` + `historyIndex`（`viewer.h:1666-1668`、`1690-1695`），`goUp` 也入栈。QML 侧 `m_history`/`m_historyPos` 同构，`pushHistory` 在目标等于当前位置时不重复入栈。面包屑由 `breadcrumb()` 回溯父链生成，QML 在超过 6 段时折叠成「首段 › … › 末四段」。
+- **键盘**：按原生 `viewer_commands.h` 的列表键位接上（↑↓ 选择、→/回车进入、←/退格上一级、Alt+←/→ 历史、Ctrl+F、Ctrl+L、F5、Esc）。
+- **翻页**：原生 `topScroll += ±maxRows`（`viewer.h:1854`）。QML 的 `ListView` 已虚拟化，底部按钮按整屏高度滚动，语义一致。
+- **格式化**：`formatBytes` 的 1024 进制与「≥100 去掉小数」规则（`tree.h:54-73`）、`formatCount` 的三位分节（`tree.h:75-85`）照搬；`%` 相对当前视图根，`%.1f`。
+- 顺带修掉一个启动期的信息缺失：QML 模块加载失败时 wrapper 只打一句「failed to load」，现在把引擎 `warnings` 信号里的具体行号一并带出（这条在排查 `rightPadding` 误用时立刻生效）。
+
+## 验证结果（B1）- `tests/check-prototype.ps1` 全绿：`qml-treemap-native.png`（46967 字节）、`qml-sunburst-painted.png`（95237 字节）、`qml-scan-real.png`（45083 字节，自检里带 `pause=verified`）、`qml-scan-paused.png`（状态行 `scan	state=paused	mode=ordinary	workers=0	excluded=0	partials=0	files=0	dirs=0	skipped=0`）、helper 分派（`--scan-helper 'Z:' 坏管道名` 退出码 2，且不落进 GUI 的用法输出）。
 - 新增 `tests/scan-tests.cpp`（`diskview-scan-tests.exe`，`scan tests: PASS`），三个用例：
   - 按住的扫描一个字节都不读（引擎级，400 ms 后 `seen==0`），放开后文件 3 个、目录 3 个；
   - `ScanService::startPaused()` → `paused()` 为真且模型 0 项 → `resume()` 后 `state=="done"`、文件 3、目录 3；
@@ -88,9 +100,16 @@
 - 检查脚本的扫描一律读临时设置 `{"scanMode": 2}`、扫临时目录，因此自动化过程中不可能弹 UAC；快扫的 UAC 正常路径只能由人在盘符根目录上手动触发。
 - 界面目视核对（截图 `build/qml-scan-paused.png`、`build/qml-settings-mode.png`）：顶栏「扫描已暂停」+「继续」按钮，底栏「扫描已暂停 · 点「继续」让它接着扫」，设置对话框新增「扫描方式 = 普通遍历」一行与勾选的「确定后立即重新扫描」。
 
+## 验证结果（B2）
+- `tests/check-prototype.ps1` 全绿，自检报告多出一列 `list=sort,name,filter,largest,history`：`0 8 regions transform navigate return list=... PASS`、`1 2 ... PASS`、真实扫描 `0 4 ... PASS`。
+- 新增 `tests/model-tests.cpp`（`diskview-model-tests.exe`，`PASS`），32 项断言：默认大小降序；名称列升序/再点降序；切到大小列回到降序；过滤命中/忽略大小写/无命中/清空/匹配整条路径；最大文件在根上是 4 个文件、进入 `zulu` 后只剩它自己的 2 个；历史 back/forward/up 往返且 `goUp` 记得刚离开的目录；格式化 `512 B`、`1.5 KB`、`200 MB`、`1,234`。
+- wrapper 自检新增 `runListChecks()`：排序（大小降序、名称升序）、过滤（用首行名称）、最大文件（只含文件）、历史（进入→后退→前进→后退）都由自检直接驱动模型完成，不依赖人眼。
+- 截图核对 `build/qml-treemap-native.png` / `build/qml-scan-real.png`：右侧面板出现「当前层 / 最大文件」标签、过滤框、「名称 / 大小 ↓ / %」表头、底部「上一页 / 下一页」，真实扫描截图的百分比 90.9%/9.1% 与 fixture 的 57.3% 等都对得上。
+- 交互类行为（鼠标点表头、键入过滤、真实按键）在无头环境无法合成；自检调用的是 UI 绑定的同一批模型方法，UI 事件本身仍需人手动确认。
+
 ## 阻塞及下一步
 
 - 尚未接入 WinShun 协议、文件操作或 host plugin launcher；管理员快扫 helper 已接线，但 UAC 正常路径尚未由人手动跑过（需在固定 NTFS 卷的盘符根目录上触发）。
 - QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
-- B1 已完成并提交；下一步按 roadmap 是 B2（列表排序/过滤/分页、最大文件面板、历史与面包屑、键盘导航）。
+- B1、B2 已完成并提交；下一步按 roadmap 是 B3（QSGGeometryNode 渲染路径、抗锯齿圆盘、大目录压力测试）。

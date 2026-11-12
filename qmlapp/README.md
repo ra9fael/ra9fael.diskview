@@ -11,6 +11,7 @@
 - 阶段 4：虚拟化列表待实施。
 - 阶段 5：Scene Graph 方块图与圆盘图待实施（当前用 `QQuickPaintedItem` 绘制）。
 - 阶段 6：扫描控制已补齐——暂停/继续、用新设置重扫、NTFS MFT 快扫（管理员 helper）、扫描问题详情。
+- 阶段 7：列表面板与导航已对齐原生版——按名称/大小排序、路径过滤、最大文件榜、面包屑、前进/后退/上一级、键盘导航、翻页。
 
 ## 安全边界
 
@@ -30,7 +31,7 @@ cmake --build qmlapp/build
 
 - `DISKVIEW_BUILD_QML=OFF`（默认）时不查找 Qt，原生版照常构建。
 - `DISKVIEW_QT_PREFIX` 指向 Qt 6.12.0 MSVC SDK 根目录。
-- `qmlapp/tests/check-prototype.ps1` 覆盖 fixture 递归求和、chart geometry 单元测试、扫描设置单元测试、扫描行为单元测试、部署独立运行包、treemap/sunburst 双模式截图、可见节点命中与 zoom/pan 逆变换、模型目录进入/返回、真实扫描、扫描被按住的状态、helper 分派。检查期间的扫描读的是一份只含 `{"scanMode": 2}` 的临时设置，扫的是临时目录，不会弹 UAC。
+- `qmlapp/tests/check-prototype.ps1` 覆盖 fixture 递归求和、chart geometry 单元测试、扫描设置单元测试、扫描行为单元测试、列表模型单元测试、部署独立运行包、treemap/sunburst 双模式截图、可见节点命中与 zoom/pan 逆变换、模型目录进入/返回、真实扫描、扫描被按住的状态、helper 分派。检查期间的扫描读的是一份只含 `{"scanMode": 2}` 的临时设置，扫的是临时目录，不会弹 UAC。
 
 ## 独立运行包
 
@@ -58,7 +59,7 @@ wrapper 的命令行：
 
 wrapper 的可执行文件同时是管理员快扫 helper：`--scan-helper <盘符> <管道名> <调用方 pid>` 会被 scan session 以 `runas` 提权启动，这条命令在 GUI 之前接管，退出码 2..7 表示不同的失败原因。
 
-自检报告形如 `0<TAB>8<TAB>regions<TAB>transform<TAB>navigate<TAB>return<TAB>PASS`，末列 `PASS` 表示全部通过。带 `--scan` 时还会多一行 `scan<TAB>state=…<TAB>mode=…<TAB>workers=…<TAB>excluded=…<TAB>partials=…<TAB>files=…<TAB>dirs=…<TAB>skipped=…<TAB>pause=…`。`pause=verified` 表示这次扫描确实被按住过（按住期间模型读到 0 项），`mode=fast` 表示走的是 MFT 快扫。
+自检报告形如 `0<TAB>8<TAB>regions<TAB>transform<TAB>navigate<TAB>return<TAB>list=sort,name,filter,largest,history<TAB>PASS`，末列 `PASS` 表示全部通过。带 `--scan` 时还会多一行 `scan<TAB>state=…<TAB>mode=…<TAB>workers=…<TAB>excluded=…<TAB>partials=…<TAB>files=…<TAB>dirs=…<TAB>skipped=…<TAB>pause=…`。`pause=verified` 表示这次扫描确实被按住过（按住期间模型读到 0 项），`mode=fast` 表示走的是 MFT 快扫。
 
 ## 真实扫描
 
@@ -92,6 +93,18 @@ wrapper 的可执行文件同时是管理员快扫 helper：`--scan-helper <盘�
 ## 扫描问题详情
 
 `ScanIssuesDialog.qml` 列出这次扫描里没能读到的目录及原因、跳过链接数、大小未知的文件数，以及快扫退回普通遍历的理由。目录被独占打开（权限不足、文件被其他程序锁住）时也会出现在这份清单里，附上 `FormatMessageW` 取到的系统错误文本。
+
+## 列表面板与导航
+
+右侧列表与原生版同语义：三列（名称 / 大小 / %），两个模式标签「当前层」「最大文件」。
+
+- **排序**：点「名称」按名称排（大小写不敏感），点「大小」按大小排；点同一个表头再点一次翻转方向，换表头则按各自的自然方向（名称升序、大小降序）。默认最大在前。
+- **过滤**：输入即过滤，匹配的是整条路径（大小写不敏感），图表不受影响。进入/返回目录时过滤自动清空，和原生版一致。
+- **最大文件**：当前子树里最大的 1000 个文件，用最小堆维护；在根目录时就是整棵树。进入子目录后排名跟着变成该子树。
+- **导航**：可点击的面包屑（超过 6 段时折叠成「首段 › … › 末四段」）、前进/后退/上一级三个按钮，历史栈在同一处维护；双击行或按回车进入目录。
+- **键盘**：`↑`/`↓` 移动选择，`→`/回车进入目录，`←`/退格返回上一级，`Alt+←`/`Alt+→` 前进后退，`Ctrl+F` 聚焦过滤框，`Ctrl+L` 聚焦路径框，`F5` 重扫，`Esc` 清空过滤。
+- **翻页**：列表用 `ListView` 虚拟化渲染，底部「上一页」「下一页」按整屏滚动，和原生版的 Prev/Next 一致。
+- **格式化**：大小按 1024 进制，数值 ≥100 时省掉小数（`200 MB`、`1.5 KB`、`512 B`）；条目数按三位加逗号（`1,234`）；`%` 相对当前视图根，保留一位小数。
 
 ## 局部快照
 
