@@ -2,6 +2,8 @@
 
 #include <QColor>
 #include <QDebug>
+#include <QElapsedTimer>
+#include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -163,6 +165,38 @@ QString ChartItem::firstRegionHit() const
     return {};
 }
 
+QString ChartItem::benchmark(int iterations)
+{
+    if (iterations < 1) iterations = 1;
+    QElapsedTimer timer;
+    // The payload the model hands over, turned into the chart's own tree.
+    timer.start();
+    for (int i = 0; i < iterations; ++i) setTreeData(m_treeData);
+    const double prepare = double(timer.nsecsElapsed()) / 1e6 / iterations;
+
+    timer.restart();
+    for (int i = 0; i < iterations; ++i) rebuildGeometry();
+    const double layout = double(timer.nsecsElapsed()) / 1e6 / iterations;
+
+    // A frame, painted the way the painted item paints one.
+    QImage frame(qMax(1, int(width())), qMax(1, int(height())), QImage::Format_ARGB32_Premultiplied);
+    timer.restart();
+    for (int i = 0; i < iterations; ++i) {
+        frame.fill(Qt::white);
+        QPainter painter(&frame);
+        paint(&painter);
+    }
+    const double painted = double(timer.nsecsElapsed()) / 1e6 / iterations;
+
+    return QStringLiteral("nodes=%1 tiles=%2 slices=%3 prepare=%4ms layout=%5ms paint=%6ms")
+        .arg(m_nodeInfo.size())
+        .arg(m_tiles.size())
+        .arg(m_slices.size())
+        .arg(prepare, 0, 'f', 1)
+        .arg(layout, 0, 'f', 2)
+        .arg(painted, 0, 'f', 2);
+}
+
 QPointF ChartItem::firstRegionCenter() const
 {
     if(m_regions.isEmpty())return {};
@@ -316,12 +350,16 @@ void ChartItem::paint(QPainter* painter)
             const QString id=m_pathIds.value(slice.path); if(id.isEmpty())continue;
             QPainterPath path;
             const auto point=[&](qreal r,qreal a){return QPointF(center.x()+std::cos(a)*r,center.y()+std::sin(a)*r);};
+            // Real arcs instead of a polyline: the edge stays smooth at any
+            // zoom, which the ring outline shows badly otherwise.
             const qreal span=slice.a1-slice.a0;
-            const int segments=std::max(2,static_cast<int>(std::ceil(span*slice.r1/2.0)));
+            const qreal startDeg=-slice.a0*180.0/M_PI;
+            const qreal sweepDeg=-span*180.0/M_PI;
+            const QRectF outer(center.x()-slice.r1,center.y()-slice.r1,2*slice.r1,2*slice.r1);
+            const QRectF inner(center.x()-slice.r0,center.y()-slice.r0,2*slice.r0,2*slice.r0);
             path.moveTo(point(slice.r1,slice.a0));
-            for(int i=1;i<=segments;++i){const qreal a=slice.a0+span*static_cast<qreal>(i)/segments;path.lineTo(point(slice.r1,a));}
-            path.lineTo(point(slice.r0,slice.a1));
-            for(int i=segments-1;i>=0;--i){const qreal a=slice.a0+span*static_cast<qreal>(i)/segments;path.lineTo(point(slice.r0,a));}
+            path.arcTo(outer,startDeg,sweepDeg);
+            path.arcTo(inner,startDeg+sweepDeg,-sweepDeg);
             path.closeSubpath();
             painter->fillPath(path,fillFor(*slice.node));
             if(id==m_selectedId||id==m_hoverId){

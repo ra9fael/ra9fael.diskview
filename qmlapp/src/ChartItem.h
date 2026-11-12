@@ -58,6 +58,9 @@ public:
     Q_INVOKABLE QString hitTestAfterTransform(const QPointF& localPoint, qreal zoom, const QPointF& pan) const;
     Q_INVOKABLE bool validateHitTransform() const;
     Q_INVOKABLE QString validateHitTestDetails() const;
+    // Timing for the B3 work: parse, lay out and paint the current tree, so
+    // the limits of the painted path can be written down with numbers.
+    Q_INVOKABLE QString benchmark(int iterations);
 
 signals:
     void treeDataChanged();

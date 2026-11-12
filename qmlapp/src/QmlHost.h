@@ -26,6 +26,8 @@ public:
         // Starts the scan and leaves it paused, so the held state can be
         // looked at.
         bool pauseOnStart = false;
+        // How many nodes the chart benchmark builds; 0 means no benchmark.
+        int benchNodes = 0;
     };
 
     explicit QmlHost(Options options, QObject* parent = nullptr);
@@ -43,6 +45,8 @@ public:
     // The read-only actions of the context menu.
     Q_INVOKABLE void copyToClipboard(const QString& text) const;
     Q_INVOKABLE void revealInExplorer(const QString& path) const;
+    // Builds a tree of that many nodes and times the whole chart pipeline.
+    bool runChartBenchmark(int nodes, QString* report);
 
     static bool parseArgs(const QStringList& arguments, Options* options, QString* error);
     static QString usage();

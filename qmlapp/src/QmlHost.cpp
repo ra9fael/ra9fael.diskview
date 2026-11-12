@@ -7,6 +7,7 @@
 
 #include <QClipboard>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHoverEvent>
@@ -144,6 +145,76 @@ QString QmlHost::scanStatusLine() const
         line += QStringLiteral("\tfallback=%1").arg(m_scanService->fallbackReason());
     }
     return line + QStringLiteral("\n");
+}
+
+namespace {
+// A tree shaped like a disk: a dozen top folders, each holding one flat level
+// of files, so the benchmark's node count is exact and its layout is realistic.
+QVariantMap syntheticTree(int nodes)
+{
+    const int topCount = 12;
+    const int perTop = std::max(1, (nodes - 1) / topCount);
+    std::uint64_t state = 88172645463325252ull;
+    const auto next = [&state] {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    QVariantList top;
+    double total = 0;
+    for (int t = 0; t < topCount; ++t) {
+        QVariantList files;
+        double folderTotal = 0;
+        for (int i = 0; i < perTop; ++i) {
+            const double size = double(1024 + (next() % (8u << 20)));
+            folderTotal += size;
+            files.push_back(QVariantMap{{"name", QStringLiteral("f_%1_%2.dat").arg(t).arg(i)},
+                                        {"size", size}, {"dir", false}});
+        }
+        total += folderTotal;
+        top.push_back(QVariantMap{{"name", QStringLiteral("dir_%1").arg(t)},
+                                  {"size", folderTotal}, {"dir", true}, {"children", files}});
+    }
+    return QVariantMap{{"name", QStringLiteral("bench")}, {"size", total},
+                       {"dir", true}, {"children", top}};
+}
+} // namespace
+
+bool QmlHost::runChartBenchmark(int nodes, QString* report)
+{
+    auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
+    auto* chart = window ? window->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr;
+    auto* model = window ? window->findChild<DiskViewModel*>(QStringLiteral("diskModel")) : nullptr;
+    if (!chart || !model) {
+        *report = QStringLiteral("bench: the chart or the model is missing\n");
+        return false;
+    }
+    const QVariantMap tree = syntheticTree(nodes);
+    const int runs = 3;
+    QElapsedTimer timer;
+
+    timer.start();
+    for (int i = 0; i < runs; ++i) model->loadTree(tree);
+    const double modelMs = double(timer.nsecsElapsed()) / 1e6 / runs;
+
+    timer.restart();
+    QVariantMap payload;
+    for (int i = 0; i < runs; ++i) payload = model->chartTree();
+    const double exportMs = double(timer.nsecsElapsed()) / 1e6 / runs;
+
+    chart->setTreeData(payload);
+    // Both drawing depths: one level is the default, two is what the 2 层
+    // button shows, and the paint cost only shows up there.
+    const QString shallow = chart->benchmark(runs);
+    chart->setDepth(2);
+    const QString deep = chart->benchmark(runs);
+    chart->setDepth(1);
+    *report = QStringLiteral("bench model=%1ms export=%2ms\nbench depth=1 %3\nbench depth=2 %4\n")
+                  .arg(modelMs, 0, 'f', 1)
+                  .arg(exportMs, 0, 'f', 1)
+                  .arg(shallow, deep);
+    return true;
 }
 
 bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
@@ -457,6 +528,14 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->openSettings = true;
         } else if (argument == QStringLiteral("--pause")) {
             options->pauseOnStart = true;
+        } else if (argument == QStringLiteral("--bench-chart")) {
+            bool ok = false;
+            const int nodes = value(argument).toInt(&ok);
+            if (!ok || nodes < 10) {
+                *error = QStringLiteral("--bench-chart takes the number of nodes (at least 10)");
+                return false;
+            }
+            options->benchNodes = nodes;
         } else {
             *error = QStringLiteral("unknown option %1").arg(argument);
             return false;
@@ -479,6 +558,7 @@ QString QmlHost::usage()
         "  --delay <ms>       wait before the grab (default 1200)\n"
         "  --settings         open the scan settings dialog on startup\n"
         "  --pause            start the scan and hold it there\n"
+        "  --bench-chart <n>  build a tree of n nodes and time the chart pipeline\n"
         "  --self-test        run the interaction checks and print the verdict\n"
         "  -h, --help         show this help\n");
 }

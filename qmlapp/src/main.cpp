@@ -118,6 +118,13 @@ int main(int argc, char** argv)
             QTextStream(stdout) << report;
             if (!passed) code = 1;
         }
+        if (options.benchNodes > 0) {
+            QString report;
+            if (!host.runChartBenchmark(options.benchNodes, &report)) {
+                code = 1;
+            }
+            QTextStream(stdout) << report;
+        }
         if (!options.screenshotPath.isEmpty() && !host.saveScreenshot(options.screenshotPath)) {
             QTextStream(stderr) << "error: could not save " << options.screenshotPath << "\n";
             code = 1;
@@ -151,7 +158,7 @@ int main(int argc, char** argv)
             // delay instead.
             QTimer::singleShot(options.screenshotDelayMs, &app, runChecks);
         }
-    } else if (options.selfTest || !options.screenshotPath.isEmpty()) {
+    } else if (options.selfTest || options.benchNodes > 0 || !options.screenshotPath.isEmpty()) {
         QTimer::singleShot(options.screenshotDelayMs, &app, runChecks);
     }
     return app.exec();

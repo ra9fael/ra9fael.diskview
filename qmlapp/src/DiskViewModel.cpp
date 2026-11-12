@@ -573,11 +573,19 @@ QVariantList DiskViewModel::extensions() const
 QVariantMap DiskViewModel::chartTree() const
 {
     if (m_current < 0) return {};
-    const auto exportNode = [&](auto&& self, int index) -> QVariantMap {
+    // The chart draws at most a few levels, and only the largest children of a
+    // folder get a visible tile anyway; handing it the whole subtree copied
+    // hundreds of thousands of nodes on every navigation.
+    constexpr int kChartLevels = 3;
+    constexpr int kChartChildren = 256;
+    const auto exportNode = [&](auto&& self, int index, int level) -> QVariantMap {
         const Entry& e = m_nodes[index];
         QVariantList children;
-        for (int child : e.children) children.push_back(self(self, child));
+        if (level < kChartLevels) {
+            const int count = std::min<int>(e.children.size(), kChartChildren);
+            for (int i = 0; i < count; ++i) children.push_back(self(self, e.children[i], level + 1));
+        }
         return {{"id", e.id}, {"name", e.name}, {"size", double(e.size)}, {"directory", e.directory}, {"children", children}};
     };
-    return exportNode(exportNode, m_current);
+    return exportNode(exportNode, m_current, 0);
 }
