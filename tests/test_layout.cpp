@@ -267,11 +267,24 @@ class TempDir {
 public:
     TempDir()
     {
-        wchar_t base[MAX_PATH] = {};
-        ::GetTempPathW(MAX_PATH, base);
-        m_path = fs::path(base) / (L"diskview_test_" + std::to_wstring(::GetCurrentProcessId()) + L"_"
-                                   + std::to_wstring(::GetTickCount64()));
-        fs::create_directories(m_path);
+        const std::wstring name = L"diskview_test_" + std::to_wstring(::GetCurrentProcessId()) + L"_"
+                                  + std::to_wstring(::GetTickCount64());
+        std::error_code ec;
+        m_path = fs::path(tempRoot()) / name;
+        fs::create_directories(m_path, ec);
+        if (ec) {
+            // A locked-down or heavily used machine can refuse a directory in
+            // %TEMP%; next to the executable is the fallback the settings test
+            // already relies on.
+            const fs::path beside = fs::path(exeDirectory()) / name;
+            ec.clear();
+            fs::create_directories(beside, ec);
+            if (ec) {
+                std::printf("TempDir: cannot create %ls: %s\n", m_path.c_str(), ec.message().c_str());
+            } else {
+                m_path = beside;
+            }
+        }
     }
     ~TempDir()
     {
@@ -281,6 +294,19 @@ public:
     const fs::path& path() const { return m_path; }
 
 private:
+    static std::wstring tempRoot()
+    {
+        wchar_t base[MAX_PATH] = {};
+        const DWORD length = ::GetTempPathW(MAX_PATH, base);
+        return length > 0 && length < MAX_PATH ? std::wstring(base, length) : std::wstring(L".\\");
+    }
+    static std::wstring exeDirectory()
+    {
+        wchar_t file[MAX_PATH] = {};
+        const DWORD length = ::GetModuleFileNameW(nullptr, file, MAX_PATH);
+        if (length == 0 || length >= MAX_PATH) return L".";
+        return fs::path(file).parent_path().wstring();
+    }
     fs::path m_path;
 };
 
