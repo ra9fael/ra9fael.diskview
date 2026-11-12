@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Disk View · WizTree 式布局演示</title>
+<style>
+  /* Colours follow the other Disk View prototypes (viewer.h lightPalette()),
+     so the demo and the native window agree. */
+  :root{
+    --bg:#f5f7fb; --panel:#fff; --text:#202b3c; --muted:#56657b;
+    --accent:#075db8; --border:#dde4ee; --hover:#eaf3ff; --ghost:#f0f3f9;
+    --bar:#cfe3f8; --bar-strong:#8fbce9; --warn:#a76414;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font:12.5px/1.4 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;
+    overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  .btn{
+    height:26px;padding:0 10px;border:1px solid var(--border);border-radius:5px;
+    background:var(--panel);white-space:nowrap;display:inline-flex;align-items:center;gap:5px;
+  }
+  .btn:hover{background:var(--hover)}
+  .btn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn:disabled{opacity:.45;cursor:default;background:var(--panel)}
+  .btn.icon{width:26px;padding:0;justify-content:center;font-size:14px}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  #app{height:100%;display:flex;flex-direction:column}
+
+  /* ---- top: drive, scan, stats ---- */
+  .head{
+    flex:0 0 62px;display:flex;align-items:center;gap:18px;padding:0 12px;
+    background:var(--panel);border-bottom:1px solid var(--border);
+  }
+  .head .drive{display:flex;flex-direction:column;gap:3px}
+  .head .drive .row{display:flex;align-items:center;gap:6px}
+  .scanbar{width:210px;height:5px;border-radius:3px;background:var(--ghost);overflow:hidden}
+  .scanbar i{display:block;height:100%;width:100%;background:#4f9a59}
+  .scanline{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+  .stats{display:flex;gap:22px;margin-left:auto}
+  .stat{display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}
+  .stat b{font-size:13.5px;font-weight:600}
+  .stat span{font-size:11px;color:var(--muted)}
+
+  /* ---- toolbar ---- */
+  .toolbar{
+    flex:0 0 36px;display:flex;align-items:center;gap:6px;padding:0 12px;
+    background:var(--panel);border-bottom:1px solid var(--border);
+  }
+  .tabs{display:flex;gap:0;border:1px solid var(--border);border-radius:5px;overflow:hidden}
+  .tabs button{height:24px;padding:0 11px;background:var(--panel);color:var(--muted)}
+  .tabs button.on{background:var(--accent);color:#fff}
+  .crumb{display:flex;align-items:center;gap:2px;min-width:0;flex:1;overflow:hidden}
+  .crumb button{color:var(--accent);padding:2px 3px;border-radius:3px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .crumb button:hover{background:var(--hover)}
+  .crumb button.cur{color:var(--text);font-weight:600;cursor:default}
+  .crumb .sep{color:#a3afbf}
+  .search{height:24px;width:190px;border:1px solid var(--border);border-radius:5px;padding:0 8px;font:inherit;margin-left:auto}
+
+  /* ---- breadcrumb row: between the tables and the treemap, the way WizTree
+     puts the path right above the boxes ---- */
+  .navrow{
+    flex:0 0 32px;display:flex;align-items:center;gap:6px;padding:0 12px;
+    background:var(--panel);border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+  }
+  .navrow .size{margin-left:auto;color:var(--muted);font-size:11.5px;white-space:nowrap}
+
+  /* ---- panes ---- */
+  .split{flex:1;display:flex;flex-direction:column;min-height:0}
+  .pane{display:flex;min-height:0;background:var(--panel);overflow:hidden}
+  .pane.top{flex:0 0 50%}
+  .pane.bottom{flex:1;position:relative}
+  .vsplit{flex:0 0 5px;cursor:col-resize;background:var(--bg);border-left:1px solid var(--border);border-right:1px solid var(--border)}
+  .hsplit{flex:0 0 5px;cursor:row-resize;background:var(--bg);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  .pane .scroller{overflow:auto;min-width:0}
+
+  /* ---- tables ---- */
+  table{border-collapse:collapse;width:100%;table-layout:fixed}
+  thead th{
+    position:sticky;top:0;z-index:2;background:var(--ghost);
+    font-weight:600;font-size:11.5px;color:var(--muted);text-align:right;
+    padding:5px 8px;border-bottom:1px solid var(--border);white-space:nowrap;
+    cursor:pointer;user-select:none;
+  }
+  thead th.name{text-align:left}
+  thead th span{color:var(--accent);margin-left:3px}
+  tbody td{padding:2px 8px;border-bottom:1px solid #eef2f7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  tbody td.num{text-align:right;font-variant-numeric:tabular-nums;color:#33445c}
+  tbody tr{cursor:default}
+  tbody tr:hover{background:var(--hover)}
+  tbody tr.sel{background:#dcebfc}
+  .c-name{display:flex;align-items:center;gap:4px}
+  .tw{width:14px;height:14px;flex:0 0 14px;display:inline-flex;align-items:center;justify-content:center;color:#7b8a9d;font-size:10px}
+  .tw.leaf{visibility:hidden}
+  .ico{width:12px;height:12px;border-radius:2px;flex:0 0 12px}
+  .pctcell{position:relative;min-width:74px}
+  .pctcell .bar{position:absolute;left:0;top:5px;bottom:5px;background:var(--bar);border-radius:2px;z-index:0}
+  .pctcell b{position:relative;z-index:1;font-weight:400;padding-left:4px}
+  .foldercell{padding-left:0}
+
+  /* ---- treemap ---- */
+  #map{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .tip{
+    position:fixed;z-index:50;pointer-events:none;display:none;max-width:420px;
+    background:#fbfcfd;border:1px solid #b9c6d4;border-radius:4px;
+    box-shadow:0 6px 20px rgba(20,32,50,.18);padding:7px 9px;line-height:1.45;
+  }
+  .tip .n{font-weight:600;font-size:12.5px;margin-bottom:2px}
+  .tip .p{color:var(--muted);font-size:11px;word-break:break-all;margin-bottom:4px}
+  .tip .s{font-size:11.5px}
+  .tip .s em{font-style:normal;color:var(--muted)}
+
+  /* ---- status ---- */
+  .status{
+    flex:0 0 26px;display:flex;align-items:center;gap:16px;padding:0 12px;
+    background:var(--panel);border-top:1px solid var(--border);font-size:11.5px;color:var(--muted);
+  }
+  .status .path{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%}
+
+  /* ---- note ---- */
+  .note{
+    position:fixed;right:14px;bottom:36px;z-index:60;max-width:330px;
+    background:#fffdf5;border:1px solid #e6d9a8;border-radius:6px;padding:9px 11px;
+    box-shadow:0 8px 22px rgba(20,32,50,.12);font-size:11.5px;color:#5a4b1d;line-height:1.55;
+  }
+  .note b{display:block;margin-bottom:3px;color:#3f3510}
+  .note button{position:absolute;right:6px;top:4px;color:#8a7a45;font-size:14px;line-height:1}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="head">
+    <div class="drive">
+      <div class="row">
+        <select class="search" style="width:150px;height:24px" id="drive">
+          <option>[C:] 本地磁盘</option>
+          <option>[D:] 数据盘</option>
+        </select>
+        <button class="btn primary" id="rescan">扫描</button>
+      </div>
+      <div class="scanline">
+        <div class="scanbar"><i id="scanfill"></i></div>
+        <span id="scantext">扫描完成 · 13.25 秒</span>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="s-total">—</b><span>总容量</span></div>
+      <div class="stat"><b id="s-used">—</b><span>已用</span></div>
+      <div class="stat"><b id="s-free">—</b><span>可用</span></div>
+      <div class="stat"><b id="s-reserved">5.9 GB</b><span>保留</span></div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="tabs">
+      <button class="on" data-tab="tree">树视图</button>
+      <button data-tab="files">文件视图</button>
+    </div>
+    <input class="search" id="search" placeholder="筛选名称…">
+  </div>
+
+  <div class="split" id="split">
+    <div class="pane top" id="paneTop">
+      <div class="scroller" id="treeScroll" style="flex:1 1 58%">
+        <table id="treeTable">
+          <colgroup>
+            <col style="width:auto">
+            <col style="width:96px">
+            <col style="width:92px">
+            <col style="width:92px">
+            <col style="width:74px">
+            <col style="width:74px">
+            <col style="width:70px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="name" data-sort="name">文件夹 / 名称</th>
+              <th data-sort="pct">% 父级</th>
+              <th data-sort="size">大小<span>▼</span></th>
+              <th data-sort="alloc">已分配</th>
+              <th data-sort="items">项目</th>
+              <th data-sort="files">文件</th>
+              <th data-sort="dirs">文件夹</th>
+            </tr>
+          </thead>
+          <tbody id="treeBody"></tbody>
+        </table>
+      </div>
+      <div class="vsplit" id="vsplit"></div>
+      <div class="scroller" id="extScroll" style="flex:0 0 42%">
+        <table id="extTable">
+          <colgroup>
+            <col style="width:26px">
+            <col style="width:auto">
+            <col style="width:70px">
+            <col style="width:92px">
+            <col style="width:92px">
+            <col style="width:74px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th></th>
+              <th class="name">扩展名</th>
+              <th>占比</th>
+              <th>大小</th>
+              <th>已分配</th>
+              <th>文件数</th>
+            </tr>
+          </thead>
+          <tbody id="extBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hsplit" id="hsplit"></div>
+
+    <div class="navrow">
+      <button class="btn icon" id="back" title="后退 (Alt+←)">←</button>
+      <button class="btn icon" id="forward" title="前进 (Alt+→)">→</button>
+      <button class="btn icon" id="up" title="上一级 (Backspace)">↑</button>
+      <div class="crumb" id="crumb"></div>
+      <span class="size" id="navsize"></span>
+    </div>
+
+    <div class="pane bottom" id="paneBottom">
+      <canvas id="map"></canvas>
+    </div>
+  </div>
+
+  <div class="status">
+    <span id="selinfo">未选中</span>
+    <span id="countinfo"></span>
+    <span class="path" id="hovertip"></span>
+  </div>
+</div>
+
+<div class="tip" id="tip">
+  <div class="n"></div>
+  <div class="p"></div>
+  <div class="s"></div>
+</div>
+
+<div class="note" id="note">
+  <button onclick="document.getElementById('note').remove()">×</button>
+  <b>演示稿 · 数据为虚构</b>
+  布局参考 WizTree：文件夹树 + 扩展名图例在上，方块图在下，面包屑夹在两者之间；
+  方块按扩展名着色，% 父级是内嵌条。双击方块或表格行进入目录，单击固定选中，右键预留文件操作。
+</div>
+
+<script>
+/* ---------------------------------------------------------------- data --- */
+const GB = 1024 ** 3, MB = 1024 ** 2, KB = 1024;
+let nextId = 1;
+
+const mulberry32 = seed => () => {
+  seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+  let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+};
+
+const EXTS = [
+  ['', 6, '无扩展名'], ['.dll', 14, '应用程序扩展'], ['.exe', 7, '应用程序'],
+  ['.mp4', 9, 'MP4 视频'], ['.mkv', 4, 'Matroska 视频'], ['.zip', 5, 'ZIP 压缩包'],
+  ['.7z', 3, '7z 压缩包'], ['.iso', 3, '光盘映像'], ['.png', 4, 'PNG 图像'],
+  ['.jpg', 4, 'JPEG 图像'], ['.pdf', 3, 'PDF 文档'], ['.py', 3, 'Python 源文件'],
+  ['.json', 3, 'JSON 文件'], ['.txt', 3, '文本文件'], ['.log', 3, '日志文件'],
+  ['.bin', 4, '二进制文件'], ['.pak', 3, '资源包'], ['.dat', 3, '数据文件'],
+];
+const WEIGHTED = EXTS.flatMap(e => Array(e[1]).fill(e));
+const STEMS = {
+  '': ['README', 'LICENSE', 'Makefile', 'Dockerfile'],
+  '.dll': ['Qt6Core', 'msvcp140', 'opengl32', 'libcrypto', 'zlib', 'vcruntime140'],
+  '.exe': ['setup', 'unins000', 'vcredist_x64', 'update', 'tools'],
+  '.mp4': ['2026-10-10 19-45-40', 'VID20250922_11228', '夜工段', '演示录屏'],
+  '.mkv': ['课程-04', '纪录片-02'],
+  '.zip': ['backup-2026', 'source', 'assets'],
+  '.7z': ['epics-ioc', 'data'],
+  '.iso': ['ubuntu-22.04', 'vs2022'],
+  '.png': ['screenshot', 'icon', 'chart'],
+  '.jpg': ['IMG_20260912', 'photo'],
+  '.pdf': ['手册', '手册-2', '报告'],
+  '.py': ['main', 'scan', 'worker', 'test_scan'],
+  '.json': ['package', 'settings', 'lock'],
+  '.txt': ['notes', 'todo', 'changelog'],
+  '.log': ['build', 'debug', 'trace'],
+  '.bin': ['data', 'cache'],
+  '.pak': ['resources', 'fonts'],
+  '.dat': ['index', 'store'],
+};
+
+// A folder whose files are made up: a few big ones, many small ones, and the
+// sizes are scaled so that they add up to `sizeGB` exactly.
+function leaf(name, sizeGB, seed, count = 26) {
+  const rnd = mulberry32(seed);
+  const total = sizeGB * GB;
+  const files = [];
+  let raw = 0;
+  const rawSizes = [];
+  for (let i = 0; i < count; i++) {
+    // The first few files carry the bulk; the rest follow a steep falloff.
+    const base = i < 3 ? 0.18 + rnd() * 0.16 : Math.pow(rnd(), 3.2);
+    rawSizes.push(base); raw += base;
+  }
+  for (let i = 0; i < count; i++) {
+    const ext = WEIGHTED[Math.floor(rnd() * WEIGHTED.length)][0];
+    const stems = STEMS[ext] || ['file'];
+    const stem = stems[Math.floor(rnd() * stems.length)];
+    files.push({ id: nextId++, name: stem + (count > stems.length ? '_' + String(i + 1).padStart(2, '0') : '') + ext,
+                 size: Math.max(KB, Math.round(total * rawSizes[i] / raw)), dir: false, children: [] });
+  }
+  return dir(name, files);
+}
+
+function dir(name, children) {
+  const n = { id: nextId++, name, dir: true, children };
+  n.size = children.reduce((s, c) => s + c.size, 0);
+  return n;
+}
+
+const file = (name, sizeGB) => ({ id: nextId++, name, size: sizeGB * GB, dir: false, children: [] });
+
+const ROOT = dir('C:\\', [
+  dir('Users', [
+    dir('公共', [leaf('公共文档', 3.4, 11, 18)]),
+    dir('renfei', [
+      leaf('Desktop', 4.3, 21),
+      dir('Documents', [leaf('论文', 6.2, 31), leaf('工作', 14.2, 32, 40)]),
+      leaf('Pictures', 8.4, 41, 34),
+      dir('Videos', [
+        file('2026-10-10 19-45-40.mp4', 53.6),
+        file('2026-09-18 夜工段.mp4', 6.6),
+        file('2026-09-18 夜工段-备份.mp4', 1.8),
+        file('Vivado 安装演示.mp4', 2.4),
+        leaf('captures', 0.038, 51, 6),
+        leaf('backup', 1.4, 52, 8),
+        leaf('downloads', 6.4, 53, 14),
+      ]),
+      dir('Downloads', [
+        file('epics-7.0.10-x86_64-ubuntu-22.04.tar.gz', 4.2),
+        file('vivado_2025.2_installer.exe', 19.8),
+        file('PyTorch_2.6_cu124.iso', 8.6),
+        leaf('其他', 22.2, 62, 24),
+      ]),
+      dir('AppData', [
+        dir('Local', [leaf('Microsoft', 62.1, 71, 30), leaf('Temp', 21.4, 72, 26), leaf('Packages', 26.8, 73, 30)]),
+        dir('Roaming', [leaf('.npm', 9.4, 74, 22), leaf('Code', 7.1, 75, 18), leaf('Docker', 12.4, 76, 12)]),
+      ]),
+    ]),
+  ]),
+  dir('Windows', [
+    leaf('System32', 12.1, 81, 34),
+    leaf('WinSxS', 16.6, 82, 40),
+    leaf('Installer', 11.4, 83, 18),
+    leaf('Fonts', 0.9, 84, 16),
+    leaf('assembly', 2.2, 85, 14),
+  ]),
+  dir('Program Files', [
+    leaf('AMD', 30.6, 91, 30),
+    leaf('NVIDIA Corporation', 12.0, 92, 24),
+    leaf('Steam', 20.2, 93, 26),
+    leaf('com.LIZ', 18.9, 94, 20),
+    leaf('Git', 3.9, 95, 30),
+  ]),
+  dir('Program Files (x86)', [leaf('Common Files', 8.6, 101, 26), leaf('Microsoft', 22.0, 102, 30)]),
+  dir('Xilinx', [
+    leaf('Vivado', 45.5, 111, 34),
+    leaf('Vitis', 48.3, 112, 34),
+    leaf('2022.2', 26.1, 113, 26),
+    leaf('2025.2', 65.4, 114, 30),
+    leaf('NVIDIA', 3.4, 115, 12),
+  ]),
+  dir('AMDDesignTools', [leaf('2025.2', 47.2, 121, 30), leaf('2022.2', 18.3, 122, 22)]),
+  dir('$Recycle.Bin', [leaf('S-1-5-21-2891', 36.7, 131, 20)]),
+  file('pagefile.sys', 21.3),
+  file('hiberfil.sys', 12.8),
+  file('swapfile.sys', 0.5),
+]);
+
+/* --------------------------------------------------------------- helpers --- */
+const fmt = bytes => {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = Math.max(0, bytes), u = 0;
+  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+  return u === 0 ? Math.round(v) + ' B' : v.toFixed(v >= 100 ? 0 : 1) + ' ' + units[u];
+};
+const allocOf = bytes => Math.ceil(bytes / 4096) * 4096;
+const parentOf = new Map();
+(function link(node, parent) { parentOf.set(node, parent); node.children.forEach(c => link(c, node)); })(ROOT, null);
+const pathOf = node => {
+  const parts = [];
+  for (let n = node; n; n = parentOf.get(n)) parts.unshift(n.name);
+  return parts.join('\\').replace('\\\\', '\\');
+};
+const extOf = name => { const i = name.lastIndexOf('.'); return i <= 0 ? '' : name.slice(i).toLowerCase(); };
+const statsOf = node => {
+  let files = 0, dirs = 0;
+  (function walk(n) { for (const c of n.children) { if (c.dir) { dirs++; walk(c); } else files++; } })(node);
+  return { files, dirs, items: files + dirs };
+};
+
+const PALETTE = ['#c2703f', '#3f7ec2', '#4f9a59', '#8d69b0', '#bc5c62', '#4e9ab2', '#a58b45',
+                 '#6f8f3f', '#b05f8f', '#5f7fbf', '#c99a3f', '#4f8f8a', '#9a5f5f', '#7f9a4f',
+                 '#5a6fa0', '#a07050'];
+const extColor = (() => {
+  const cache = new Map();
+  return ext => {
+    if (!cache.has(ext)) {
+      let h = 0;
+      for (const ch of ext) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      cache.set(ext, PALETTE[h % PALETTE.length]);
+    }
+    return cache.get(ext);
+  };
+})();
+const EXT_LABEL = Object.fromEntries(EXTS.map(e => [e[0], e[2]]));
+
+/* ----------------------------------------------------------------- state --- */
+const state = {
+  root: ROOT,
+  history: [ROOT],
+  hpos: 0,
+  expanded: new Set([ROOT.id]),
+  sortKey: 'size',
+  sortAsc: false,
+  selected: null,
+  hovered: null,
+  highlightExt: null,
+  tab: 'tree',
+  filter: '',
+};
+
+/* --------------------------------------------------------------- treemap --- */
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+let tiles = [];
+
+function squarify(items, x, y, w, h) {
+  const out = [];
+  const total = items.reduce((s, i) => s + i.value, 0);
+  if (total <= 0 || w <= 0 || h <= 0) return out;
+  const scale = (w * h) / total;
+  let rect = { x, y, w, h };
+  let i = 0;
+  while (i < items.length) {
+    const side = Math.min(rect.w, rect.h);
+    if (side <= 0) break;
+    const row = [];
+    let sum = 0, best = Infinity;
+    while (i < items.length) {
+      const a = items[i].value * scale;
+      const minA = row.length ? Math.min(...row) : a;
+      const maxA = row.length ? Math.max(...row) : a;
+      const nMin = Math.min(minA, a), nMax = Math.max(maxA, a);
+      const nSum = sum + a;
+      const worst = Math.max(side * side * nMax / (nSum * nSum), (nSum * nSum) / (side * side * nMin));
+      if (row.length && worst > best) break;
+      row.push(a); sum = nSum; best = worst; i++;
+    }
+    const thickness = sum / side;
+    let off = 0;
+    if (rect.w >= rect.h) {
+      for (const a of row) {
+        const len = a / thickness;
+        out.push({ x: rect.x, y: rect.y + off, w: thickness, h: len });
+        off += len;
+      }
+      rect = { x: rect.x + thickness, y: rect.y, w: rect.w - thickness, h: rect.h };
+    } else {
+      for (const a of row) {
+        const len = a / thickness;
+        out.push({ x: rect.x + off, y: rect.y, w: len, h: thickness });
+        off += len;
+      }
+      rect = { x: rect.x, y: rect.y + thickness, w: rect.w, h: rect.h - thickness };
+    }
+  }
+  return out;
+}
+
+function layout(node, rect, depth, out) {
+  const kids = node.children.filter(c => c.size > 0).sort((a, b) => b.size - a.size);
+  if (!kids.length || rect.w < 6 || rect.h < 6) return;
+  const rects = squarify(kids.map(c => ({ value: c.size })), rect.x, rect.y, rect.w, rect.h);
+  kids.forEach((child, i) => {
+    const r = rects[i];
+    if (!r || r.w <= 0 || r.h <= 0) return;
+    out.push({ node: child, rect: r, depth });
+    if (child.dir && child.children.length && depth < 3 && r.w > 26 && r.h > 26) {
+      const head = Math.min(15, r.h * 0.3);
+      layout(child, { x: r.x + 1, y: r.y + head, w: r.w - 2, h: r.h - head - 1 }, depth + 1, out);
+    }
+  });
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = Math.max(1, Math.round(w * dpr));
+  canvas.height = Math.max(1, Math.round(h * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  if (state.tab === 'files') return;
+
+  tiles = [];
+  layout(state.root, { x: 0, y: 0, w, h }, 0, tiles);
+  const dim = state.highlightExt !== null;
+
+  for (const t of tiles) {
+    const { node, rect, depth } = t;
+    const ext = node.dir ? '' : extOf(node.name);
+    const isMatch = !dim || (!node.dir && ext === state.highlightExt);
+    let fill = node.dir ? '#8f9aa8' : extColor(ext);
+    if (!isMatch) fill = '#dfe4ea';
+    if (node === state.hovered) fill = shade(fill, -12);
+    ctx.fillStyle = fill;
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+    if (node.dir) {
+      // The folder header keeps a darker band so nested files read as its own.
+      ctx.fillStyle = shade(fill, -14);
+      ctx.fillRect(rect.x, rect.y, rect.w, Math.min(15, rect.h));
+    }
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = depth === 0 ? 1.5 : 1;
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
+    if (node === state.selected) {
+      ctx.strokeStyle = '#1b2b3a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2);
+    }
+
+    const label = node.dir ? node.name : node.name;
+    const showName = rect.w >= 54 && rect.h >= 15;
+    const showSize = rect.w >= 54 && rect.h >= 31;
+    if (showName) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2);
+      ctx.clip();
+      ctx.fillStyle = textOn(node.dir ? shade(fill, -14) : fill);
+      ctx.font = '10px "Segoe UI","Microsoft YaHei UI",sans-serif';
+      ctx.textBaseline = 'top';
+      ctx.fillText(ellipsize(ctx, label, rect.w - 8), rect.x + 4, rect.y + (node.dir ? 3 : 3));
+      if (showSize) {
+        ctx.globalAlpha = 0.78;
+        ctx.fillText(fmt(node.size), rect.x + 4, rect.y + 15);
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+  }
+}
+
+function ellipsize(c, text, max) {
+  if (c.measureText(text).width <= max) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (c.measureText(text.slice(0, mid) + '…').width <= max) lo = mid; else hi = mid - 1;
+  }
+  return text.slice(0, lo) + '…';
+}
+function shade(hex, percent) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = v => Math.max(0, Math.min(255, Math.round(v * (100 + percent) / 100)));
+  return '#' + ((f(n >> 16 & 255) << 16) | (f(n >> 8 & 255) << 8) | f(n & 255)).toString(16).padStart(6, '0');
+}
+function textOn(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const lum = (0.2126 * (n >> 16 & 255) + 0.7152 * (n >> 8 & 255) + 0.0722 * (n & 255)) / 255;
+  return lum > 0.62 ? '#1b2b3a' : '#ffffff';
+}
+
+/* ---------------------------------------------------------------- tables --- */
+const treeBody = document.getElementById('treeBody');
+const extBody = document.getElementById('extBody');
+
+function sortRows(rows) {
+  const k = state.sortKey, asc = state.sortAsc;
+  const value = n => k === 'name' ? n.name.toLowerCase()
+    : k === 'pct' || k === 'size' ? n.size
+    : k === 'alloc' ? allocOf(n.size)
+    : k === 'items' ? statsOf(n).items
+    : k === 'files' ? statsOf(n).files
+    : statsOf(n).dirs;
+  rows.sort((a, b) => {
+    const va = value(a), vb = value(b);
+    if (va < vb) return asc ? -1 : 1;
+    if (va > vb) return asc ? 1 : -1;
+    return 0;
+  });
+  return rows;
+}
+
+function renderTree() {
+  const body = treeBody;
+  body.innerHTML = '';
+  if (state.tab === 'files') {
+    const flat = [];
+    (function walk(n) { for (const c of n.children) { if (c.dir) walk(c); else flat.push(c); } })(state.root);
+    const filtered = flat.filter(n => !state.filter || n.name.toLowerCase().includes(state.filter));
+    filtered.sort((a, b) => b.size - a.size);
+    for (const f of filtered.slice(0, 400)) {
+      const tr = row(f, 0, true);
+      tr.classList.toggle('sel', f === state.selected);
+      body.appendChild(tr);
+    }
+    document.getElementById('countinfo').textContent = filtered.length + ' 个文件';
+    return;
+  }
+
+  const walk = (node, depth) => {
+    const rows = sortRows(node.children.slice())
+      .filter(n => !state.filter || n.name.toLowerCase().includes(state.filter) || hasMatch(n));
+    for (const child of rows) {
+      const tr = row(child, depth, false);
+      tr.classList.toggle('sel', child === state.selected);
+      body.appendChild(tr);
+      if (child.dir && state.expanded.has(child.id)) walk(child, depth + 1);
+    }
+  };
+  walk(state.root, 0);
+  const st = statsOf(state.root);
+  document.getElementById('countinfo').textContent =
+    st.files.toLocaleString() + ' 个文件 · ' + st.dirs.toLocaleString() + ' 个文件夹';
+}
+
+function hasMatch(node) {
+  if (!node.dir) return false;
+  return node.children.some(c => c.name.toLowerCase().includes(state.filter) || hasMatch(c));
+}
+
+function row(node, depth, flat) {
+  const tr = document.createElement('tr');
+  const parent = parentOf.get(node) || node;
+  const pct = parent.size ? node.size / parent.size * 100 : 0;
+  const st = statsOf(node);
+  tr.innerHTML = `
+    <td class="foldercell"><div class="c-name" style="padding-left:${depth * 13}px">
+      <span class="tw ${node.dir && node.children.length ? '' : 'leaf'}">${node.dir && node.children.length ? (state.expanded.has(node.id) ? '▾' : '▸') : '·'}</span>
+      <span class="ico" style="background:${node.dir ? '#8f9aa8' : extColor(extOf(node.name))}"></span>
+      <span style="overflow:hidden;text-overflow:ellipsis"></span>
+    </div></td>
+    <td class="num pctcell"><span class="bar" style="width:${Math.max(0, Math.min(100, pct))}%"></span><b>${pct.toFixed(1)}%</b></td>
+    <td class="num">${fmt(node.size)}</td>
+    <td class="num">${fmt(allocOf(node.size))}</td>
+    <td class="num">${flat ? '—' : st.items.toLocaleString()}</td>
+    <td class="num">${flat ? '—' : st.files.toLocaleString()}</td>
+    <td class="num">${flat ? '—' : (node.dir ? st.dirs.toLocaleString() : '—')}</td>`;
+  tr.querySelector('.c-name span:last-child').textContent = node.name || '(无扩展名)';
+  tr.querySelector('.tw').onclick = e => {
+    e.stopPropagation();
+    if (!node.dir) return;
+    state.expanded.has(node.id) ? state.expanded.delete(node.id) : state.expanded.add(node.id);
+    renderTree();
+  };
+  tr.onclick = () => { state.selected = node; renderTree(); renderStatus(); draw(); };
+  tr.ondblclick = () => { if (node.dir) drill(node); };
+  return tr;
+}
+
+function renderExts() {
+  const map = new Map();
+  const total = state.root.size || 1;
+  (function walk(n) {
+    for (const c of n.children) {
+      if (c.dir) { walk(c); continue; }
+      const ext = extOf(c.name);
+      const e = map.get(ext) || { ext, size: 0, files: 0 };
+      e.size += c.size; e.files++; map.set(ext, e);
+    }
+  })(state.root);
+  const rows = [...map.values()].sort((a, b) => b.size - a.size);
+  extBody.innerHTML = '';
+  for (const r of rows.slice(0, 18)) {
+    const tr = document.createElement('tr');
+    tr.classList.toggle('sel', state.highlightExt === r.ext);
+    tr.innerHTML = `
+      <td><span class="ico" style="background:${extColor(r.ext)}"></span></td>
+      <td class="name"><div class="c-name"><span style="overflow:hidden;text-overflow:ellipsis"></span>
+        <span style="color:#8b98a9;font-size:11px">${EXT_LABEL[r.ext] || '其他'}</span></div></td>
+      <td class="num">${(r.size / total * 100).toFixed(1)}%</td>
+      <td class="num">${fmt(r.size)}</td>
+      <td class="num">${fmt(allocOf(r.size))}</td>
+      <td class="num">${r.files.toLocaleString()}</td>`;
+    tr.querySelector('.c-name span').textContent = r.ext || '(无)';
+    tr.onclick = () => {
+      state.highlightExt = state.highlightExt === r.ext ? null : r.ext;
+      renderExts(); draw();
+    };
+    extBody.appendChild(tr);
+  }
+}
+
+function renderCrumb() {
+  const crumb = document.getElementById('crumb');
+  crumb.innerHTML = '';
+  const chain = [];
+  for (let n = state.root; n; n = parentOf.get(n)) chain.unshift(n);
+  chain.forEach((n, i) => {
+    if (i) { const s = document.createElement('span'); s.className = 'sep'; s.textContent = '›'; crumb.appendChild(s); }
+    const b = document.createElement('button');
+    b.textContent = n.name;
+    b.title = pathOf(n);
+    if (i === chain.length - 1) b.className = 'cur';
+    else b.onclick = () => drill(n);
+    crumb.appendChild(b);
+  });
+  document.getElementById('back').disabled = state.hpos <= 0;
+  document.getElementById('forward').disabled = state.hpos >= state.history.length - 1;
+  document.getElementById('up').disabled = state.hpos <= 0;
+  const st = statsOf(state.root);
+  document.getElementById('navsize').textContent =
+    '当前目录 · ' + fmt(state.root.size) + ' · ' + st.items.toLocaleString() + ' 项';
+}
+
+function renderStatus() {
+  const sel = state.selected;
+  document.getElementById('selinfo').textContent = sel
+    ? '已选：' + (sel.name || '(无扩展名)') + ' · ' + fmt(sel.size) + (sel.dir ? ' · 文件夹' : '')
+    : '未选中';
+}
+
+function renderStats() {
+  const total = 1.8 * 1024 ** 4;
+  const used = ROOT.size;
+  const free = Math.max(0, total - used);
+  document.getElementById('s-total').textContent = fmt(total);
+  document.getElementById('s-used').textContent = fmt(used) + ' (' + (used / total * 100).toFixed(1) + '%)';
+  document.getElementById('s-free').textContent = fmt(free) + ' (' + (free / total * 100).toFixed(1) + '%)';
+}
+
+function drill(node) {
+  if (!node || !node.dir) return;
+  state.history = state.history.slice(0, state.hpos + 1);
+  state.history.push(node);
+  state.hpos = state.history.length - 1;
+  state.root = node;
+  state.expanded.add(node.id);
+  state.selected = null;
+  state.highlightExt = null;
+  state.filter = '';
+  document.getElementById('search').value = '';
+  renderAll();
+}
+
+function renderAll() {
+  renderCrumb(); renderTree(); renderExts(); renderStats(); renderStatus(); draw();
+}
+
+/* ----------------------------------------------------------------- input --- */
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  let hit = null;
+  for (let i = tiles.length - 1; i >= 0; i--) {
+    const t = tiles[i];
+    if (x >= t.rect.x && x < t.rect.x + t.rect.w && y >= t.rect.y && y < t.rect.y + t.rect.h) { hit = t.node; break; }
+  }
+  if (hit !== state.hovered) { state.hovered = hit; draw(); }
+  const tip = document.getElementById('tip');
+  document.getElementById('hovertip').textContent = hit ? pathOf(hit) : '';
+  if (!hit) { tip.style.display = 'none'; return; }
+  tip.querySelector('.n').textContent = hit.name || '(无扩展名)';
+  tip.querySelector('.p').textContent = pathOf(hit);
+  tip.querySelector('.s').innerHTML = (hit.dir ? '文件夹' : '文件') + ' · ' + fmt(hit.size)
+    + ' <em>· 已分配 ' + fmt(allocOf(hit.size)) + '</em>';
+  tip.style.display = 'block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.min(window.innerWidth - tw - 8, e.clientX + 16) + 'px';
+  tip.style.top = Math.min(window.innerHeight - th - 8, e.clientY + 18) + 'px';
+});
+canvas.addEventListener('mouseleave', () => {
+  state.hovered = null; draw();
+  document.getElementById('tip').style.display = 'none';
+  document.getElementById('hovertip').textContent = '';
+});
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  for (let i = tiles.length - 1; i >= 0; i--) {
+    const t = tiles[i];
+    if (x >= t.rect.x && x < t.rect.x + t.rect.w && y >= t.rect.y && y < t.rect.y + t.rect.h) {
+      state.selected = t.node; renderStatus(); draw();
+      // The list follows the selection so the two halves stay in step.
+      if (t.node.dir) state.expanded.add(t.node.id);
+      renderTree();
+      return;
+    }
+  }
+});
+canvas.addEventListener('dblclick', e => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  for (let i = tiles.length - 1; i >= 0; i--) {
+    const t = tiles[i];
+    if (x >= t.rect.x && x < t.rect.x + t.rect.w && y >= t.rect.y && y < t.rect.y + t.rect.h) {
+      if (t.node.dir) drill(t.node);
+      return;
+    }
+  }
+});
+
+document.querySelectorAll('.tabs button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    state.tab = b.dataset.tab;
+    renderTree();
+    draw();
+  };
+});
+document.getElementById('back').onclick = () => {
+  if (state.hpos <= 0) return;
+  state.hpos--; state.root = state.history[state.hpos];
+  state.selected = null; state.highlightExt = null; renderAll();
+};
+document.getElementById('forward').onclick = () => {
+  if (state.hpos >= state.history.length - 1) return;
+  state.hpos++; state.root = state.history[state.hpos];
+  state.selected = null; state.highlightExt = null; renderAll();
+};
+document.getElementById('up').onclick = () => {
+  const parent = parentOf.get(state.root);
+  if (parent) drill(parent);
+};
+document.getElementById('search').oninput = e => {
+  state.filter = e.target.value.trim().toLowerCase();
+  renderTree();
+};
+document.getElementById('rescan').onclick = () => {
+  const fill = document.getElementById('scanfill');
+  const text = document.getElementById('scantext');
+  fill.style.transition = 'none'; fill.style.width = '0%';
+  text.textContent = '正在扫描…';
+  requestAnimationFrame(() => {
+    fill.style.transition = 'width 1.6s ease-out';
+    fill.style.width = '100%';
+  });
+  setTimeout(() => { text.textContent = '扫描完成 · 1.62 秒（演示）'; }, 1650);
+};
+
+document.querySelectorAll('thead th[data-sort]').forEach(th => {
+  th.onclick = () => {
+    const key = th.dataset.sort;
+    if (state.sortKey === key) state.sortAsc = !state.sortAsc;
+    else { state.sortKey = key; state.sortAsc = key === 'name'; }
+    document.querySelectorAll('thead th span').forEach(s => s.remove());
+    th.insertAdjacentHTML('beforeend', '<span>' + (state.sortAsc ? '▲' : '▼') + '</span>');
+    renderTree();
+  };
+});
+
+// Splitters: the top pane against the treemap, and the folder table against
+// the extension legend.
+(function splitters() {
+  const top = document.getElementById('paneTop');
+  const hs = document.getElementById('hsplit');
+  hs.addEventListener('pointerdown', e => {
+    hs.setPointerCapture(e.pointerId);
+    const startY = e.clientY, startH = top.getBoundingClientRect().height;
+    const move = ev => {
+      const next = Math.max(120, Math.min(window.innerHeight - 220, startH + ev.clientY - startY));
+      top.style.flex = '0 0 ' + next + 'px';
+      draw();
+    };
+    const up = () => { hs.removeEventListener('pointermove', move); hs.removeEventListener('pointerup', up); };
+    hs.addEventListener('pointermove', move);
+    hs.addEventListener('pointerup', up);
+  });
+
+  const tree = document.getElementById('treeScroll');
+  const vs = document.getElementById('vsplit');
+  vs.addEventListener('pointerdown', e => {
+    vs.setPointerCapture(e.pointerId);
+    const startX = e.clientX, startW = tree.getBoundingClientRect().width;
+    const move = ev => {
+      const next = Math.max(260, Math.min(window.innerWidth - 340, startW + ev.clientX - startX));
+      tree.style.flex = '0 1 ' + next + 'px';
+    };
+    const up = () => { vs.removeEventListener('pointermove', move); vs.removeEventListener('pointerup', up); };
+    vs.addEventListener('pointermove', move);
+    vs.addEventListener('pointerup', up);
+  });
+})();
+
+window.addEventListener('resize', draw);
+new ResizeObserver(draw).observe(document.getElementById('paneBottom'));
+renderAll();
+// The note is only there for the first look; it must not sit on the boxes.
+setTimeout(() => document.getElementById('note')?.remove(), 7000);
+</script>
+</body>
+</html>
