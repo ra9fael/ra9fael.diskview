@@ -19,27 +19,38 @@ QColor colorFor(int index, bool directory)
     if (!directory) c = c.lighter(138);
     return c;
 }
+// Black or white, whichever reads better on the fill.
+QColor textOn(const QColor& fill)
+{
+    const double luminance = 0.2126 * fill.redF() + 0.7152 * fill.greenF() + 0.0722 * fill.blueF();
+    return luminance > 0.55 ? QColor("#1b2b3a") : QColor("#ffffff");
+}
 }
 
 ChartItem::ChartItem(QQuickItem* parent) : QQuickPaintedItem(parent)
 {
     setRenderTarget(QQuickPaintedItem::FramebufferObject);
-    setAcceptedMouseButtons(Qt::LeftButton);
+    setAcceptedMouseButtons(Qt::LeftButton|Qt::RightButton);
     setAcceptHoverEvents(true);
     setFlag(ItemIsFocusScope, true);
     m_viewMode=qEnvironmentVariableIntValue("DISKVIEW_VIEW_MODE");
 }
 
 namespace {
-diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QString>& ids, const std::wstring& parentPath = {})
+diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QString>& ids,
+                               QHash<QString, ChartItem::NodeInfo>& infos,
+                               const std::wstring& parentPath = {})
 {
     diskview::Node node; node.name=map.value("name").toString().toStdWString();
     node.logical=static_cast<std::uint64_t>(std::max(0.0,map.value("size").toDouble()));
     node.dir=map.value("directory").toBool();
     const std::wstring path=parentPath.empty()?node.name:diskview::childPath(parentPath,node.name);
-    ids.insert(path,map.value("id").toString());
+    const QString id=map.value("id").toString();
+    ids.insert(path,id);
+    infos.insert(id,{QString::fromStdWString(node.name),QString::fromStdWString(path),
+                     static_cast<quint64>(node.logical),node.dir});
     for(const auto& child:map.value("children").toList()) if(child.canConvert<QVariantMap>()) {
-        diskview::Node childNode=nodeFromVariant(child.toMap(),ids,path);
+        diskview::Node childNode=nodeFromVariant(child.toMap(),ids,infos,path);
         node.files+=childNode.dir?childNode.files:1; node.dirs+=childNode.dir?childNode.dirs+1:0;
         node.children.push_back(std::move(childNode));
     }
@@ -49,7 +60,8 @@ diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QStri
 
 void ChartItem::setTreeData(const QVariantMap& data)
 {
-    m_treeData=data; m_pathIds.clear(); m_chartRoot=nodeFromVariant(data,m_pathIds); m_tiles.clear(); m_slices.clear();
+    m_treeData=data; m_pathIds.clear(); m_nodeInfo.clear();
+    m_chartRoot=nodeFromVariant(data,m_pathIds,m_nodeInfo); m_tiles.clear(); m_slices.clear();
     emit treeDataChanged(); rebuildGeometry();
 }
 void ChartItem::setViewMode(int mode)
@@ -88,6 +100,14 @@ void ChartItem::setCenterLabel(const QString& label)
     emit centerLabelChanged();
     update();
 }
+void ChartItem::setDepth(int depth)
+{
+    depth=std::clamp(depth,1,2);
+    if(m_depth==depth)return;
+    m_depth=depth;
+    emit depthChanged();
+    rebuildGeometry();
+}
 void ChartItem::geometryChange(const QRectF& now, const QRectF& before)
 {
     QQuickItem::geometryChange(now, before);
@@ -99,8 +119,11 @@ void ChartItem::rebuildGeometry()
     if(m_chartRoot.logical<=0||width()<2||height()<2){update();return;}
     const qreal inset=8;
     const QRectF area(inset,inset,width()-2*inset,height()-2*inset);
+    m_innerRadius=0;
+    // The top level is depth 0, so one level means no recursion at all.
+    const int maxDepth=m_depth-1;
     if(m_viewMode==0){
-        diskview::treemapTiles(m_chartRoot,{0,0,area.width(),area.height()},0,18.0,m_tiles,m_chartRoot.name);
+        diskview::treemapTiles(m_chartRoot,{0,0,area.width(),area.height()},0,18.0,m_tiles,m_chartRoot.name,maxDepth);
         for(const auto& tile:m_tiles){
             const QString id=m_pathIds.value(tile.path);
             if(!id.isEmpty())m_regions.push_back({QRectF(area.x()+tile.rect.x,area.y()+tile.rect.y,tile.rect.w,tile.rect.h),id,tile.node->dir});
@@ -108,8 +131,11 @@ void ChartItem::rebuildGeometry()
     }else{
         const qreal maxR=std::min(area.width(),area.height())/2;
         const qreal innerRadius=maxR*.22;
+        // The hole is a target of its own: a double click in it goes up, so
+        // its radius is kept for the hit test.
+        m_innerRadius=innerRadius;
         const qreal ringWidth=(maxR-innerRadius)/4.0;
-        diskview::sunburstSlices(m_chartRoot,area.center().x(),area.center().y(),innerRadius,ringWidth,-M_PI_2,3*M_PI_2,0,0.0,m_slices,m_chartRoot.name,16);
+        diskview::sunburstSlices(m_chartRoot,area.center().x(),area.center().y(),innerRadius,ringWidth,-M_PI_2,3*M_PI_2,0,0.0,m_slices,m_chartRoot.name,maxDepth);
         const QPointF center=area.center();
         for(const auto& slice:m_slices){
             const QString id=m_pathIds.value(slice.path);
@@ -143,6 +169,41 @@ QPointF ChartItem::firstRegionCenter() const
     const qreal angle=(region.a0+region.a1)/2;
     const qreal radius=(region.r0+region.r1)/2;
     return region.center+QPointF(std::cos(angle)*radius,std::sin(angle)*radius);
+}
+
+QPointF ChartItem::firstDirectoryCenter() const
+{
+    // A tile is drawn over by its own children, so the centre of a folder
+    // tile usually belongs to a file inside it. The point has to be one that
+    // really hit-tests back to the folder itself.
+    for(const auto& region:m_regions){
+        if(!region.directory)continue;
+        if(region.annular){
+            const qreal angle=(region.a0+region.a1)/2;const qreal radius=(region.r0+region.r1)/2;
+            const QPointF point=region.center+QPointF(std::cos(angle)*radius,std::sin(angle)*radius);
+            if(hitTest(point)==region.id)return point;
+            continue;
+        }
+        const QRectF r=region.rect;
+        // The children of a folder cover it, so only a leaf folder is
+        // clickable. A coarse grid finds one without guessing where.
+        for(int gy=1;gy<=4;++gy){
+            for(int gx=1;gx<=4;++gx){
+                const QPointF point(r.left()+r.width()*gx/5.0,r.top()+r.height()*gy/5.0);
+                if(hitTest(point)==region.id)return point;
+            }
+        }
+    }
+    return {};
+}
+
+QVariantMap ChartItem::hoveredInfo(const QString& id) const
+{
+    const auto it=m_nodeInfo.constFind(id);
+    if(it==m_nodeInfo.cend())return {};
+    const double total=std::max<quint64>(1,m_chartRoot.logical);
+    return {{"name",it->name},{"path",it->path},{"size",double(it->size)},
+            {"percent",100.0*static_cast<double>(it->size)/total},{"directory",it->dir}};
 }
 
 QString ChartItem::hitTestAfterTransform(const QPointF& localPoint,qreal zoom,const QPointF& pan) const
@@ -238,8 +299,11 @@ void ChartItem::paint(QPainter* painter)
         for(const auto& tile:m_tiles){
             const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
-            painter->fillRect(rect,colorForDepth(tile.node->dir,tile.depth));
-            if(id==m_selectedId){painter->setPen(QPen(QColor("#1b2b3a"),2));painter->setBrush(Qt::NoBrush);painter->drawRect(rect.adjusted(1,1,-1,-1));}
+            QColor fill=colorForDepth(tile.node->dir,tile.depth);
+            const bool lit=id==m_selectedId||id==m_hoverId;
+            if(lit)fill=fill.darker(112);
+            painter->fillRect(rect,fill);
+            if(id==m_selectedId||id==m_hoverId){painter->setPen(QPen(QColor("#1b2b3a"),id==m_selectedId?2:1));painter->setBrush(Qt::NoBrush);painter->drawRect(rect.adjusted(1,1,-1,-1));}
         }
     }else{
         for(const auto& slice:m_slices){
@@ -254,6 +318,11 @@ void ChartItem::paint(QPainter* painter)
             for(int i=segments-1;i>=0;--i){const qreal a=slice.a0+span*static_cast<qreal>(i)/segments;path.lineTo(point(slice.r0,a));}
             path.closeSubpath();
             painter->fillPath(path,colorForDepth(slice.dir,slice.depth));
+            if(id==m_selectedId||id==m_hoverId){
+                painter->setPen(QPen(QColor("#1b2b3a"),id==m_selectedId?2:1));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawPath(path);
+            }
         }
     }
     if(m_viewMode==1&&!m_centerLabel.isEmpty()){
@@ -263,26 +332,116 @@ void ChartItem::paint(QPainter* painter)
         painter->drawText(hole,Qt::AlignCenter|Qt::TextWordWrap,m_centerLabel);
     }
     painter->restore();
+
+    // The labels are drawn after the transform, so their size does not follow
+    // the zoom. A tile only gets one when it is big enough to hold it, which
+    // is the rule the native chart uses.
+    painter->save();
+    painter->setClipRect(QRectF(0,0,width(),height()));
+    const auto toScreen=[&](const QPointF& p){return transformCenter+(p-transformCenter)*m_zoom+m_pan;};
+    QFont micro=painter->font();micro.setPixelSize(10);
+    const QFontMetricsF metrics(micro);
+    if(m_viewMode==0){
+        painter->setFont(micro);
+        for(const auto& tile:m_tiles){
+            const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
+            const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
+            const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
+            if(screen.width()<48||screen.height()<14)continue;
+            const QColor fill=colorForDepth(tile.node->dir,tile.depth);
+            painter->setPen(textOn(fill));
+            const QRectF inner=screen.adjusted(5,2,-4,-2);
+            painter->drawText(inner,Qt::AlignLeft|Qt::AlignTop,
+                              metrics.elidedText(QString::fromStdWString(tile.node->name),Qt::ElideRight,inner.width()));
+            if(screen.height()>=32){
+                QRectF sub=inner;sub.setTop(inner.top()+13);
+                QColor subColor=textOn(fill);subColor.setAlphaF(0.75);
+                painter->setPen(subColor);
+                painter->drawText(sub,Qt::AlignLeft|Qt::AlignTop,
+                                  QString::fromStdString(diskview::formatBytes(tile.node->logical,true)));
+            }
+        }
+    }else{
+        painter->setFont(micro);
+        for(const auto& slice:m_slices){
+            const QString id=m_pathIds.value(slice.path); if(id.isEmpty())continue;
+            const qreal span=slice.a1-slice.a0;
+            const qreal thickness=(slice.r1-slice.r0)*m_zoom;
+            if(span<=0.35||thickness<=26)continue;
+            const qreal angle=(slice.a0+slice.a1)/2;
+            const qreal radius=(slice.r0+slice.r1)/2;
+            const QPointF point=toScreen(center+QPointF(std::cos(angle)*radius,std::sin(angle)*radius));
+            const qreal half=std::min<qreal>(50,thickness*0.42);
+            const QRectF box(point.x()-half,point.y()-10,half*2,20);
+            const QColor fill=colorForDepth(slice.dir,slice.depth);
+            painter->setPen(textOn(fill));
+            const QString text=slice.dir?QString::fromStdWString(slice.node->name)
+                                        :QString::fromStdString(diskview::formatBytes(slice.node->logical,true));
+            painter->drawText(box,Qt::AlignCenter,metrics.elidedText(text,Qt::ElideRight,box.width()));
+        }
+    }
+    painter->restore();
 }
 
 void ChartItem::mousePressEvent(QMouseEvent* e)
 {
+    if(e->button()==Qt::RightButton){
+        emit contextRequested(hitTest(e->position()),e->position().x(),e->position().y());
+        e->accept();
+        return;
+    }
     m_dragging = true; m_dragStart = e->position(); m_dragPan = m_pan; setFocus(true); e->accept();
+}
+void ChartItem::mouseMoveEvent(QMouseEvent* e)
+{
+    // The pan only follows a drag while the button is down; hovering alone
+    // must not move the chart.
+    if (m_dragging && (e->position()-m_dragStart).manhattanLength()>3) {
+        setPan(m_dragPan+e->position()-m_dragStart);
+        e->accept();
+        return;
+    }
+    QQuickPaintedItem::mouseMoveEvent(e);
+}
+void ChartItem::mouseReleaseEvent(QMouseEvent* e)
+{
+    // Without this the drag never ends: every later hover would keep panning
+    // the chart, and a double click could no longer land on the tile it
+    // started on.
+    const bool clicked = m_dragging && e->button()==Qt::LeftButton
+                         && (e->position()-m_dragStart).manhattanLength()<=3;
+    m_dragging = false;
+    if(clicked) emit ChartItem::clicked(hitTest(e->position()),e->position().x(),e->position().y());
+    e->accept();
 }
 void ChartItem::mouseDoubleClickEvent(QMouseEvent* e)
 {
+    m_dragging = false;
     if(m_viewMode==1){
+        // The hole is much wider than a few pixels; a click anywhere in it is
+        // a click on the parent.
         const QPointF center(width()/2,height()/2);
-        if(QLineF(e->position(),center).length()<=24){emit centerActivated();e->accept();return;}
+        if(QLineF(e->position(),center).length()<=std::max<qreal>(m_innerRadius,24)){emit centerActivated();e->accept();return;}
     }
+    // Resolve the region first: the QML side may rebuild the tree as soon as
+    // it hears about the activation, and the region list would be gone.
     const QString id = hitTest(e->position());
-    for (const auto& r : m_regions) if (r.id == id) { emit activated(id, r.directory); break; }
+    QString target; bool directory=false;
+    for (const auto& r : m_regions) if (r.id == id) { target=r.id; directory=r.directory; break; }
+    if (!target.isEmpty()) emit activated(target, directory);
     e->accept();
 }
 void ChartItem::hoverMoveEvent(QHoverEvent* e)
 {
-    emit hovered(hitTest(e->position()));
-    if (m_dragging && (e->position()-m_dragStart).manhattanLength()>3) setPan(m_dragPan+e->position()-m_dragStart);
+    const QString id=hitTest(e->position());
+    m_hoverPosition=e->position();
+    if(m_hoverId!=id){m_hoverId=id;emit hovered(id);update();}
+    emit hoverChanged();
+    e->accept();
+}
+void ChartItem::hoverLeaveEvent(QHoverEvent* e)
+{
+    if(!m_hoverId.isEmpty()){m_hoverId.clear();emit hovered(QString());update();emit hoverChanged();}
     e->accept();
 }
 void ChartItem::wheelEvent(QWheelEvent* e)

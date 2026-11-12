@@ -79,6 +79,8 @@ public:
     Q_INVOKABLE void moveSelection(int delta);
     Q_INVOKABLE void openSelected();
     Q_INVOKABLE void toggleSort(int key);
+    // Shows the folder that holds the node and selects it.
+    Q_INVOKABLE bool revealNode(const QString& id);
     Q_INVOKABLE QString formatSize(qint64 bytes) const;
     Q_INVOKABLE QString formatCount(qint64 count) const;
 

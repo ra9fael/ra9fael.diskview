@@ -78,7 +78,7 @@ foreach ($mode in 0,1) {
   $report = ($text -split "`r?`n" | Where-Object { $_ -match "`t" -and $_ -match '(PASS|FAIL)$' }) | Select-Object -First 1
   if (-not $report) { throw "No self-test report in mode ${mode}: $text" }
   $fields = $report -split "`t"
-  if ($fields.Count -ne 8 -or $fields[0] -ne "$mode" -or [string]::IsNullOrWhiteSpace($fields[1]) -or $fields[2] -ne 'regions' -or $fields[3] -ne 'transform' -or $fields[4] -ne 'navigate' -or $fields[5] -ne 'return' -or $fields[6] -notmatch '^list=' -or $fields[7] -ne 'PASS') { throw "Self-test failed in mode ${mode}: $report" }
+  if ($fields.Count -ne 10 -or $fields[0] -ne "$mode" -or [string]::IsNullOrWhiteSpace($fields[1]) -or $fields[2] -ne 'regions' -or $fields[3] -ne 'transform' -or $fields[4] -ne 'navigate' -or $fields[5] -ne 'return' -or $fields[6] -notmatch '^list=' -or $fields[7] -ne 'drag' -or $fields[8] -notmatch '^chart=' -or $fields[9] -ne 'PASS') { throw "Self-test failed in mode ${mode}: $report" }
   if (-not (Test-Path $image)) { throw "Missing screenshot $image" }
   $item = Get-Item $image
   if ($item.Length -lt 20000) { throw "Screenshot seems blank: $name ($($item.Length) bytes)" }
@@ -105,7 +105,9 @@ if ($errors) { throw "Runtime error on the real scan: $($errors -join '; ')" }
 $report = ($text -split "`r?`n" | Where-Object { $_ -match "`t" -and $_ -match '(PASS|FAIL)$' }) | Select-Object -First 1
 if (-not $report) { throw "No self-test report on the real scan: $text" }
 $fields = $report -split "`t"
-if ($fields.Count -ne 8 -or $fields[7] -ne 'PASS') { throw "Self-test failed on the real scan: $report" }
+if ($fields.Count -ne 10 -or $fields[9] -ne 'PASS') { throw "Self-test failed on the real scan: $report" }
+if ($fields[7] -ne 'drag') { throw "The chart kept dragging after the button was released: $report" }
+if ($fields[8] -notmatch '^chart=double') { throw "The chart did not enter a folder on a double click: $report" }
 if ($fields[6] -notmatch '^list=') { throw "The list panel checks did not run: $report" }
 if (-not (Test-Path $scanImage)) { throw "Missing screenshot $scanImage" }
 $item = Get-Item $scanImage

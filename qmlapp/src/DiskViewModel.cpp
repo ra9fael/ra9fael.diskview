@@ -267,6 +267,22 @@ void DiskViewModel::setListMode(int mode)
     rebuildRows();
     emit listChanged();
 }
+
+bool DiskViewModel::revealNode(const QString& id)
+{
+    const int index=indexForId(id);
+    if(index<0) return false;
+    const int parent=m_nodes[index].parent;
+    if(parent<0) return false;
+    if(m_current!=parent){ pushHistory(parent); resetAt(parent); }
+    // The row only has to be in sight, so the largest-files ranking gives way
+    // to the folder that holds it.
+    if(m_listMode!=ListCurrent){ m_listMode=ListCurrent; rebuildRows(); }
+    m_selectedId=m_nodes[index].id;
+    emit listChanged();
+    emit selectedChanged();
+    return true;
+}
 QVariantMap DiskViewModel::chartTree() const
 {
     if(m_current<0)return {};

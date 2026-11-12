@@ -5,13 +5,20 @@
 #include "ScanService.h"
 #include "ScanSettings.h"
 
+#include <QClipboard>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QHoverEvent>
+#include <QMouseEvent>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
+
+#include <windows.h>
+#include <shellapi.h>
 
 namespace {
 const char* kBuiltInFixture = ":/fixtures/disk-tree.json";
@@ -34,6 +41,8 @@ bool QmlHost::load(QString* error)
     m_scanService->setSettings(m_scanSettings);
     m_engine.rootContext()->setContextProperty("scanService", m_scanService);
     m_engine.rootContext()->setContextProperty("scanSettings", m_scanSettings);
+    // The window asks the host for the two things QML cannot do on its own.
+    m_engine.rootContext()->setContextProperty("appHost", this);
     // A path given on the command line wins over the remembered one.
     m_engine.rootContext()->setContextProperty(
         "initialScanPath",
@@ -223,6 +232,31 @@ bool QmlHost::runSelfTest(QString* report)
     const QString hit = chart->firstRegionHit();
     const bool regions = chart->validateHitTest();
     const bool transform = !hit.isEmpty() && chart->validateHitTransform();
+    // A click has to end: after the button is released, moving the mouse over
+    // the chart must not keep panning it. The same events first prove that a
+    // real drag still pans, so the check cannot pass by doing nothing.
+    bool drag = false;
+    {
+        const QPointF before = chart->pan();
+        const QPointF start(10, 10);
+        const QPointF moved(60, 60);
+        QMouseEvent press(QEvent::MouseButtonPress, start, chart->mapToGlobal(start), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(chart, &press);
+        QMouseEvent move(QEvent::MouseMove, moved, chart->mapToGlobal(moved), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(chart, &move);
+        const bool dragged = chart->pan() != before;
+        QMouseEvent release(QEvent::MouseButtonRelease, moved, chart->mapToGlobal(moved), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(chart, &release);
+        const QPointF afterRelease = chart->pan();
+        const QPointF hover(200, 200);
+        QHoverEvent hoverMove(QEvent::HoverMove, hover, chart->mapToGlobal(hover), hover);
+        QCoreApplication::sendEvent(chart, &hoverMove);
+        drag = dragged && chart->pan() == afterRelease;
+        chart->setPan(before);
+    }
     const QString rootPath = model->currentPath();
     bool navigate = false;
     bool back = false;
@@ -246,14 +280,47 @@ bool QmlHost::runSelfTest(QString* report)
             break;
         }
     }
+    // The chart has to answer a real double click: once on a folder tile and,
+    // in the sunburst, once in the hole that returns to the parent.
+    QStringList chartDetail;
+    {
+        const auto doubleClick = [&](const QPointF& point) {
+            const QPointF global = chart->mapToGlobal(point);
+            QMouseEvent press(QEvent::MouseButtonPress, point, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(chart, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, point, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(chart, &release);
+            QMouseEvent again(QEvent::MouseButtonDblClick, point, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(chart, &again);
+            QMouseEvent done(QEvent::MouseButtonRelease, point, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(chart, &done);
+        };
+        const QPointF folder = chart->firstDirectoryCenter();
+        const QString rootPath = model->currentPath();
+        if (!folder.isNull()) {
+            doubleClick(folder);
+            if (model->currentPath() != rootPath) chartDetail << QStringLiteral("double");
+        }
+        // The centre of the sunburst returns to the parent. The check runs in
+        // the sunburst mode only; the treemap has no hole.
+        if (m_options.viewMode == 1 && model->currentPath() != rootPath) {
+            const QPointF center(chart->width() / 2, chart->height() / 2);
+            doubleClick(center);
+            if (model->currentPath() == rootPath) chartDetail << QStringLiteral("center");
+        }
+        while (model->canGoBack()) model->goBack();
+    }
+    const bool chartOk = chartDetail.contains(QStringLiteral("double"))
+                         && (m_options.viewMode != 1 || chartDetail.contains(QStringLiteral("center")));
     // A scan that could be held and then let go is part of what the scan mode
     // has to show.
     const bool paused = m_options.scanPath.isEmpty() || m_pauseVerified;
     QString listDetail;
     const bool list = runListChecks(model, &listDetail);
-    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list;
+    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list && drag && chartOk;
 
-    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\n")
+
+    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\n")
                   .arg(m_options.viewMode)
                   .arg(hit)
                   .arg(regions ? QStringLiteral("regions") : QStringLiteral("no-regions"))
@@ -262,6 +329,9 @@ bool QmlHost::runSelfTest(QString* report)
                   .arg(back ? QStringLiteral("return") : QStringLiteral("bad-return"))
                   .arg(listDetail.isEmpty() ? QStringLiteral("bad-list")
                                              : QStringLiteral("list=%1").arg(listDetail))
+                  .arg(drag ? QStringLiteral("drag") : QStringLiteral("bad-drag"))
+                  .arg(chartOk ? QStringLiteral("chart=%1").arg(chartDetail.join(QLatin1Char(',')))
+                               : QStringLiteral("bad-chart:%1").arg(chartDetail.join(QLatin1Char(','))))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
     if (!m_options.scanPath.isEmpty() && m_scanService) {
         // What the scan made of the settings, and how much of it was published
@@ -278,8 +348,26 @@ bool QmlHost::runSelfTest(QString* report)
     return pass;
 }
 
-bool QmlHost::openSettingsDialog(QString* error)
+void QmlHost::copyToClipboard(const QString& text) const
 {
+    if (auto* clipboard = QGuiApplication::clipboard()) {
+        clipboard->setText(text);
+    }
+}
+
+void QmlHost::revealInExplorer(const QString& path) const
+{
+    // A quote in the name would break out of the argument, so such a path is
+    // left alone rather than handed to the shell.
+    if (path.isEmpty() || path.contains(QLatin1Char('"'))) {
+        return;
+    }
+    const QString argument = QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(path));
+    ::ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                    reinterpret_cast<const wchar_t*>(argument.utf16()), nullptr, SW_SHOWNORMAL);
+}
+
+bool QmlHost::openSettingsDialog(QString* error){
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     if (!window) {
         *error = QStringLiteral("the window is not available");

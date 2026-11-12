@@ -38,6 +38,29 @@ ApplicationWindow {
     ScanSettingsDialog { id: settingsDialog; objectName: "scanSettingsDialog" }
     ScanIssuesDialog { id: issuesDialog; objectName: "scanIssuesDialog" }
 
+    // The read-only half of the native context menu; the file actions wait for
+    // the host integration.
+    Menu {
+        id: contextMenu
+        property string targetPath: ""
+        property string targetId: ""
+        MenuItem {
+            text: "复制完整路径"
+            enabled: contextMenu.targetPath.length > 0
+            onClicked: appHost.copyToClipboard(contextMenu.targetPath)
+        }
+        MenuItem {
+            text: "在资源管理器中显示"
+            enabled: contextMenu.targetPath.length > 0
+            onClicked: appHost.revealInExplorer(contextMenu.targetPath)
+        }
+        MenuItem {
+            text: "定位到所在目录"
+            enabled: contextMenu.targetId.length > 0
+            onClicked: diskModel.revealNode(contextMenu.targetId)
+        }
+    }
+
     Connections {
         target: diskModel
         function onSelectedChanged() {
@@ -89,28 +112,39 @@ ApplicationWindow {
                           : scanService.state === "error" ? "#b3261e"
                           : "#657386"
                 }
+                BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 16; implicitHeight: 16 }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 40
+            color: "#ffffff"
+            border.color: "#dce2e8"
+            RowLayout {
+                anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 8
                 TextField {
                     id: pathField
-                    Layout.preferredWidth: 260
-                    Layout.maximumWidth: 300
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 180
                     text: initialScanPath
                     placeholderText: "扫描路径，例如 D:\\"
                     selectByMouse: true
                 }
                 Button {
                     text: (scanService.state === "done" || scanService.state === "cancelled") ? "重新扫描" : "扫描"
-                    Layout.minimumWidth: 64
+                    Layout.minimumWidth: 72
                     enabled: pathField.text.trim().length > 0 && scanService.state !== "scanning"
                     onClicked: scanService.start(pathField.text.trim())
                 }
                 Button {
                     text: scanService.paused ? "继续" : "暂停"
-                    Layout.minimumWidth: 64
+                    Layout.minimumWidth: 60
                     visible: scanService.state === "scanning"
                     enabled: scanService.state === "scanning"
                     onClicked: scanService.paused ? scanService.resume() : scanService.pause()
                 }
-                Button { text: "取消"; Layout.minimumWidth: 64; visible: scanService.state === "scanning"; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
+                Button { text: "取消"; Layout.minimumWidth: 60; visible: scanService.state === "scanning"; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
                 Button {
                     text: "扫描问题"
                     Layout.minimumWidth: 76
@@ -119,41 +153,68 @@ ApplicationWindow {
                     onClicked: issuesDialog.open()
                 }
                 Button { text: "扫描设置"; Layout.minimumWidth: 76; onClicked: settingsDialog.open() }
-                BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 16; implicitHeight: 16 }
             }
         }
 
         RowLayout {
             Layout.fillWidth: true; Layout.preferredHeight: 40; Layout.leftMargin: 12; Layout.rightMargin: 12
-            spacing: 8
-            Button { text: "←"; Layout.minimumWidth: 30; enabled: diskModel.canGoBack; onClicked: diskModel.goBack() }
-            Button { text: "→"; Layout.minimumWidth: 30; enabled: diskModel.canGoForward; onClicked: diskModel.goForward() }
-            Button { text: "↑"; Layout.minimumWidth: 30; enabled: diskModel.canGoUp; onClicked: diskModel.goUp() }
+            spacing: 4
+            ToolButton {
+                text: "←"; flat: true; implicitWidth: 28; implicitHeight: 28
+                enabled: diskModel.canGoBack
+                onClicked: diskModel.goBack()
+                ToolTip.visible: hovered; ToolTip.text: "后退 (Alt+←)"
+                contentItem: Label { text: parent.text; font.pixelSize: 15; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: "#33445c" }
+            }
+            ToolButton {
+                text: "→"; flat: true; implicitWidth: 28; implicitHeight: 28
+                enabled: diskModel.canGoForward
+                onClicked: diskModel.goForward()
+                ToolTip.visible: hovered; ToolTip.text: "前进 (Alt+→)"
+                contentItem: Label { text: parent.text; font.pixelSize: 15; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: "#33445c" }
+            }
+            ToolButton {
+                text: "↑"; flat: true; implicitWidth: 28; implicitHeight: 28
+                enabled: diskModel.canGoUp
+                onClicked: diskModel.goUp()
+                ToolTip.visible: hovered; ToolTip.text: "上一级 (←/退格)"
+                contentItem: Label { text: parent.text; font.pixelSize: 15; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: "#33445c" }
+            }
             Row {
                 id: crumbRow
-                spacing: 4
+                Layout.leftMargin: 6
+                spacing: 2
                 Repeater {
                     model: window.crumbs
                     delegate: Row {
-                        spacing: 4
+                        spacing: 2
                         Label {
                             text: modelData.name
+                            font.pixelSize: 13
+                            leftPadding: 3; rightPadding: 3
                             color: modelData.current ? "#202b3c" : "#075db8"
                             font.weight: modelData.current ? Font.DemiBold : Font.Normal
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: if (modelData.id.length) diskModel.navigate(modelData.id)
+                                enabled: modelData.id.length > 0 && !modelData.current
+                                onClicked: diskModel.navigate(modelData.id)
                             }
                         }
-                        Label { text: "›"; color: "#9aa7b8"; visible: index < window.crumbs.length - 1 }
+                        Label {
+                            text: "›"
+                            font.pixelSize: 15
+                            color: "#8a97a8"
+                            visible: index < window.crumbs.length - 1
+                            topPadding: 0
+                        }
                     }
                 }
             }
             Item { Layout.fillWidth: true }
             Label { text: diskModel.totalText; color: "#56657b" }
-            Button { text: "1 层"; checkable: true; checked: true }
-            Button { text: "2 层"; checkable: true }
+            Button { text: "1 层"; checkable: true; checked: chart.depth === 1; onClicked: chart.depth = 1 }
+            Button { text: "2 层"; checkable: true; checked: chart.depth === 2; onClicked: chart.depth = 2 }
             Button { text: chart.viewMode === 0 ? "方块" : "圆盘"; onClicked: chart.viewMode = 1-chart.viewMode }
         }
 
@@ -165,9 +226,44 @@ ApplicationWindow {
                 ChartItem {
                     id: chart; objectName: "diskViewChart"; anchors.fill: parent; anchors.margins: 8
                     treeData: diskModel.chartTree; selectedId: diskModel.selectedId; viewMode: diskViewMode; centerLabel: diskModel.currentName
+                    onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
                     onActivated: function(nodeId, directory) { diskModel.select(nodeId); if(directory) diskModel.navigate(nodeId) }
-                    onHovered: function(nodeId) { if(nodeId.length) diskModel.select(nodeId) }
+                    onContextRequested: function(nodeId, x, y) {
+                        if (!nodeId.length) return
+                        const info = chart.hoveredInfo(nodeId)
+                        contextMenu.targetId = nodeId
+                        contextMenu.targetPath = info.path || ""
+                        contextMenu.parent = chart
+                        contextMenu.x = x
+                        contextMenu.y = y
+                        contextMenu.open()
+                    }
                     onCenterActivated: diskModel.goUp()
+                }
+                // The hover card: the same things the native tooltip shows.
+                Rectangle {
+                    id: hoverCard
+                    z: 5
+                    readonly property var info: chart.hoverId.length ? chart.hoveredInfo(chart.hoverId) : ({})
+                    visible: chart.hoverId.length > 0
+                    width: Math.min(320, parent.width - 16)
+                    height: tip.implicitHeight + 16
+                    x: Math.max(8, Math.min(parent.width - width - 8, chart.hoverPosition.x + 16))
+                    y: Math.max(8, Math.min(parent.height - height - 8, chart.hoverPosition.y + 18))
+                    color: "#fbfcfd"; border.color: "#c3ced9"; radius: 4
+                    Column {
+                        id: tip
+                        anchors.fill: parent; anchors.margins: 8; spacing: 3
+                        Label { width: parent.width; text: hoverCard.info.name || ""; font.weight: Font.DemiBold; font.pixelSize: 12; color: "#202b3c"; elide: Text.ElideRight }
+                        Label { width: parent.width; text: hoverCard.info.path || ""; font.pixelSize: 11; color: "#66758a"; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
+                        Label {
+                            width: parent.width; font.pixelSize: 11; color: "#33445c"
+                            text: (hoverCard.info.directory ? "文件夹" : "文件") + " · "
+                                  + diskModel.formatSize(hoverCard.info.size || 0) + " · "
+                                  + (hoverCard.info.percent || 0).toFixed(1) + "%"
+                        }
+                        Label { width: parent.width; text: "单击固定详情 · 双击进入文件夹"; font.pixelSize: 10; color: "#8b98a9" }
+                    }
                 }
                 Label { anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12; text: "滚轮缩放 · 拖动平移 · 双击目录进入"; color: "#66758a"; font.pixelSize: 11 }
             }
@@ -246,15 +342,28 @@ ApplicationWindow {
                             else if (event.key === Qt.Key_Left || event.key === Qt.Key_Backspace) { diskModel.goUp(); event.accepted = true }
                         }
                         delegate: ItemDelegate {
+                            id: rowItem
                             required property string nodeId
                             required property string name
                             required property string sizeText
+                            required property string path
                             required property real percent
                             required property bool directory
                             width: ListView.view.width; height: 30
                             highlighted: nodeId === diskModel.selectedId
                             onClicked: diskModel.select(nodeId)
                             onDoubleClicked: if(directory) diskModel.navigate(nodeId)
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onSingleTapped: function(eventPoint) {
+                                    contextMenu.targetId = rowItem.nodeId
+                                    contextMenu.targetPath = rowItem.path
+                                    contextMenu.parent = rowItem
+                                    contextMenu.x = eventPoint.position.x
+                                    contextMenu.y = eventPoint.position.y
+                                    contextMenu.open()
+                                }
+                            }
                             contentItem: RowLayout {
                                 spacing: 8
                                 Label { text: directory ? "▸" : "▪"; color: directory ? "#168c84" : "#8190a3" }

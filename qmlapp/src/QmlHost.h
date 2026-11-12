@@ -40,6 +40,9 @@ public:
     QString scanStatusLine() const;
     // The list panel has to sort, filter, rank and go back and forth again.
     bool runListChecks(class DiskViewModel* model, QString* detail);
+    // The read-only actions of the context menu.
+    Q_INVOKABLE void copyToClipboard(const QString& text) const;
+    Q_INVOKABLE void revealInExplorer(const QString& path) const;
 
     static bool parseArgs(const QStringList& arguments, Options* options, QString* error);
     static QString usage();
