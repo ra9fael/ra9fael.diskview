@@ -56,3 +56,15 @@ if(Python3_Interpreter_FOUND AND WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/tools/ver
         "${CMAKE_SOURCE_DIR}/tools/verify/smoke-plugin.py" "$<TARGET_FILE:diskview>")
     set_tests_properties(diskview_protocol PROPERTIES TIMEOUT 45)
 endif()
+
+# The QML edition. Off by default: the native plugin builds and ships without
+# Qt, and the QML targets need the 6.12 SDK.
+option(DISKVIEW_BUILD_QML "Build the QML edition" OFF)
+set(DISKVIEW_QT_PREFIX "" CACHE PATH "Qt 6 SDK root, used when DISKVIEW_BUILD_QML is ON")
+if(DISKVIEW_BUILD_QML)
+    if(DISKVIEW_QT_PREFIX)
+        list(APPEND CMAKE_PREFIX_PATH "${DISKVIEW_QT_PREFIX}")
+    endif()
+    find_package(Qt6 6.12.0 EXACT REQUIRED COMPONENTS Core Gui Qml Quick)
+    add_subdirectory(qmlapp)
+endif()

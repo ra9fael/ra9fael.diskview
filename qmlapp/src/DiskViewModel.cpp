@@ -73,12 +73,6 @@ void DiskViewModel::resetAt(int index)
 void DiskViewModel::navigate(const QString& id){const int i=indexForId(id);if(i>=0&&m_nodes[i].directory){m_history.push_back(i);resetAt(i);}}
 void DiskViewModel::goUp(){if(m_current>0){const int leaving=m_current;const int parent=m_nodes[leaving].parent;resetAt(parent);m_selectedId=m_nodes[leaving].id;emit selectedChanged();}}
 void DiskViewModel::select(const QString& id){if(m_selectedId==id)return;m_selectedId=id;emit selectedChanged();}
-QVariantList DiskViewModel::chartEntries()const
-{
-    QVariantList out;if(m_current<0)return out;const double total=std::max<quint64>(1,m_nodes[m_current].size);
-    for(int i:m_visible){const Entry&e=m_nodes[i];out.push_back(QVariantMap{{"id",e.id},{"name",e.name},{"size",double(e.size)},{"directory",e.directory},{"share",double(e.size)/total}});}
-    return out;
-}
 QVariantMap DiskViewModel::chartTree() const
 {
     if(m_current<0)return {};

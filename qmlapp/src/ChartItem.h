@@ -1,13 +1,14 @@
 #pragma once
 
 #include <QQuickPaintedItem>
-#include <QVariantList>
+#include <QVariantMap>
+#include <QtQml/qqmlregistration.h>
 #include <vector>
 #include "../../tree.h"
 
 class ChartItem : public QQuickPaintedItem {
     Q_OBJECT
-    Q_PROPERTY(QVariantList entries READ entries WRITE setEntries NOTIFY entriesChanged)
+    QML_ELEMENT
     Q_PROPERTY(QVariantMap treeData READ treeData WRITE setTreeData NOTIFY treeDataChanged)
     Q_PROPERTY(int viewMode READ viewMode WRITE setViewMode NOTIFY viewModeChanged)
     Q_PROPERTY(QString selectedId READ selectedId WRITE setSelectedId NOTIFY selectedIdChanged)
@@ -17,8 +18,6 @@ class ChartItem : public QQuickPaintedItem {
 
 public:
     explicit ChartItem(QQuickItem* parent = nullptr);
-    QVariantList entries() const { return m_entries; }
-    void setEntries(const QVariantList& entries);
     QVariantMap treeData() const { return m_treeData; }
     void setTreeData(const QVariantMap& data);
     int viewMode() const { return m_viewMode; }
@@ -41,7 +40,6 @@ public:
     Q_INVOKABLE QString validateHitTestDetails() const;
 
 signals:
-    void entriesChanged();
     void treeDataChanged();
     void viewModeChanged();
     void selectedIdChanged();
@@ -72,7 +70,6 @@ private:
     void rebuildGeometry();
     QString hitTest(const QPointF& position) const;
 
-    QVariantList m_entries;
     QVariantMap m_treeData;
     QVector<HitRegion> m_regions;
     diskview::Node m_chartRoot;

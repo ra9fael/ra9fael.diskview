@@ -5,10 +5,10 @@
 ## 当前状态
 
 - 阶段 0：隔离目录与构建决策记录已建立。
-- 阶段 1：已定位 Qt 6.12.0 MSVC SDK；最小 host Qt 启动器验证进行中。
-- 阶段 2：固定 JSON 快照桥接和真实扫描器接入待实施。
+- 阶段 1：独立启动的 wrapper（`diskview-qml.exe`）已完成，可脱离 WinShun 宿主单独运行、自检与截图。
+- 阶段 2：固定 JSON 快照桥接已通；真实扫描器接入待实施。
 - 阶段 3：虚拟化列表待实施。
-- 阶段 4：Scene Graph 方块图与圆盘图待实施。
+- 阶段 4：Scene Graph 方块图与圆盘图待实施（当前用 `QQuickPaintedItem` 绘制）。
 
 ## 安全边界
 
@@ -18,15 +18,44 @@
 
 ## 构建与验证
 
-构建必须在加载了 MSVC 环境的终端里进行，否则 CMake 的编译器探测会失败：
+构建必须在加载了 MSVC 环境的终端里进行，否则 CMake 的编译器探测会失败。QML 目标通过分支根部的开关启用，原生目标不受影响：
 
 ```
 call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
-cmake -S qmlapp -B qmlapp/build-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build qmlapp/build-cmake
+cmake -S . -B qmlapp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDISKVIEW_BUILD_QML=ON -DDISKVIEW_QT_PREFIX=D:\tools\Qt\6.12.0\msvc2022_64
+cmake --build qmlapp/build
 ```
 
-- `qmlapp/CMakeLists.txt` 是独立的原型工程，尚未挂进分支根部的 `CMakeLists.txt`。
-- `qmlapp/tests/check-prototype.ps1` 覆盖 fixture 递归求和、chart geometry 单元测试、treemap/sunburst 双模式截图、可见节点命中与 zoom/pan 逆变换、模型目录进入/返回。
+- `DISKVIEW_BUILD_QML=OFF`（默认）时不查找 Qt，原生版照常构建。
+- `DISKVIEW_QT_PREFIX` 指向 Qt 6.12.0 MSVC SDK 根目录。
+- `qmlapp/tests/check-prototype.ps1` 覆盖 fixture 递归求和、chart geometry 单元测试、部署独立运行包、treemap/sunburst 双模式截图、可见节点命中与 zoom/pan 逆变换、模型目录进入/返回。
+
+## 独立运行包
+
+`qmlapp/tools/deploy-wrapper.ps1` 用 `windeployqt` 把 Qt 运行时拷到 `qmlapp/build/deploy`，该目录自带 `plugins/`、`qml/` 与 `qt.conf`，**不依赖 Qt SDK 也不依赖 PATH 里的任何 Qt 变量**，可直接拷走运行：
+
+```
+powershell -File qmlapp/tools/deploy-wrapper.ps1
+qmlapp\build\deploy\diskview-qml.exe
+```
+
+wrapper 的命令行：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--view-mode <0\|1>` | 0 = 方块图（treemap），1 = 圆盘图（sunburst） |
+| `--fixture <路径>` | 覆盖默认快照 `:/fixtures/disk-tree.json` |
+| `--qml-dir <目录>` | 加载目录里的 `Main.qml`，用于原型试验 |
+| `--screenshot <路径>` | 延时后抓图并退出 |
+| `--delay <毫秒>` | 抓图前的等待时间，默认 1200 |
+| `--self-test` | 跑命中/变换/导航自检并打印制表符分隔的报告 |
+| `--help` | 用法 |
+
+自检报告形如 `0<TAB>8<TAB>regions<TAB>transform<TAB>navigate<TAB>return<TAB>PASS`，末列 `PASS` 表示全部通过。
+
+## 两个环境坑
+
+- **必须用动态 CRT**：Qt 官方 DLL 是 `/MD` 编译的，静态 CRT（`/MT`）的 exe 与 Qt DLL 不共享堆，QML 类型注册跨堆写入时会触发堆断言。CMake 里固定为 `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL`。
+- **offscreen 平台没有字体**：offscreen 用的是 FreeType 字体库，不设 `QT_QPA_FONTDIR` 时所有文字都是空方框。wrapper 在 `QT_QPA_PLATFORM=offscreen`/`minimal` 时自动把 `QT_QPA_FONTDIR` 指向 `C:\Windows\Fonts`。
 
 详见 [迁移执行记录](design/migration-status.md)。

@@ -47,12 +47,6 @@ diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QStri
 }
 }
 
-void ChartItem::setEntries(const QVariantList& entries)
-{
-    m_entries = entries;
-    emit entriesChanged();
-    rebuildGeometry();
-}
 void ChartItem::setTreeData(const QVariantMap& data)
 {
     m_treeData=data; m_pathIds.clear(); m_chartRoot=nodeFromVariant(data,m_pathIds); m_tiles.clear(); m_slices.clear();

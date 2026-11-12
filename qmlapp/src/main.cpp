@@ -1,67 +1,81 @@
-#include "ChartItem.h"
-#include "DiskViewModel.h"
+#include "QmlHost.h"
 
+#include <QDir>
 #include <QGuiApplication>
-#include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
-#include <QSurfaceFormat>
-#include <QUrl>
-#include <QQmlContext>
-#include <QDir>
-#include <QTimer>
-#include <QFile>
 #include <QTextStream>
+#include <QTimer>
 
-int main(int argc,char**argv)
+#include <windows.h>
+
+namespace {
+
+// The offscreen platform uses the FreeType font database instead of the
+// Windows one, and it looks nowhere for fonts unless QT_QPA_FONTDIR points
+// at a directory: without it every glyph comes out as an empty box.
+void ensureFontDir()
 {
-    QGuiApplication app(argc,argv);
-    QGuiApplication::setApplicationName("DiskView QML Prototype");
+    if (!qEnvironmentVariableIsEmpty("QT_QPA_FONTDIR")) {
+        return;
+    }
+    const QByteArray platform = qgetenv("QT_QPA_PLATFORM").toLower();
+    if (platform != "offscreen" && platform != "minimal") {
+        return;
+    }
+    wchar_t windowsDir[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(windowsDir, MAX_PATH) == 0) {
+        return;
+    }
+    const QDir fonts(QString::fromWCharArray(windowsDir) + "/Fonts");
+    if (fonts.exists()) {
+        qputenv("QT_QPA_FONTDIR", fonts.path().toUtf8());
+    }
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    ensureFontDir();
+    QGuiApplication app(argc, argv);
+    QGuiApplication::setApplicationName("Disk View QML");
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(qEnvironmentVariable("QT_QUICK_BACKEND") == "software"
-        ? QSGRendererInterface::Software : QSGRendererInterface::Direct3D11);
-    qmlRegisterType<DiskViewModel>("DiskViewPrototype",1,0,"DiskViewModel");
-    qmlRegisterType<ChartItem>("DiskViewPrototype",1,0,"ChartItem");
-    qputenv("DISKVIEW_VIEW_MODE", qEnvironmentVariable("DISKVIEW_VIEW_MODE", "0").toUtf8());
-    QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty("diskViewMode", qEnvironmentVariableIntValue("DISKVIEW_VIEW_MODE"));
-    const QString qmlDir = qEnvironmentVariable("DISKVIEW_QML_DIR", QCoreApplication::applicationDirPath()+"/../qml");
-    const QUrl url=QUrl::fromLocalFile(QDir(qmlDir).filePath("Main.qml"));
-    QObject::connect(&engine,&QQmlApplicationEngine::objectCreated,&app,[url](QObject*object,const QUrl&objUrl){if(!object&&objUrl==url)QCoreApplication::exit(1);},Qt::QueuedConnection);
-    engine.load(url);
-    if (qEnvironmentVariableIsSet("DISKVIEW_SCREENSHOT")) {
-        QTimer::singleShot(1400, &app, [&engine, &app] {
-            if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().value(0))) {
-                auto* chart=qobject_cast<ChartItem*>(window->property("chartItem").value<QObject*>());
-                QString hit=chart?chart->firstRegionHit():QString();
-                bool hitRegions=chart&&chart->validateHitTest();
-                bool transformedHit=false;
-                if(chart&&!hit.isEmpty()) {
-                    transformedHit=chart->validateHitTransform();
-                }
-                bool modelNavigation=false,modelReturn=false;
-                auto* modelObject=qobject_cast<DiskViewModel*>(window->property("diskModelItem").value<QObject*>());
-                if(modelObject) {
-                    const QString rootPath=modelObject->currentPath();
-                    modelObject->navigate(QStringLiteral("2"));
-                    modelNavigation=modelObject->currentPath().contains(QStringLiteral("WinShun"));
-                    modelObject->goUp();
-                    modelReturn=modelObject->currentPath()==rootPath;
-                }
-                const bool checksPassed=hitRegions&&transformedHit&&modelNavigation&&modelReturn;
-                const QString resultPath=qEnvironmentVariable("DISKVIEW_HIT_RESULT");
-                if(!resultPath.isEmpty()) {
-                    QFile result(resultPath);
-                    if(result.open(QIODevice::WriteOnly|QIODevice::Text)) {
-                        QTextStream out(&result);
-                        out<<(chart?chart->viewMode():-1)<<"\t"<<hit<<"\n"<<(hitRegions?"regions":"no-regions")<<"\t"<<(transformedHit?"transform":"bad-transform")<<"\t"<<(modelNavigation?"navigate":"bad-navigate")<<"\t"<<(modelReturn?"return":"bad-return")<<"\t"<<(chart&&checksPassed?"PASS":"FAIL")<<"\n";
-                    }
-                }
-                if(!chart) qWarning("diskview prototype chart object not found");
-                else if(hit.isEmpty()) qWarning("diskview prototype hit-test found no item");
-                window->grabWindow().save(qEnvironmentVariable("DISKVIEW_SCREENSHOT"));
+                                     ? QSGRendererInterface::Software
+                                     : QSGRendererInterface::Direct3D11);
+
+    QmlHost::Options options;
+    QString error;
+    if (!QmlHost::parseArgs(app.arguments(), &options, &error)) {
+        QTextStream(stderr) << "error: " << error << "\n" << QmlHost::usage();
+        return 2;
+    }
+    if (options.help) {
+        QTextStream(stdout) << QmlHost::usage();
+        return 0;
+    }
+
+    QmlHost host(options);
+    if (!host.load(&error)) {
+        QTextStream(stderr) << "error: " << error << "\n";
+        return 3;
+    }
+
+    if (options.selfTest || !options.screenshotPath.isEmpty()) {
+        QTimer::singleShot(options.screenshotDelayMs, &app, [&] {
+            int code = 0;
+            if (options.selfTest) {
+                QString report;
+                const bool passed = host.runSelfTest(&report);
+                QTextStream(stdout) << report;
+                if (!passed) code = 1;
             }
-            app.quit();
+            if (!options.screenshotPath.isEmpty() && !host.saveScreenshot(options.screenshotPath)) {
+                QTextStream(stderr) << "error: could not save " << options.screenshotPath << "\n";
+                code = 1;
+            }
+            app.exit(code);
         });
     }
     return app.exec();

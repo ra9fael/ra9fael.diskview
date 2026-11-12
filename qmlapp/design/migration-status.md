@@ -29,6 +29,8 @@
 
 在加载 MSVC 环境的终端里（`vcvars64.bat` + Ninja），CMake 配置与构建均已跑通，产出 `build-cmake/bin/diskview-qml-prototype.exe`。此前记录为「ABI try-compile 会挂起」的现象，实际原因是构建命令没有在 MSVC 环境下执行。
 
+按用户要求「先做一个独立启动的 wrapper 来验证功能」，QML 侧已有一支控制台子系统的启动器 `diskview-qml`（`qmlapp/src/QmlHost.{h,cpp}`）：不经过 WinShun 宿主即可加载 QML、切换视图模式、跑自检、抓图。`qmlapp/tools/deploy-wrapper.ps1` 再用 `windeployqt` 生成 `qmlapp/build/deploy` 运行包，该目录自带 `plugins/`、`qml/` 与 `qt.conf`，脱离 Qt SDK 与 PATH 也能跑。
+
 ### 阶段 2：快照与扫描接口
 
 优先把 `tree.h` 保持为 C++ 核心；需要先拆分或适配 `scan.h` 对 `winshun.h` 的依赖，且不能让 QML 持有裸 `Node*` 跨快照。
@@ -44,13 +46,16 @@
 ## 本轮验证结果
 
 - Qt SDK：`D:/tools/Qt/6.12.0/msvc2022_64`；host DLL：Qt 6.12.0.0；MSVC 19.51.36260。
-- CMake 配置与构建通过（`vcvars64.bat` + Ninja，MSVC 19.51.36260），产物 `build-cmake/bin/diskview-qml-prototype.exe`；早前的手工 `moc` + `cl` + `link` 链路已由 CMake 取代。
-- `tests/check-prototype.ps1` 通过：递归 fixture 总和校验、C++ chart geometry tests、两种模式截图、可见节点 hit-test、zoom/pan inverse transform、DiskViewModel 目录进入/返回。treemap 截图 `build/qml-treemap-native.png` 约 47 KB（mode 0 命中 ID `8`）；sunburst 截图 `build/qml-sunburst-painted.png` 约 95 KB（mode 1 命中 ID `2`）。
+- CMake 配置与构建通过（`vcvars64.bat` + Ninja，MSVC 19.51.36260），产物 `qmlapp/build/bin/diskview-qml.exe`；早前的手工 `moc` + `cl` + `link` 链路已由 CMake 取代。QML 目标挂在分支根部 CMake 的 `DISKVIEW_BUILD_QML` 开关后面，关闭时不查找 Qt，原生目标不受影响。
+- `tests/check-prototype.ps1` 通过：递归 fixture 总和校验、C++ chart geometry tests、部署独立运行包、两种模式截图、可见节点 hit-test、zoom/pan inverse transform、DiskViewModel 目录进入/返回。treemap 截图 `build/qml-treemap-native.png` 约 38 KB（mode 0 命中 ID `8`）；sunburst 截图 `build/qml-sunburst-painted.png` 约 85 KB（mode 1 命中 ID `2`）。检查跑的是部署后的副本，且已把 Qt SDK 从 PATH 里摘掉。
+- 两个环境坑及其结论：
+  - **静态 CRT 会崩**：目标原先用 `/MTd`，与官方 `/MD` 的 Qt DLL 不共享堆，QML 类型注册的静态初始化跨堆写入时触发 `__acrt_first_block == header` 堆断言（进程卡在弹窗上）。改为 `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL` 后 Debug/Release 均正常。
+  - **offscreen 没有字体**：offscreen 走 FreeType 字体库且 Qt 6 不再自带字体目录，不设 `QT_QPA_FONTDIR` 时所有字形都是空方框（截图只有 8 KB）。wrapper 在 offscreen/minimal 平台自动把 `QT_QPA_FONTDIR` 指向 `C:\Windows\Fonts`，字形恢复正常。
 - 发现 fixture 的 `WinShun/build/debug` 子项总和比声明多 1 MiB，已修复样机 JSON 并加入 `tests/check-fixture.cjs` 递归检查。截图中的未填充扇区代表叶文件没有下一层子项，并非绘制断裂。
 - HTML 交互演示位于 `../ra9fael.diskview/design/compact-layout-prototype.html`，提示文案已区分浏览器仿真与 Qt 实测，并提供 Qt 截图及 QML 源码链接。`node build/compact-prototype-check.cjs`：26 项全部通过。
 
 ## 阻塞及下一步
 
 - 按用户要求先测功能，当前仍使用固定 JSON fixture；尚未接入 WinShun 协议、真实扫描、MFT helper、文件操作或 host plugin launcher。
-- `qmlapp/CMakeLists.txt` 仍是独立工程，尚未挂进分支根部的 CMake；QML 分支与原生版的双目标构建、plugin.json 变体发布尚未开始。
+- 真实扫描器接入前要先拆掉 `scan.h` 对 `winshun.h` 的依赖；QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。

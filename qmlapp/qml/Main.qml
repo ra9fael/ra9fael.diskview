@@ -5,8 +5,6 @@ import DiskViewPrototype
 
 ApplicationWindow {
     id: window
-    property var chartItem: null
-    property var diskModelItem: null
     width: 1260
     height: 780
     minimumWidth: 860
@@ -15,11 +13,9 @@ ApplicationWindow {
     title: "Disk View · QML 技术样机"
     color: "#f4f6f8"
 
-    DiskViewModel { id: diskModel }
+    DiskViewModel { id: diskModel; objectName: "diskModel" }
     Component.onCompleted: {
-        diskModel.loadFixture(Qt.resolvedUrl("../fixtures/disk-tree.json").toString())
-        window.chartItem = chart
-        window.diskModelItem = diskModel
+        diskModel.loadFixture(fixtureSource)
     }
 
     ColumnLayout {
@@ -58,7 +54,7 @@ ApplicationWindow {
                 color: "#ffffff"; border.color: "#dce2e8"; radius: 4; clip: true
                 ChartItem {
                     id: chart; objectName: "diskViewChart"; anchors.fill: parent; anchors.margins: 8
-                    entries: diskModel.chartEntries; treeData: diskModel.chartTree; selectedId: diskModel.selectedId; viewMode: diskViewMode; centerLabel: diskModel.currentName
+                    treeData: diskModel.chartTree; selectedId: diskModel.selectedId; viewMode: diskViewMode; centerLabel: diskModel.currentName
                     onActivated: function(nodeId, directory) { diskModel.select(nodeId); if(directory) diskModel.navigate(nodeId) }
                     onHovered: function(nodeId) { if(nodeId.length) diskModel.select(nodeId) }
                     onCenterActivated: diskModel.goUp()

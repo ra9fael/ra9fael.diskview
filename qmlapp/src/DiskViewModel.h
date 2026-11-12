@@ -3,16 +3,17 @@
 #include <QAbstractListModel>
 #include <QJsonObject>
 #include <QObject>
-#include <QVariantList>
+#include <QVariantMap>
 #include <QVector>
+#include <QtQml/qqmlregistration.h>
 
 class DiskViewModel : public QAbstractListModel {
     Q_OBJECT
+    QML_ELEMENT
     Q_PROPERTY(QString currentPath READ currentPath NOTIFY currentPathChanged)
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentPathChanged)
     Q_PROPERTY(QString totalText READ totalText NOTIFY currentPathChanged)
     Q_PROPERTY(QString selectedId READ selectedId NOTIFY selectedChanged)
-    Q_PROPERTY(QVariantList chartEntries READ chartEntries NOTIFY currentPathChanged)
     Q_PROPERTY(QVariantMap chartTree READ chartTree NOTIFY currentPathChanged)
     Q_PROPERTY(QString breadcrumbText READ breadcrumbText NOTIFY currentPathChanged)
     Q_PROPERTY(int itemCount READ itemCount NOTIFY currentPathChanged)
@@ -25,7 +26,6 @@ public:
     QString currentName() const;
     QString totalText() const;
     QString selectedId() const { return m_selectedId; }
-    QVariantList chartEntries() const;
     QVariantMap chartTree() const;
     QString breadcrumbText() const;
     int itemCount() const { return m_visible.size(); }
