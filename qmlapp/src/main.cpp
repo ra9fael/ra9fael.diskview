@@ -1,6 +1,7 @@
 #include "QmlHost.h"
 
 #include <QDir>
+#include <QFont>
 #include <QGuiApplication>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
@@ -33,12 +34,28 @@ void ensureFontDir()
     }
 }
 
+// That font database resolves the generic "Sans Serif" to a font whose Latin
+// glyphs are wrong, so the family is named outright. The list is the fallback
+// chain: a CJK font takes over the characters the first one does not have.
+void ensureApplicationFont()
+{
+    const QByteArray platform = qgetenv("QT_QPA_PLATFORM").toLower();
+    if (platform != "offscreen" && platform != "minimal") {
+        return;
+    }
+    QFont font;
+    font.setFamilies({"Segoe UI", "Microsoft YaHei", "Noto Sans SC", "SimHei", "Arial"});
+    font.setStyleStrategy(QFont::PreferAntialias);
+    QGuiApplication::setFont(font);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     ensureFontDir();
     QGuiApplication app(argc, argv);
+    ensureApplicationFont();
     QGuiApplication::setApplicationName("Disk View QML");
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(qEnvironmentVariable("QT_QUICK_BACKEND") == "software"
@@ -76,6 +93,13 @@ int main(int argc, char** argv)
         }
         app.exit(code);
     };
+
+    if (options.openSettings) {
+        if (!host.openSettingsDialog(&error)) {
+            QTextStream(stderr) << "error: " << error << "\n";
+            return 5;
+        }
+    }
 
     if (!options.scanPath.isEmpty()) {
         // The scan decides when the window is ready: a fixed delay would be

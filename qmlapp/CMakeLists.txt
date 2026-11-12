@@ -11,12 +11,13 @@ qt_add_executable(diskview-qml
     src/main.cpp
     src/QmlHost.cpp src/QmlHost.h
     src/ScanService.cpp src/ScanService.h
+    src/ScanSettings.cpp src/ScanSettings.h
     src/ChartItem.cpp src/ChartItem.h
     src/DiskViewModel.cpp src/DiskViewModel.h)
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
-    QML_FILES qml/Main.qml)
+    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -51,6 +52,22 @@ foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set_target_properties(diskview-chart-geometry-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/tests")
 endforeach()
 
+# The settings of the scan: defaults, clamping and the round trip through the
+# settings file.
+add_executable(diskview-settings-tests tests/settings-tests.cpp src/ScanSettings.cpp src/ScanSettings.h)
+target_link_libraries(diskview-settings-tests PRIVATE Qt6::Core)
+target_include_directories(diskview-settings-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(diskview-settings-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+if(MSVC)
+    set_target_properties(diskview-settings-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+set_target_properties(diskview-settings-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(diskview-settings-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/tests")
+endforeach()
+
 enable_testing()
 add_test(NAME diskview_chart_geometry COMMAND diskview-chart-geometry-tests)
 set_tests_properties(diskview_chart_geometry PROPERTIES TIMEOUT 30)
+add_test(NAME diskview_scan_settings COMMAND diskview-settings-tests)
+set_tests_properties(diskview_scan_settings PROPERTIES TIMEOUT 30)

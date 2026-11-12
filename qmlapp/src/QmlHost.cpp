@@ -3,6 +3,7 @@
 #include "ChartItem.h"
 #include "DiskViewModel.h"
 #include "ScanService.h"
+#include "ScanSettings.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -21,13 +22,20 @@ bool QmlHost::load(QString* error)
     m_engine.rootContext()->setContextProperty("diskViewMode", m_options.viewMode);
     m_engine.rootContext()->setContextProperty("fixtureSource",
                                                m_options.fixture.isEmpty() ? QString::fromLatin1(kBuiltInFixture) : m_options.fixture);
-    m_engine.rootContext()->setContextProperty("initialScanPath", m_options.scanPath);
 
     // The scanner is a plain object owned by the host and handed to the QML as
     // a context property: the same instance drives the window and the command
-    // line.
+    // line. The settings decide how the next scan runs.
     m_scanService = new ScanService(this);
+    m_scanSettings = new ScanSettings(this);
+    m_scanSettings->load();
+    m_scanService->setSettings(m_scanSettings);
     m_engine.rootContext()->setContextProperty("scanService", m_scanService);
+    m_engine.rootContext()->setContextProperty("scanSettings", m_scanSettings);
+    // A path given on the command line wins over the remembered one.
+    m_engine.rootContext()->setContextProperty(
+        "initialScanPath",
+        m_options.scanPath.isEmpty() ? m_scanSettings->lastPath() : m_options.scanPath);
 
     if (m_options.qmlDir.isEmpty()) {
         m_engine.loadFromModule("DiskViewPrototype", "Main");
@@ -110,7 +118,36 @@ bool QmlHost::runSelfTest(QString* report)
                   .arg(navigate ? QStringLiteral("navigate") : QStringLiteral("bad-navigate"))
                   .arg(back ? QStringLiteral("return") : QStringLiteral("bad-return"))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
+    if (!m_options.scanPath.isEmpty() && m_scanService) {
+        // What the scan made of the settings, and how much of it was published
+        // before it was over.
+        *report += QStringLiteral("scan\tworkers=%1\texcluded=%2\tpartials=%3\tfiles=%4\tdirs=%5\n")
+                      .arg(m_scanService->scanWorkers())
+                      .arg(m_scanService->excludedItems())
+                      .arg(m_scanService->partialCount())
+                      .arg(m_scanService->fileCount())
+                      .arg(m_scanService->dirCount());
+    }
     return pass;
+}
+
+bool QmlHost::openSettingsDialog(QString* error)
+{
+    auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
+    if (!window) {
+        *error = QStringLiteral("the window is not available");
+        return false;
+    }
+    auto* dialog = window->findChild<QObject*>(QStringLiteral("scanSettingsDialog"));
+    if (!dialog) {
+        *error = QStringLiteral("the scan settings dialog is not part of the window");
+        return false;
+    }
+    if (!QMetaObject::invokeMethod(dialog, "open")) {
+        *error = QStringLiteral("the scan settings dialog did not open");
+        return false;
+    }
+    return true;
 }
 
 bool QmlHost::saveScreenshot(const QString& path)
@@ -160,6 +197,8 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->screenshotDelayMs = delay;
         } else if (argument == QStringLiteral("--self-test")) {
             options->selfTest = true;
+        } else if (argument == QStringLiteral("--settings")) {
+            options->openSettings = true;
         } else {
             *error = QStringLiteral("unknown option %1").arg(argument);
             return false;
@@ -180,6 +219,7 @@ QString QmlHost::usage()
         "  --view-mode <0|1>  0 = treemap, 1 = sunburst\n"
         "  --screenshot <png> save a window grab and exit\n"
         "  --delay <ms>       wait before the grab (default 1200)\n"
+        "  --settings         open the scan settings dialog on startup\n"
         "  --self-test        run the interaction checks and print the verdict\n"
         "  -h, --help         show this help\n");
 }

@@ -8,6 +8,7 @@ $sdk = 'D:\tools\Qt\6.12.0\msvc2022_64'
 $vcvars = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat'
 $exe = Join-Path $deploy 'diskview-qml.exe'
 $geometryExe = Join-Path $build 'tests\diskview-chart-geometry-tests.exe'
+$settingsExe = Join-Path $build 'tests\diskview-settings-tests.exe'
 
 node (Join-Path $PSScriptRoot 'check-fixture.cjs')
 if ($LASTEXITCODE -ne 0) { throw 'Fixture totals are inconsistent' }
@@ -22,6 +23,20 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $geometryExe)) { throw "Missing chart geometry tests: $geometryExe" }
 & $geometryExe
 if ($LASTEXITCODE -ne 0) { throw 'Chart geometry unit tests failed' }
+
+# The settings test writes into the build directory, not into the system temp
+# folder, and needs Qt on the PATH.
+if (-not (Test-Path $settingsExe)) { throw "Missing settings tests: $settingsExe" }
+$savedPath = $env:PATH
+$env:PATH = "$sdk\bin;$env:PATH"
+Push-Location $build
+try {
+  & $settingsExe
+} finally {
+  Pop-Location
+  $env:PATH = $savedPath
+}
+if ($LASTEXITCODE -ne 0) { throw 'Scan settings unit tests failed' }
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $qmlApp 'tools\deploy-wrapper.ps1') -QtPrefix $sdk -BuildDir $build -OutputDir $deploy
 if ($LASTEXITCODE -ne 0) { throw 'Deployment of the standalone launcher failed' }

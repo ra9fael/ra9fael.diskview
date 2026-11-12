@@ -18,7 +18,7 @@ bool DiskViewModel::loadFixture(const QString& fileName)
     return loadTree(doc.object().toVariantMap());
 }
 
-bool DiskViewModel::loadTree(const QVariantMap& tree)
+bool DiskViewModel::loadTree(const QVariantMap& tree, bool partial)
 {
     if (tree.isEmpty()) return false;
     beginResetModel();
@@ -30,8 +30,27 @@ bool DiskViewModel::loadTree(const QVariantMap& tree)
     for (int c : root.children) m_visible.push_back(c);
     std::stable_sort(m_visible.begin(),m_visible.end(),[&](int a,int b){return m_nodes[a].size>m_nodes[b].size;});
     endResetModel();
+    setPartial(partial);
     emit currentPathChanged();
     return true;
+}
+
+void DiskViewModel::clear()
+{
+    beginResetModel();
+    m_nodes.clear(); m_visible.clear(); m_history.clear(); m_selectedId.clear();
+    m_current = -1;
+    endResetModel();
+    setPartial(false);
+    emit currentPathChanged();
+    emit selectedChanged();
+}
+
+void DiskViewModel::setPartial(bool partial)
+{
+    if (m_partial == partial) return;
+    m_partial = partial;
+    emit partialChanged();
 }
 
 int DiskViewModel::appendNode(const QVariantMap& node, int parent, const QString& path)

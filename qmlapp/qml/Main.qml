@@ -20,8 +20,14 @@ ApplicationWindow {
 
     Connections {
         target: scanService
-        function onFinished(tree) { diskModel.loadTree(tree) }
+        function onStarted(path) { diskModel.clear() }
+        function onPartialTree(tree) { diskModel.loadTree(tree, true) }
+        function onFinished(tree) { diskModel.loadTree(tree, false) }
+        function onCancelled() { diskModel.setPartial(true) }
+        function onFailed(message) { diskModel.setPartial(true) }
     }
+
+    ScanSettingsDialog { id: settingsDialog; objectName: "scanSettingsDialog" }
 
     ColumnLayout {
         anchors.fill: parent
@@ -37,7 +43,18 @@ ApplicationWindow {
                 Label { text: "Disk View"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#202b3c" }
                 Label { text: "QML 技术样机"; font.pixelSize: 12; color: "#657386" }
                 Item { Layout.fillWidth: true }
-                Label { text: scanService.state === "done" ? "真实扫描" : "固定快照"; font.pixelSize: 11; color: scanService.state === "done" ? "#168c84" : "#a76414" }
+                Label {
+                    text: scanService.state === "done" ? "真实扫描"
+                          : scanService.state === "scanning" ? "扫描中"
+                          : scanService.state === "cancelled" ? "已取消的扫描"
+                          : scanService.state === "error" ? "扫描失败"
+                          : "固定快照"
+                    font.pixelSize: 11
+                    color: scanService.state === "done" ? "#168c84"
+                          : scanService.state === "scanning" ? "#a76414"
+                          : scanService.state === "error" ? "#b3261e"
+                          : "#657386"
+                }
                 TextField {
                     id: pathField
                     Layout.preferredWidth: 260
@@ -53,6 +70,7 @@ ApplicationWindow {
                     onClicked: scanService.start(pathField.text.trim())
                 }
                 Button { text: "取消"; Layout.minimumWidth: 64; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
+                Button { text: "扫描设置"; Layout.minimumWidth: 76; onClicked: settingsDialog.open() }
                 BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 16; implicitHeight: 16 }
             }
         }
@@ -123,7 +141,19 @@ ApplicationWindow {
                         }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#e5eaf0" }
-                    Label { Layout.fillWidth: true; Layout.preferredHeight: 36; leftPadding: 12; verticalAlignment: Text.AlignVCenter; text: "C++ 模型 · ListView 虚拟化 · 真实扫描已接入"; font.pixelSize: 11; color: "#66758a" }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 36
+                        leftPadding: 12
+                        verticalAlignment: Text.AlignVCenter
+                        text: scanService.state === "error" ? "扫描失败：" + scanService.errorText
+                              : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
+                              : "C++ 模型 · ListView 虚拟化 · 真实扫描已接入"
+                        font.pixelSize: 11
+                        color: scanService.state === "error" ? "#b3261e"
+                              : diskModel.partial ? "#a76414" : "#66758a"
+                        elide: Text.ElideRight
+                    }
                 }
             }
         }

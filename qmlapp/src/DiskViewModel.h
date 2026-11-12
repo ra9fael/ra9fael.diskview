@@ -17,12 +17,20 @@ class DiskViewModel : public QAbstractListModel {
     Q_PROPERTY(QVariantMap chartTree READ chartTree NOTIFY currentPathChanged)
     Q_PROPERTY(QString breadcrumbText READ breadcrumbText NOTIFY currentPathChanged)
     Q_PROPERTY(int itemCount READ itemCount NOTIFY currentPathChanged)
+    Q_PROPERTY(bool partial READ partial NOTIFY partialChanged)
 
 public:
     enum Roles { IdRole = Qt::UserRole + 1, NameRole, SizeRole, SizeTextRole, PercentRole, DirectoryRole, PathRole };
     explicit DiskViewModel(QObject* parent = nullptr);
     Q_INVOKABLE bool loadFixture(const QString& fileName);
-    Q_INVOKABLE bool loadTree(const QVariantMap& tree);
+    Q_INVOKABLE bool loadTree(const QVariantMap& tree, bool partial = false);
+    // Drops the tree that is shown, so a new scan does not start with the
+    // result of the previous one.
+    Q_INVOKABLE void clear();
+    // A cancelled or failed scan leaves an unfinished tree behind; the window
+    // has to say so instead of pretending the data is complete.
+    Q_INVOKABLE void setPartial(bool partial);
+    bool partial() const { return m_partial; }
     QString currentPath() const;
     QString currentName() const;
     QString totalText() const;
@@ -43,6 +51,7 @@ public:
 signals:
     void currentPathChanged();
     void selectedChanged();
+    void partialChanged();
 
 private:
     struct Entry { QString id,name,path; quint64 size=0; bool directory=false; int parent=-1; QVector<int> children; };
@@ -56,4 +65,5 @@ private:
     QVector<int> m_history;
     int m_current=-1;
     QString m_selectedId;
+    bool m_partial=false;
 };

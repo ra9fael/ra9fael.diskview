@@ -1,0 +1,190 @@
+#include "ScanSettings.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
+#include <QStandardPaths>
+
+#include <algorithm>
+#include <cstdlib>
+
+namespace {
+
+QString settingsFilePath()
+{
+    // The host passes its data directory; the standalone launcher has to find
+    // a place of its own.
+    const QByteArray dataDir = qgetenv("WS_DATA_DIR");
+    QDir dir;
+    if (!dataDir.isEmpty()) {
+        dir = QDir(QString::fromUtf8(dataDir));
+    } else {
+        dir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    }
+    return dir.filePath(QStringLiteral("diskview-qml.json"));
+}
+
+// The worker counts the plugin offers. A value outside them is snapped to the
+// nearest one, so the setting always means something the scanner can use.
+unsigned snapWorkerLimit(int workers)
+{
+    const unsigned limits[] = {0, 1, 2, 4, 8};
+    if (workers <= 0) {
+        return 0;
+    }
+    if (workers >= 8) {
+        return 8;
+    }
+    unsigned best = 1;
+    for (unsigned limit : limits) {
+        if (limit == 0) continue;
+        if (std::abs(static_cast<int>(limit) - workers) < std::abs(static_cast<int>(best) - workers)) {
+            best = limit;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+ScanSettings::ScanSettings(QObject* parent) : QObject(parent) {}
+
+QString ScanSettings::filePath() const
+{
+    return settingsFilePath();
+}
+
+void ScanSettings::setWorkers(int workers)
+{
+    const int clamped = static_cast<int>(snapWorkerLimit(workers));
+    if (clamped == m_workers) {
+        return;
+    }
+    m_workers = clamped;
+    emit changed();
+}
+
+void ScanSettings::setMedia(int media)
+{
+    const int clamped = std::clamp(media, 0, 3);
+    if (clamped == m_media) {
+        return;
+    }
+    m_media = clamped;
+    emit changed();
+}
+
+void ScanSettings::setPreviewIntervalMs(int intervalMs)
+{
+    // Two intervals only, the same ones the native plugin offers: a fast
+    // preview and a cheap one.
+    const int clamped = intervalMs >= 5000 ? 5000 : 1500;
+    if (clamped == m_previewIntervalMs) {
+        return;
+    }
+    m_previewIntervalMs = clamped;
+    emit changed();
+}
+
+void ScanSettings::setLastPath(const QString& path)
+{
+    if (path == m_lastPath) {
+        return;
+    }
+    m_lastPath = path;
+    emit changed();
+}
+
+void ScanSettings::addExcludedPath(const QString& path)
+{
+    const QString trimmed = path.trimmed();
+    if (trimmed.isEmpty() || m_excludedPaths.contains(trimmed)) {
+        return;
+    }
+    m_excludedPaths.append(trimmed);
+    emit changed();
+}
+
+void ScanSettings::setExcludedPaths(const QStringList& paths)
+{
+    QStringList kept;
+    for (const QString& path : paths) {
+        const QString trimmed = path.trimmed();
+        if (!trimmed.isEmpty() && !kept.contains(trimmed)) {
+            kept.append(trimmed);
+        }
+    }
+    if (kept == m_excludedPaths) {
+        return;
+    }
+    m_excludedPaths = kept;
+    emit changed();
+}
+
+void ScanSettings::removeExcludedPath(int index)
+{
+    if (index < 0 || index >= m_excludedPaths.size()) {
+        return;
+    }
+    m_excludedPaths.removeAt(index);
+    emit changed();
+}
+
+bool ScanSettings::load()
+{
+    QFile file(settingsFilePath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject()) {
+        return false;
+    }
+    const QJsonObject object = document.object();
+    m_lastPath = object.value(QStringLiteral("path")).toString();
+    // Out-of-range values from a hand-edited file are clamped, not trusted.
+    m_workers = static_cast<int>(snapWorkerLimit(object.value(QStringLiteral("workers")).toInt(0)));
+    m_media = std::clamp(object.value(QStringLiteral("media")).toInt(0), 0, 3);
+    const int interval = object.value(QStringLiteral("previewIntervalMs")).toInt(1500);
+    m_previewIntervalMs = interval >= 5000 ? 5000 : 1500;
+    m_excludedPaths.clear();
+    const QJsonArray excluded = object.value(QStringLiteral("excludedPaths")).toArray();
+    for (const QJsonValue& item : excluded) {
+        if (!item.isString()) {
+            continue;
+        }
+        const QString path = item.toString();
+        if (!path.isEmpty() && !m_excludedPaths.contains(path)) {
+            m_excludedPaths.append(path);
+        }
+    }
+    emit changed();
+    return true;
+}
+
+bool ScanSettings::save()
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("path"), m_lastPath);
+    object.insert(QStringLiteral("workers"), m_workers);
+    object.insert(QStringLiteral("media"), m_media);
+    object.insert(QStringLiteral("previewIntervalMs"), m_previewIntervalMs);
+    QJsonArray excluded;
+    for (const QString& path : m_excludedPaths) {
+        excluded.append(path);
+    }
+    object.insert(QStringLiteral("excludedPaths"), excluded);
+
+    const QString path = settingsFilePath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    file.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
+    return file.commit();
+}
