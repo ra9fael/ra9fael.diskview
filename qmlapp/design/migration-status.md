@@ -79,6 +79,16 @@
 - 发现 fixture 的 `WinShun/build/debug` 子项总和比声明多 1 MiB，已修复样机 JSON 并加入 `tests/check-fixture.cjs` 递归检查。截图中的未填充扇区代表叶文件没有下一层子项，并非绘制断裂。
 - HTML 交互演示位于 `../ra9fael.diskview/design/compact-layout-prototype.html`，提示文案已区分浏览器仿真与 Qt 实测，并提供 Qt 截图及 QML 源码链接。`node build/compact-prototype-check.cjs`：26 项全部通过。
 
+### 阶段 9：按 WizTree 式布局重排
+
+用户给了 WizTree 的截图并认可一张 HTML 演示稿（`design/wiztree-layout-prototype.html`），要求照着同步到 QML。
+
+- **布局**：上下分栏（`SplitView`）——上半「文件夹树表 | 扩展名图例」，下半方块图；面包屑单独一行夹在两者之间（它描述的是图表画的是哪一层），并带当前目录的大小与项目数。
+- **树表**：`DiskViewModel` 从「当前层扁平列表」改成「扁平化树」。新增 `depth`/`hasChildren`/`expanded`/`items`/`files`/`dirs`/`ext`/`extColor` 角色和 `toggleExpanded`；`% 父级` 改为相对父目录；`已分配` 取扫描的 `allocApprox`（快照没有就按 4 KB 取整）。文件视图取代原来的「最大文件榜」。
+- **过滤的语义**：命中行连同它上方的路径一起显示；筛选期间路径上的文件夹**临时**展开，不写进用户的展开状态，清空后完全恢复。
+- **扩展名着色**：新增 `src/ExtensionColors.h`，颜色表、类型名、取扩展名三件事只此一处；`ChartItem` 用它给方块/扇区上色，图例用它显示同色块。点图例某行会把其它扩展名压暗（`highlightExtension`）。
+- 目录保持中性灰，和 WizTree 一致；因为绘图深度默认 1 层，进入某个目录后满屏都是按扩展名着色的文件块。
+
 ### 阶段 8：图表交互与信息显示
 
 手工在真实窗口里点了一遍，暴露的问题逐个修掉：
@@ -113,6 +123,11 @@
 - 检查脚本的扫描一律读临时设置 `{"scanMode": 2}`、扫临时目录，因此自动化过程中不可能弹 UAC；快扫的 UAC 正常路径只能由人在盘符根目录上手动触发。
 - 界面目视核对（截图 `build/qml-scan-paused.png`、`build/qml-settings-mode.png`）：顶栏「扫描已暂停」+「继续」按钮，底栏「扫描已暂停 · 点「继续」让它接着扫」，设置对话框新增「扫描方式 = 普通遍历」一行与勾选的「确定后立即重新扫描」。
 
+## 验证结果（阶段 9）
+- `tests/check-prototype.ps1` 全绿，自检的 `list=` 字段改成 `sort,name,filter,files,expand,history`：树表排序、过滤（逐行断言路径包含关键字）、文件视图只含文件、展开/折叠行数往返、历史后退前进。
+- `diskview-model-tests` 扩到 40 项断言：新增文件视图、展开折叠（含子项层级深度）、扩展名聚合（按大小降序、文件计数、颜色与类型名）。过滤的老断言按新语义改写——命中行带上它上方的路径，筛选不改变用户的展开状态。
+- 截图人工核对：固定快照下 5 行树表（% 父级条、已分配、项目/文件/文件夹）与 13 行扩展名图例（颜色与方块图一致）；真实扫描下 `alpha 20.0 KB / 已分配 28.0 KB`，图例只有 .bin 与 .txt 两种，方块图的 .txt 块是图例里的绿色。
+
 ## 验证结果（阶段 8）
 - `tests/check-prototype.ps1` 全绿，自检报告新增 `chart` 一列：treemap `chart=double`、sunburst `chart=double,center`、真实扫描 `chart=double`。
 - 图表交互改用真实鼠标事件验证：`drag` 检查发 press→move→release→hover，断言「拖动会平移、松开后悬停不再平移」；`chart` 检查发 press→release→dblclick→release，断言方块图双击目录能进入、圆盘在中心孔双击能回到上级。
@@ -130,4 +145,4 @@
 - 尚未接入 WinShun 协议、文件操作或 host plugin launcher；管理员快扫 helper 已接线，但 UAC 正常路径尚未由人手动跑过（需在固定 NTFS 卷的盘符根目录上触发）。
 - QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
-- B1、B2 与图表交互修复已完成并提交；下一步按 roadmap 是 B3（QSGGeometryNode 渲染路径、抗锯齿圆盘、大目录压力测试）。
+- B1、B2、图表交互与 WizTree 式布局同步已完成并提交；下一步按 roadmap 是 B3（QSGGeometryNode 渲染路径、抗锯齿圆盘、大目录压力测试）。
