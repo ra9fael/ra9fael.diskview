@@ -89,6 +89,15 @@
 - **扩展名着色**：新增 `src/ExtensionColors.h`，颜色表、类型名、取扩展名三件事只此一处；`ChartItem` 用它给方块/扇区上色，图例用它显示同色块。点图例某行会把其它扩展名压暗（`highlightExtension`）。
 - 目录保持中性灰，和 WizTree 一致；因为绘图深度默认 1 层，进入某个目录后满屏都是按扩展名着色的文件块。
 
+### 阶段 10：五处界面反馈
+
+1. **筛选框下半截被裁**：视图行固定 34px，`TextField` 的隐式高度装不下。改为显式 26px、上下内边距 4、字号 11，行高 36。
+2. **树没展开、列不够**：`onClicked` 现在对文件夹行做 `select + toggleExpanded`（双击仍进入）；列补到 WizTree 的 9 列。**修改时间/属性**在三条扫描路径上都补了：`Node` 增加 `modified`(FILETIME) 与 `attributes`(FILE_ATTRIBUTE_*)；`parallel_scan.h` 取 `WIN32_FIND_DATAW`，`scan.h` 的串行回退路径同样填，`mft_scan.h` 从 `$STANDARD_INFORMATION` 取并经 `scan_helper.h` 的 Row 协议（新增 `modified` 字段）带到宿主。属性按 Explorer 字母显示（R H S D A L C），时间格式 `yyyy-MM-dd HH:mm`；快照缺字段时显示「—」。列显隐放表头的「列」菜单，写进 `diskview-qml.json` 的 `hiddenColumns`。
+3. **图例列**：按树表对齐——占比改成带条，新增「已分配」。
+4. **文件视图语义**：保留清单式（当前子树的文件、按大小排），另加两个开关——范围（当前目录/整个扫描）与匹配（子串/模糊子序列）。模糊匹配只作用在文件名上，因为整树范围下匹配整条路径没有意义。
+5. **设置对话框按钮出界**：`height: 520` 写死、内容长高后页脚被挤到框外。改成内容决定高度（`ColumnLayout` 不再 `anchors.fill`），排除列表给 150px 固定高度。
+- 圆盘中心标签过长会溢出，按孔宽做 `ElideMiddle`。
+
 ### 阶段 8：图表交互与信息显示
 
 手工在真实窗口里点了一遍，暴露的问题逐个修掉：
@@ -122,6 +131,13 @@
   - 用 `CreateFileW` 独占句柄锁住一个目录，扫描读不到它 → `skippedDirs()==1`、`issues().size()==1`，路径指向被锁目录、错误文本非空。
 - 检查脚本的扫描一律读临时设置 `{"scanMode": 2}`、扫临时目录，因此自动化过程中不可能弹 UAC；快扫的 UAC 正常路径只能由人在盘符根目录上手动触发。
 - 界面目视核对（截图 `build/qml-scan-paused.png`、`build/qml-settings-mode.png`）：顶栏「扫描已暂停」+「继续」按钮，底栏「扫描已暂停 · 点「继续」让它接着扫」，设置对话框新增「扫描方式 = 普通遍历」一行与勾选的「确定后立即重新扫描」。
+
+## 验证结果（阶段 10）
+- `tests/check-prototype.ps1` 全绿（自检三项 + 真实扫描 + held + helper）。
+- 模型单测新增：文件视图整树范围（`wholeTree`）、模糊匹配（子序列命中/普通子串仍命中）、修改时间与属性的格式化与缺省「—」。
+- 设置单测新增：`hiddenColumns` 只保留已知列、`fuzzyMatch`/`wholeTree` 往返。
+- 原生目标单独用 `-DDISKVIEW_BUILD_QML=OFF` 编译通过：共享头文件（`tree.h`/`scan.h`/`parallel_scan.h`/`mft_scan.h`/`scan_helper.h`）的改动不破坏 `diskview.exe` 与 `diskview_tests.exe`。
+- 截图核对：真实扫描的树表出现「修改时间 2026-11-13 02:18 / 属性 D、A」，图例带占比条与已分配列；设置对话框的「取消/确定」回到白框内。
 
 ## 验证结果（阶段 9）
 - `tests/check-prototype.ps1` 全绿，自检的 `list=` 字段改成 `sort,name,filter,files,expand,history`：树表排序、过滤（逐行断言路径包含关键字）、文件视图只含文件、展开/折叠行数往返、历史后退前进。
