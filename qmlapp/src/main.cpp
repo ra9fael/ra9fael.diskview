@@ -62,21 +62,37 @@ int main(int argc, char** argv)
         return 3;
     }
 
-    if (options.selfTest || !options.screenshotPath.isEmpty()) {
-        QTimer::singleShot(options.screenshotDelayMs, &app, [&] {
-            int code = 0;
-            if (options.selfTest) {
-                QString report;
-                const bool passed = host.runSelfTest(&report);
-                QTextStream(stdout) << report;
-                if (!passed) code = 1;
-            }
-            if (!options.screenshotPath.isEmpty() && !host.saveScreenshot(options.screenshotPath)) {
-                QTextStream(stderr) << "error: could not save " << options.screenshotPath << "\n";
-                code = 1;
-            }
-            app.exit(code);
+    const auto runChecks = [&] {
+        int code = 0;
+        if (options.selfTest) {
+            QString report;
+            const bool passed = host.runSelfTest(&report);
+            QTextStream(stdout) << report;
+            if (!passed) code = 1;
+        }
+        if (!options.screenshotPath.isEmpty() && !host.saveScreenshot(options.screenshotPath)) {
+            QTextStream(stderr) << "error: could not save " << options.screenshotPath << "\n";
+            code = 1;
+        }
+        app.exit(code);
+    };
+
+    if (!options.scanPath.isEmpty()) {
+        // The scan decides when the window is ready: a fixed delay would be
+        // either too short or a waste.
+        if (!host.startScan(options.scanPath, &error)) {
+            QTextStream(stderr) << "error: " << error << "\n";
+            return 4;
+        }
+        QObject::connect(&host, &QmlHost::scanFinished, &app, [&] {
+            QTimer::singleShot(400, &app, runChecks);
         });
+        QObject::connect(&host, &QmlHost::scanFailed, &app, [&](const QString& message) {
+            QTextStream(stderr) << "error: scan failed: " << message << "\n";
+            app.exit(4);
+        });
+    } else if (options.selfTest || !options.screenshotPath.isEmpty()) {
+        QTimer::singleShot(options.screenshotDelayMs, &app, runChecks);
     }
     return app.exec();
 }

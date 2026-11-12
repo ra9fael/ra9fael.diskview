@@ -22,6 +22,7 @@ public:
     enum Roles { IdRole = Qt::UserRole + 1, NameRole, SizeRole, SizeTextRole, PercentRole, DirectoryRole, PathRole };
     explicit DiskViewModel(QObject* parent = nullptr);
     Q_INVOKABLE bool loadFixture(const QString& fileName);
+    Q_INVOKABLE bool loadTree(const QVariantMap& tree);
     QString currentPath() const;
     QString currentName() const;
     QString totalText() const;
@@ -45,7 +46,7 @@ signals:
 
 private:
     struct Entry { QString id,name,path; quint64 size=0; bool directory=false; int parent=-1; QVector<int> children; };
-    int appendNode(const QJsonObject& json, int parent, const QString& path);
+    int appendNode(const QVariantMap& node, int parent, const QString& path);
     int indexForId(const QString& id) const;
     int currentIndex() const { return m_current; }
     void resetAt(int index);

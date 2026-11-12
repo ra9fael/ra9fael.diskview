@@ -6,7 +6,7 @@
 
 - 阶段 0：隔离目录与构建决策记录已建立。
 - 阶段 1：独立启动的 wrapper（`diskview-qml.exe`）已完成，可脱离 WinShun 宿主单独运行、自检与截图。
-- 阶段 2：固定 JSON 快照桥接已通；真实扫描器接入待实施。
+- 阶段 2：真实扫描已接入（复用分支根部的 `scan.h`），固定快照仍作为默认数据源。
 - 阶段 3：虚拟化列表待实施。
 - 阶段 4：Scene Graph 方块图与圆盘图待实施（当前用 `QQuickPaintedItem` 绘制）。
 
@@ -45,6 +45,7 @@ wrapper 的命令行：
 | --- | --- |
 | `--view-mode <0\|1>` | 0 = 方块图（treemap），1 = 圆盘图（sunburst） |
 | `--fixture <路径>` | 覆盖默认快照 `:/fixtures/disk-tree.json` |
+| `--scan <路径>` | 启动即扫描该目录，用真实扫描结果替换快照 |
 | `--qml-dir <目录>` | 加载目录里的 `Main.qml`，用于原型试验 |
 | `--screenshot <路径>` | 延时后抓图并退出 |
 | `--delay <毫秒>` | 抓图前的等待时间，默认 1200 |
@@ -52,6 +53,14 @@ wrapper 的命令行：
 | `--help` | 用法 |
 
 自检报告形如 `0<TAB>8<TAB>regions<TAB>transform<TAB>navigate<TAB>return<TAB>PASS`，末列 `PASS` 表示全部通过。
+
+## 真实扫描
+
+`ScanService` 复用分支根部的 `scan.h`（连同 `tree.h` 与 SDK 头 `winshun.h`），在工作线程上跑 `diskview::scanPath`，把结果转成与快照同形的树交给 `DiskViewModel::loadTree`。窗口顶栏有路径框、扫描与取消按钮，底栏显示文件数、目录数与耗时。
+
+- 扫描不跟随符号链接/junction，不打开文件内容，云端占位文件不会被下载。
+- 扫描与界面解耦：进度、取消和最终结果都通过队列回到 GUI 线程。
+- 命令行 `--scan <路径>` 走的是同一条路径，`--self-test` 会额外验证扫描结果能进模型、能命中、能进目录再退回。
 
 ## 两个环境坑
 

@@ -15,9 +15,15 @@ bool DiskViewModel::loadFixture(const QString& fileName)
     if (!file.open(QIODevice::ReadOnly)) return false;
     const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
     if (!doc.isObject()) return false;
+    return loadTree(doc.object().toVariantMap());
+}
+
+bool DiskViewModel::loadTree(const QVariantMap& tree)
+{
+    if (tree.isEmpty()) return false;
     beginResetModel();
     m_nodes.clear(); m_visible.clear(); m_history.clear(); m_selectedId.clear();
-    appendNode(doc.object(), -1, {});
+    appendNode(tree, -1, {});
     m_current = 0;
     m_history.push_back(m_current);
     const auto root = m_nodes[0];
@@ -28,16 +34,16 @@ bool DiskViewModel::loadFixture(const QString& fileName)
     return true;
 }
 
-int DiskViewModel::appendNode(const QJsonObject& json, int parent, const QString& path)
+int DiskViewModel::appendNode(const QVariantMap& node, int parent, const QString& path)
 {
     Entry e;
-    e.name=json.value("name").toString(); e.size=static_cast<quint64>(json.value("size").toDouble());
-    e.directory=json.value("dir").toBool(); e.parent=parent;
+    e.name=node.value("name").toString(); e.size=static_cast<quint64>(node.value("size").toDouble());
+    e.directory=node.value("dir").toBool(); e.parent=parent;
     e.path=path.isEmpty()?e.name:path+"\\"+e.name;
     e.id=QString::number(m_nodes.size()+1);
     const int index=m_nodes.size();m_nodes.push_back(e);
     if(parent>=0)m_nodes[parent].children.push_back(index);
-    for(const auto& child:json.value("children").toArray()) if(child.isObject()) appendNode(child.toObject(),index,e.path);
+    for(const auto& child:node.value("children").toList()) if(child.canConvert<QVariantMap>()) appendNode(child.toMap(),index,e.path);
     return index;
 }
 

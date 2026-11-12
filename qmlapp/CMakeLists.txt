@@ -10,6 +10,7 @@ qt_standard_project_setup(REQUIRES 6.12)
 qt_add_executable(diskview-qml
     src/main.cpp
     src/QmlHost.cpp src/QmlHost.h
+    src/ScanService.cpp src/ScanService.h
     src/ChartItem.cpp src/ChartItem.h
     src/DiskViewModel.cpp src/DiskViewModel.h)
 qt_add_qml_module(diskview-qml
@@ -22,8 +23,9 @@ qt_add_resources(diskview-qml "diskview_qml_fixture"
     FILES fixtures/disk-tree.json)
 target_link_libraries(diskview-qml PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
 # The generated type registration includes the QML_ELEMENT headers by their
-# bare name, so their folder has to be on the include path.
-target_include_directories(diskview-qml PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# bare name, so their folder has to be on the include path. The branch root
+# holds scan.h and tree.h, which the scanner reuses.
+target_include_directories(diskview-qml PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_compile_definitions(diskview-qml PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 if(MSVC)
     target_compile_options(diskview-qml PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus)

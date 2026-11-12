@@ -20,8 +20,15 @@ $deploy = Join-Path $QtPrefix 'bin\windeployqt.exe'
 if (-not (Test-Path $deploy)) { throw "Missing windeployqt: $deploy" }
 
 & $deploy --qmldir (Join-Path $qmlApp 'qml') --dir $OutputDir --plugindir $plugins --qml-deploy-dir $qml `
-  --no-translations --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw --force $exe
+  --no-translations --no-compiler-runtime --no-opengl-sw --force $exe
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
+
+# The Direct3D 11 backend compiles its shaders through d3dcompiler_47.dll,
+# which is not part of Windows and therefore has to travel with the app.
+$d3dCompiler = Join-Path $QtPrefix 'bin\d3dcompiler_47.dll'
+if (Test-Path $d3dCompiler) {
+  Copy-Item $d3dCompiler $OutputDir -Force
+}
 
 # windeployqt only ships the platform plugin of the host it runs on. The
 # offscreen plugin is what the headless checks use.

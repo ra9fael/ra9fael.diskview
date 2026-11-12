@@ -51,3 +51,29 @@ foreach ($mode in 0,1) {
   if ($item.Length -lt 20000) { throw "Screenshot seems blank: $name ($($item.Length) bytes)" }
   "PASS $name ($($item.Length) bytes), self-test: $($report.Trim())"
 }
+
+# A real scan of a small tree, driven through the same scanner the window
+# uses: this is the path that has to work before the host plugin is involved.
+# The tree is written out first, so it has known directories to enter.
+$scanTarget = Join-Path $build 'scan-fixture'
+Remove-Item $scanTarget -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path (Join-Path $scanTarget 'alpha\beta'), (Join-Path $scanTarget 'alpha\gamma') | Out-Null
+Set-Content -Path (Join-Path $scanTarget 'alpha\beta\one.txt') -Value ('x' * 4096) -Encoding ascii
+Set-Content -Path (Join-Path $scanTarget 'alpha\gamma\two.bin') -Value ('y' * 16384) -Encoding ascii
+Set-Content -Path (Join-Path $scanTarget 'delta.txt') -Value ('z' * 2048) -Encoding ascii
+$scanImage = Join-Path $build 'qml-scan-real.png'
+Remove-Item $scanImage -ErrorAction SilentlyContinue
+$output = & $exe --scan $scanTarget --view-mode 0 --screenshot $scanImage --self-test 2>&1
+$exitCode = $LASTEXITCODE
+$text = ($output | Out-String)
+if ($exitCode -ne 0) { throw "Launcher failed on the real scan: $text" }
+$errors = $text -split "`r?`n" | Where-Object { $_ -match 'failed to load|TypeError|ReferenceError|is not defined|QSG.*error' }
+if ($errors) { throw "Runtime error on the real scan: $($errors -join '; ')" }
+$report = ($text -split "`r?`n" | Where-Object { $_ -match "`t" -and $_ -match '(PASS|FAIL)$' }) | Select-Object -First 1
+if (-not $report) { throw "No self-test report on the real scan: $text" }
+$fields = $report -split "`t"
+if ($fields.Count -ne 7 -or $fields[6] -ne 'PASS') { throw "Self-test failed on the real scan: $report" }
+if (-not (Test-Path $scanImage)) { throw "Missing screenshot $scanImage" }
+$item = Get-Item $scanImage
+if ($item.Length -lt 20000) { throw "Scan screenshot seems blank: $($item.Length) bytes" }
+"PASS qml-scan-real.png ($($item.Length) bytes), self-test: $($report.Trim())"

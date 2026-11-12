@@ -18,6 +18,11 @@ ApplicationWindow {
         diskModel.loadFixture(fixtureSource)
     }
 
+    Connections {
+        target: scanService
+        function onFinished(tree) { diskModel.loadTree(tree) }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -28,11 +33,27 @@ ApplicationWindow {
             color: "#ffffff"
             border.color: "#dce2e8"
             RowLayout {
-                anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
+                anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
                 Label { text: "Disk View"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#202b3c" }
                 Label { text: "QML 技术样机"; font.pixelSize: 12; color: "#657386" }
                 Item { Layout.fillWidth: true }
-                Label { text: "FIXTURE · 不扫描磁盘"; font.pixelSize: 11; color: "#a76414" }
+                Label { text: scanService.state === "done" ? "真实扫描" : "固定快照"; font.pixelSize: 11; color: scanService.state === "done" ? "#168c84" : "#a76414" }
+                TextField {
+                    id: pathField
+                    Layout.preferredWidth: 260
+                    Layout.maximumWidth: 300
+                    text: initialScanPath
+                    placeholderText: "扫描路径，例如 D:\\"
+                    selectByMouse: true
+                }
+                Button {
+                    text: "扫描"
+                    Layout.minimumWidth: 64
+                    enabled: pathField.text.trim().length > 0 && scanService.state !== "scanning"
+                    onClicked: scanService.start(pathField.text.trim())
+                }
+                Button { text: "取消"; Layout.minimumWidth: 64; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
+                BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 16; implicitHeight: 16 }
             }
         }
 
@@ -102,7 +123,7 @@ ApplicationWindow {
                         }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#e5eaf0" }
-                    Label { Layout.fillWidth: true; Layout.preferredHeight: 36; leftPadding: 12; verticalAlignment: Text.AlignVCenter; text: "C++ 快照模型 · ListView 虚拟化 · 真实扫描尚未接入"; font.pixelSize: 11; color: "#66758a" }
+                    Label { Layout.fillWidth: true; Layout.preferredHeight: 36; leftPadding: 12; verticalAlignment: Text.AlignVCenter; text: "C++ 模型 · ListView 虚拟化 · 真实扫描已接入"; font.pixelSize: 11; color: "#66758a" }
                 }
             }
         }
@@ -112,6 +133,7 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
                 Label { text: diskModel.currentName; font.weight: Font.DemiBold; color: "#202b3c" }
                 Label { Layout.fillWidth: true; text: diskModel.currentPath; elide: Text.ElideMiddle; color: "#56657b"; font.pixelSize: 12 }
+                Label { text: scanService.statusText; color: "#56657b"; font.pixelSize: 12 }
                 Label { text: "选中："+(diskModel.selectedId.length?diskModel.selectedId:"无"); color: "#56657b"; font.pixelSize: 12 }
             }
         }
