@@ -16,6 +16,7 @@ class ChartItem : public QQuickPaintedItem {
     Q_PROPERTY(QPointF pan READ pan WRITE setPan NOTIFY panChanged)
     Q_PROPERTY(QString centerLabel READ centerLabel WRITE setCenterLabel NOTIFY centerLabelChanged)
     Q_PROPERTY(int depth READ depth WRITE setDepth NOTIFY depthChanged)
+    Q_PROPERTY(QString highlightExtension READ highlightExtension WRITE setHighlightExtension NOTIFY highlightChanged)
     Q_PROPERTY(QString hoverId READ hoverId NOTIFY hoverChanged)
     Q_PROPERTY(QPointF hoverPosition READ hoverPosition NOTIFY hoverChanged)
 
@@ -39,6 +40,10 @@ public:
     // which is what makes them clickable at all.
     int depth() const { return m_depth; }
     void setDepth(int depth);
+    // The extension the legend picked. Every other file is dimmed, so one
+    // colour can be followed across the whole chart.
+    QString highlightExtension() const { return m_highlightExtension; }
+    void setHighlightExtension(const QString& extension);
     QString hoverId() const { return m_hoverId; }
     QPointF hoverPosition() const { return m_hoverPosition; }
     // The name, path, size and kind of the node a region belongs to.
@@ -65,6 +70,7 @@ signals:
     void hovered(const QString& id);
     void hoverChanged();
     void depthChanged();
+    void highlightChanged();
     // A right click on a region, in the item's own coordinates.
     void contextRequested(const QString& id, qreal x, qreal y);
     void centerActivated();
@@ -92,6 +98,9 @@ private:
     };
     void rebuildGeometry();
     QString hitTest(const QPointF& position) const;
+    // The fill of a tile or slice: folders are neutral, files take the colour
+    // of their extension.
+    QColor fillFor(const diskview::Node& node, bool* dimmed = nullptr) const;
 
     QVariantMap m_treeData;
     QVector<HitRegion> m_regions;
@@ -102,6 +111,7 @@ private:
     std::vector<diskview::Slice> m_slices;
     int m_viewMode = 0;
     int m_depth = 1;
+    QString m_highlightExtension;
     QString m_selectedId;
     QString m_centerLabel;
     qreal m_zoom = 1.0;

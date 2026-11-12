@@ -41,6 +41,8 @@ QVariantMap toVariantTree(const diskview::Node& node)
     return QVariantMap {
         {"name", QString::fromStdWString(node.name)},
         {"size", static_cast<double>(node.logical)},
+        // The space the file system really spends on it.
+        {"alloc", static_cast<double>(node.allocApprox)},
         {"dir", node.dir},
         {"children", children},
     };

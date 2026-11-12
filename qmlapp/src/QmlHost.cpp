@@ -180,20 +180,40 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
     model->toggleSort(DiskViewModel::SortByName);
     model->toggleSort(DiskViewModel::SortBySize);
 
-    // The filter looks at the whole path.
+    // The filter looks at the whole path; every row that survives has to
+    // contain it.
     const int allRows = model->rowCount();
     const QString sample = allRows > 0 ? value(0, DiskViewModel::NameRole).toString() : QString();
     model->setFilter(sample);
-    const bool filterWorks = !sample.isEmpty() && model->rowCount() >= 1 && model->rowCount() <= allRows;
+    bool filterWorks = !sample.isEmpty() && model->rowCount() >= 1;
+    for (int row = 0; row < model->rowCount() && filterWorks; ++row) {
+        if (!value(row, DiskViewModel::PathRole).toString().contains(sample, Qt::CaseInsensitive)) {
+            filterWorks = false;
+        }
+    }
     model->setFilter(QString());
 
-    // The largest mode lists the files of the subtree.
-    model->setListMode(DiskViewModel::ListLargest);
-    bool largest = model->rowCount() > 0;
-    for (int row = 0; row < model->rowCount() && largest; ++row) {
-        if (value(row, DiskViewModel::DirectoryRole).toBool()) largest = false;
+    // The file view lists the files of the subtree, nothing else.
+    model->setViewMode(DiskViewModel::FileView);
+    bool filesOnly = model->rowCount() > 0;
+    for (int row = 0; row < model->rowCount() && filesOnly; ++row) {
+        if (value(row, DiskViewModel::DirectoryRole).toBool()) filesOnly = false;
     }
-    model->setListMode(DiskViewModel::ListCurrent);
+    model->setViewMode(DiskViewModel::TreeView);
+
+    // Expanding a folder adds its children, collapsing takes them away.
+    bool expand = false;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (!value(row, DiskViewModel::DirectoryRole).toBool()) continue;
+        if (!value(row, DiskViewModel::HasChildrenRole).toBool()) continue;
+        const QString id = value(row, DiskViewModel::IdRole).toString();
+        const int before = model->rowCount();
+        model->toggleExpanded(id);
+        const int after = model->rowCount();
+        model->toggleExpanded(id);
+        expand = after > before && model->rowCount() == before;
+        break;
+    }
 
     // The history goes back and forward again.
     bool history = false;
@@ -213,10 +233,11 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
     if (sizeSorted) passed << QStringLiteral("sort");
     if (nameSorted) passed << QStringLiteral("name");
     if (filterWorks) passed << QStringLiteral("filter");
-    if (largest) passed << QStringLiteral("largest");
+    if (filesOnly) passed << QStringLiteral("files");
+    if (expand) passed << QStringLiteral("expand");
     if (history) passed << QStringLiteral("history");
     *detail = passed.join(QLatin1Char(','));
-    return passed.size() == 5;
+    return passed.size() == 6;
 }
 
 bool QmlHost::runSelfTest(QString* report)

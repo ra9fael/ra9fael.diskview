@@ -10,21 +10,11 @@
 #include <algorithm>
 #include <cmath>
 
+#include "ExtensionColors.h"
+
 namespace {
-const QColor colors[] = {QColor("#168c84"), QColor("#3979bd"), QColor("#d08b35"), QColor("#8d69b0"),
-                         QColor("#4f9a59"), QColor("#bc5c62"), QColor("#4e9ab2"), QColor("#a58b45")};
-QColor colorFor(int index, bool directory)
-{
-    QColor c = colors[index % std::size(colors)];
-    if (!directory) c = c.lighter(138);
-    return c;
-}
-// Black or white, whichever reads better on the fill.
-QColor textOn(const QColor& fill)
-{
-    const double luminance = 0.2126 * fill.redF() + 0.7152 * fill.greenF() + 0.0722 * fill.blueF();
-    return luminance > 0.55 ? QColor("#1b2b3a") : QColor("#ffffff");
-}
+// The colour a file gets when the legend has dimmed everything else.
+const QColor kDimmedFill("#dfe4ea");
 }
 
 ChartItem::ChartItem(QQuickItem* parent) : QQuickPaintedItem(parent)
@@ -107,6 +97,23 @@ void ChartItem::setDepth(int depth)
     m_depth=depth;
     emit depthChanged();
     rebuildGeometry();
+}
+void ChartItem::setHighlightExtension(const QString& extension)
+{
+    if(m_highlightExtension==extension)return;
+    m_highlightExtension=extension;
+    emit highlightChanged();
+    update();
+}
+
+QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
+{
+    const bool hidden=!m_highlightExtension.isEmpty()&&!node.dir
+        &&diskviewqml::extensionOf(QString::fromStdWString(node.name))!=m_highlightExtension;
+    if(dimmed)*dimmed=hidden;
+    if(hidden)return kDimmedFill;
+    if(node.dir)return QColor("#8f9aa8");
+    return diskviewqml::extensionColor(diskviewqml::extensionOf(QString::fromStdWString(node.name)));
 }
 void ChartItem::geometryChange(const QRectF& now, const QRectF& before)
 {
@@ -287,7 +294,6 @@ void ChartItem::paint(QPainter* painter)
     const qreal inset=8; const QRectF area(inset,inset,width()-2*inset,height()-2*inset);
     const QPointF origin=area.topLeft();
     const QPointF center=area.center();
-    const auto colorForDepth=[&](bool dir,int depth){QColor c=colors[depth%std::size(colors)];return dir?c:c.lighter(138);};
     painter->save();
     const QPointF transformCenter(width()/2,height()/2);
     painter->translate(m_pan);
@@ -299,7 +305,7 @@ void ChartItem::paint(QPainter* painter)
         for(const auto& tile:m_tiles){
             const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
-            QColor fill=colorForDepth(tile.node->dir,tile.depth);
+            QColor fill=fillFor(*tile.node);
             const bool lit=id==m_selectedId||id==m_hoverId;
             if(lit)fill=fill.darker(112);
             painter->fillRect(rect,fill);
@@ -317,7 +323,7 @@ void ChartItem::paint(QPainter* painter)
             path.lineTo(point(slice.r0,slice.a1));
             for(int i=segments-1;i>=0;--i){const qreal a=slice.a0+span*static_cast<qreal>(i)/segments;path.lineTo(point(slice.r0,a));}
             path.closeSubpath();
-            painter->fillPath(path,colorForDepth(slice.dir,slice.depth));
+            painter->fillPath(path,fillFor(*slice.node));
             if(id==m_selectedId||id==m_hoverId){
                 painter->setPen(QPen(QColor("#1b2b3a"),id==m_selectedId?2:1));
                 painter->setBrush(Qt::NoBrush);
@@ -348,14 +354,17 @@ void ChartItem::paint(QPainter* painter)
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
             if(screen.width()<48||screen.height()<14)continue;
-            const QColor fill=colorForDepth(tile.node->dir,tile.depth);
-            painter->setPen(textOn(fill));
+            bool dimmed=false;
+            const QColor fill=fillFor(*tile.node,&dimmed);
+            QColor ink=diskviewqml::textOnColor(fill);
+            if(dimmed)ink.setAlphaF(0.45);
+            painter->setPen(ink);
             const QRectF inner=screen.adjusted(5,2,-4,-2);
             painter->drawText(inner,Qt::AlignLeft|Qt::AlignTop,
                               metrics.elidedText(QString::fromStdWString(tile.node->name),Qt::ElideRight,inner.width()));
-            if(screen.height()>=32){
+            if(screen.height()>=32&&!dimmed){
                 QRectF sub=inner;sub.setTop(inner.top()+13);
-                QColor subColor=textOn(fill);subColor.setAlphaF(0.75);
+                QColor subColor=ink;subColor.setAlphaF(0.75);
                 painter->setPen(subColor);
                 painter->drawText(sub,Qt::AlignLeft|Qt::AlignTop,
                                   QString::fromStdString(diskview::formatBytes(tile.node->logical,true)));
@@ -373,8 +382,11 @@ void ChartItem::paint(QPainter* painter)
             const QPointF point=toScreen(center+QPointF(std::cos(angle)*radius,std::sin(angle)*radius));
             const qreal half=std::min<qreal>(50,thickness*0.42);
             const QRectF box(point.x()-half,point.y()-10,half*2,20);
-            const QColor fill=colorForDepth(slice.dir,slice.depth);
-            painter->setPen(textOn(fill));
+            bool dimmed=false;
+            const QColor fill=fillFor(*slice.node,&dimmed);
+            QColor ink=diskviewqml::textOnColor(fill);
+            if(dimmed)ink.setAlphaF(0.45);
+            painter->setPen(ink);
             const QString text=slice.dir?QString::fromStdWString(slice.node->name)
                                         :QString::fromStdString(diskview::formatBytes(slice.node->logical,true));
             painter->drawText(box,Qt::AlignCenter,metrics.elidedText(text,Qt::ElideRight,box.width()));

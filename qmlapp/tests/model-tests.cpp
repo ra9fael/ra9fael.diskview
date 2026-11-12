@@ -87,33 +87,69 @@ void testFilter()
     model.loadTree(tree());
     model.setFilter(QStringLiteral("mike"));
     check(model.rowCount() == 1, "the filter narrows the list");
-    model.setFilter(QStringLiteral("ZULU"));
-    check(model.rowCount() == 1, "the filter ignores the case");
+    // The filter looks at the whole path, so a folder that matches brings the
+    // rows under it into sight as well.
+    model.setFilter(QStringLiteral("BIG.BIN"));
+    check(model.rowCount() == 2, "the filter ignores the case and shows the folder above the match");
     model.setFilter(QStringLiteral("nothing"));
     check(model.rowCount() == 0, "a filter that matches nothing empties the list");
     model.setFilter(QString());
     check(model.rowCount() == 3, "clearing the filter brings the rows back");
-    // The filter looks at the whole path, so a folder can be found by a part
-    // of the path above it.
+    // The filter does not leave folders open behind it.
+    check(!model.isExpanded(QStringLiteral("2")), "the filter did not open the folder for good");
     model.setFilter(QStringLiteral("D:\\"));
-    check(model.rowCount() == 3, "the filter matches the whole path");
+    check(model.rowCount() == 6, "the filter matches the whole path");
 }
 
-void testLargest()
+void testFileView()
 {
     DiskViewModel model;
     model.loadTree(tree());
-    model.setListMode(DiskViewModel::ListLargest);
-    check(model.rowCount() == 4, "the largest mode lists the files of the subtree");
+    model.setViewMode(DiskViewModel::FileView);
+    check(model.rowCount() == 4, "the file view lists the files of the subtree");
     check(namesOf(model) == QStringList({"big.bin", "mid.dat", "mike.bin", "tiny.txt"}),
-          "the largest mode starts with the biggest file");
+          "the file view starts with the biggest file");
     check(!model.data(model.index(0, 0), DiskViewModel::DirectoryRole).toBool(),
-          "the largest mode lists files, not folders");
-    // Inside a folder the ranking only covers that folder.
+          "the file view lists files, not folders");
+    // Inside a folder the list only covers that folder.
     model.navigate(QStringLiteral("2"));
-    model.setListMode(DiskViewModel::ListLargest);
+    model.setViewMode(DiskViewModel::FileView);
     check(namesOf(model) == QStringList({"big.bin", "tiny.txt"}),
-          "the ranking follows the folder the list is in");
+          "the file view follows the folder it is in");
+}
+
+void testExpanding()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    // The tree starts closed: only the root's children are rows.
+    check(model.rowCount() == 3, "the tree starts with the top level only");
+    check(!model.data(model.index(0, 0), DiskViewModel::ExpandedRole).toBool(), "the first folder is closed");
+    model.toggleExpanded(QStringLiteral("2"));
+    check(model.isExpanded(QStringLiteral("2")), "the folder opens");
+    check(model.rowCount() == 5, "opening a folder adds its two files");
+    const int depth = model.data(model.index(1, 0), DiskViewModel::DepthRole).toInt();
+    check(depth == 1, "the children of the open folder are one level deeper");
+    model.toggleExpanded(QStringLiteral("2"));
+    check(model.rowCount() == 3, "closing the folder takes them away again");
+    // The filter opens the folders on the way to a match without touching the
+    // folders the user opened.
+    model.setFilter(QStringLiteral("tiny"));
+    check(model.rowCount() == 2, "the filter shows the folder and the file it found");
+    check(!model.isExpanded(QStringLiteral("2")), "the filter leaves the folder closed in the model");
+}
+
+void testExtensions()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    const QVariantList exts = model.extensions();
+    check(exts.size() == 3, "one row per extension");
+    const QVariantMap first = exts.first().toMap();
+    check(first.value("ext").toString() == QStringLiteral(".bin"), "the biggest extension comes first");
+    check(first.value("files").toInt() == 2, "the extension counts its files");
+    check(!first.value("color").toString().isEmpty(), "every extension has a colour");
+    check(first.value("label").toString().length() > 0, "every extension has a name");
 }
 
 void testHistory()
@@ -153,7 +189,9 @@ int main()
     testDefaultOrder();
     testSorting();
     testFilter();
-    testLargest();
+    testFileView();
+    testExpanding();
+    testExtensions();
     testHistory();
     testFormatting();
     if (g_failures == 0) {

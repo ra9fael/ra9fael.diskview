@@ -89,7 +89,8 @@ endforeach()
 # The list panel of the tree: the order of the rows, the filter, the ranking
 # of the largest files and the history of the visited folders.
 add_executable(diskview-model-tests tests/model-tests.cpp src/DiskViewModel.cpp src/DiskViewModel.h)
-target_link_libraries(diskview-model-tests PRIVATE Qt6::Core)
+# The extension colours are QColor values, so the test needs Gui as well.
+target_link_libraries(diskview-model-tests PRIVATE Qt6::Core Qt6::Gui)
 target_include_directories(diskview-model-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(diskview-model-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 if(MSVC)
