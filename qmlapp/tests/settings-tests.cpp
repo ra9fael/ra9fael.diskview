@@ -53,6 +53,7 @@ private:
 void testDefaults()
 {
     ScanSettings settings;
+    check(settings.scanMode() == 0, "a fresh settings object keeps the automatic scan mode");
     check(settings.workers() == 0, "a fresh settings object keeps the automatic worker count");
     check(settings.media() == 0, "a fresh settings object keeps the automatic media");
     check(settings.previewIntervalMs() == 1500, "a fresh settings object keeps the 1.5 s preview interval");
@@ -62,6 +63,12 @@ void testDefaults()
 void testClamping()
 {
     ScanSettings settings;
+    settings.setScanMode(9);
+    check(settings.scanMode() == 2, "the scan mode is clamped to the ordinary scan");
+    settings.setScanMode(-1);
+    check(settings.scanMode() == 0, "the scan mode is clamped to automatic");
+    settings.setScanMode(1);
+    check(settings.scanMode() == 1, "the fast scan mode is kept");
     settings.setWorkers(64);
     settings.setMedia(-3);
     settings.setPreviewIntervalMs(7);
@@ -102,6 +109,7 @@ void testRoundTrip()
     ScopedDataDir scoped(dir.path());
 
     ScanSettings saved;
+    saved.setScanMode(1);
     saved.setWorkers(4);
     saved.setMedia(1);
     saved.setPreviewIntervalMs(5000);
@@ -113,6 +121,7 @@ void testRoundTrip()
 
     ScanSettings back;
     check(back.load(), "the settings are read back");
+    check(back.scanMode() == 1, "the scan mode survives the round trip");
     check(back.workers() == 4, "the worker count survives the round trip");
     check(back.media() == 1, "the media survives the round trip");
     check(back.previewIntervalMs() == 5000, "the preview interval survives the round trip");
@@ -126,10 +135,11 @@ void testRoundTrip()
         if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             check(false, "the hand-edited file can be written");
         }
-        out.write(R"({"path":"C:\\","workers":64,"media":-3,"previewIntervalMs":7,"excludedPaths":["C:\\x",42,""]})");
+        out.write(R"({"path":"C:\\","scanMode":99,"workers":64,"media":-3,"previewIntervalMs":7,"excludedPaths":["C:\\x",42,""]})");
     }
     ScanSettings clamped;
     check(clamped.load(), "a hand-edited file is read");
+    check(clamped.scanMode() == 2, "the hand-edited scan mode is clamped");
     check(clamped.workers() == 8, "the hand-edited worker count is clamped");
     check(clamped.media() == 0, "the hand-edited media is clamped");
     check(clamped.previewIntervalMs() == 1500, "the hand-edited preview interval falls back");

@@ -9,6 +9,7 @@ $vcvars = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Bu
 $exe = Join-Path $deploy 'diskview-qml.exe'
 $geometryExe = Join-Path $build 'tests\diskview-chart-geometry-tests.exe'
 $settingsExe = Join-Path $build 'tests\diskview-settings-tests.exe'
+$scanExe = Join-Path $build 'tests\diskview-scan-tests.exe'
 
 node (Join-Path $PSScriptRoot 'check-fixture.cjs')
 if ($LASTEXITCODE -ne 0) { throw 'Fixture totals are inconsistent' }
@@ -24,19 +25,24 @@ if (-not (Test-Path $geometryExe)) { throw "Missing chart geometry tests: $geome
 & $geometryExe
 if ($LASTEXITCODE -ne 0) { throw 'Chart geometry unit tests failed' }
 
-# The settings test writes into the build directory, not into the system temp
-# folder, and needs Qt on the PATH.
+# The tests write into the build directory, not into the system temp folder,
+# and need Qt on the PATH.
 if (-not (Test-Path $settingsExe)) { throw "Missing settings tests: $settingsExe" }
+if (-not (Test-Path $scanExe)) { throw "Missing scan tests: $scanExe" }
 $savedPath = $env:PATH
 $env:PATH = "$sdk\bin;$env:PATH"
 Push-Location $build
 try {
   & $settingsExe
+  $settingsExit = $LASTEXITCODE
+  & $scanExe
+  $scanExit = $LASTEXITCODE
 } finally {
   Pop-Location
   $env:PATH = $savedPath
 }
-if ($LASTEXITCODE -ne 0) { throw 'Scan settings unit tests failed' }
+if ($settingsExit -ne 0) { throw 'Scan settings unit tests failed' }
+if ($scanExit -ne 0) { throw 'Scan behaviour unit tests failed' }
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $qmlApp 'tools\deploy-wrapper.ps1') -QtPrefix $sdk -BuildDir $build -OutputDir $deploy
 if ($LASTEXITCODE -ne 0) { throw 'Deployment of the standalone launcher failed' }
@@ -47,6 +53,13 @@ if (-not (Test-Path $exe)) { throw "Missing launcher: $exe" }
 $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
 $env:QT_QPA_PLATFORM = 'offscreen'
 $env:QT_QUICK_BACKEND = 'software'
+# The scans run against a settings file of their own: the checks must not read
+# the settings of the user, and they must never ask for administrator rights.
+$scanData = Join-Path $build 'check-data'
+Remove-Item $scanData -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $scanData | Out-Null
+'{ "scanMode": 2 }' | Set-Content -Path (Join-Path $scanData 'diskview-qml.json') -Encoding utf8
+$env:WS_DATA_DIR = $scanData
 foreach ($mode in 0,1) {
   $name = if ($mode -eq 0) { 'qml-treemap-native.png' } else { 'qml-sunburst-painted.png' }
   $image = Join-Path $build $name
@@ -91,4 +104,29 @@ if ($fields.Count -ne 7 -or $fields[6] -ne 'PASS') { throw "Self-test failed on 
 if (-not (Test-Path $scanImage)) { throw "Missing screenshot $scanImage" }
 $item = Get-Item $scanImage
 if ($item.Length -lt 20000) { throw "Scan screenshot seems blank: $($item.Length) bytes" }
+# The scan that ran was held once and then let go: the self-test says so.
+if ($text -notmatch 'pause=verified') { throw "The scan was not held and resumed: $text" }
 "PASS qml-scan-real.png ($($item.Length) bytes), self-test: $($report.Trim())"
+
+# The held state: the scan waits until it is let go, and nothing is read while
+# it waits.
+$pauseImage = Join-Path $build 'qml-scan-paused.png'
+Remove-Item $pauseImage -ErrorAction SilentlyContinue
+$output = & $exe --scan $scanTarget --pause --screenshot $pauseImage --delay 1500 2>&1
+$exitCode = $LASTEXITCODE
+$text = ($output | Out-String)
+if ($exitCode -ne 0) { throw "Launcher failed on the held scan: $text" }
+$status = ($text -split "`r?`n" | Where-Object { $_ -match '^scan\s' }) | Select-Object -First 1
+if (-not $status) { throw "No scan status line on the held scan: $text" }
+if ($status -notmatch 'state=paused') { throw "The scan was not held: $status" }
+if (-not (Test-Path $pauseImage)) { throw "Missing screenshot $pauseImage" }
+"PASS qml-scan-paused.png, status: $($status.Trim())"
+
+# The elevated helper is this same executable: with the scan session
+# arguments it does the helper's work instead of opening a window.
+$output = & $exe --scan-helper 'Z:' '\\.\pipe\DiskView.Scan.not-a-session' 1 2>&1
+$exitCode = $LASTEXITCODE
+$text = ($output | Out-String)
+if ($text -match 'Usage:') { throw "The helper dispatch did not take over: $text" }
+if ($exitCode -ne 2) { throw "The helper dispatch returned $exitCode instead of 2" }
+"PASS scan-helper dispatch"

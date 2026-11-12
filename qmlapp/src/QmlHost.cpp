@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QTimer>
 #include <QUrl>
 
 namespace {
@@ -54,6 +55,11 @@ bool QmlHost::load(QString* error)
                      : QStringLiteral("Main.qml failed to load from %1").arg(m_options.qmlDir);
         return false;
     }
+    // The elevated helper asks for its authorization with our window as the
+    // parent, so the prompt belongs to the window the user is looking at.
+    if (auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0))) {
+        m_scanService->setOwnerWindow(window->winId());
+    }
     return true;
 }
 
@@ -65,11 +71,58 @@ bool QmlHost::startScan(const QString& path, QString* error)
     }
     connect(m_scanService, &ScanService::finished, this, [this] { emit scanFinished(); });
     connect(m_scanService, &ScanService::failed, this, [this](const QString& message) { emit scanFailed(message); });
+
+    if (m_options.pauseOnStart) {
+        if (!m_scanService->startPaused(path)) {
+            *error = QStringLiteral("a scan is already running");
+            return false;
+        }
+        return true;
+    }
+    if (m_options.selfTest) {
+        // The self-test starts the scan paused and lets it go again: a scan
+        // that is held must produce nothing, and it has to go on when it is
+        // resumed.
+        if (!m_scanService->startPaused(path)) {
+            *error = QStringLiteral("a scan is already running");
+            return false;
+        }
+        QTimer::singleShot(400, this, [this] {
+            auto* model = m_engine.rootObjects().isEmpty()
+                              ? nullptr
+                              : m_engine.rootObjects().value(0)->findChild<DiskViewModel*>(
+                                    QStringLiteral("diskModel"));
+            m_pauseVerified = m_scanService->paused() && (!model || model->rowCount() == 0);
+            m_scanService->resume();
+        });
+        return true;
+    }
     if (!m_scanService->start(path)) {
         *error = QStringLiteral("a scan is already running");
         return false;
     }
     return true;
+}
+
+QString QmlHost::scanStatusLine() const
+{
+    if (!m_scanService) {
+        return {};
+    }
+    const bool fast = m_scanService->fast();
+    QString line = QStringLiteral("scan\tstate=%1\tmode=%2\tworkers=%3\texcluded=%4\tpartials=%5\tfiles=%6\tdirs=%7\tskipped=%8")
+                       .arg(m_scanService->paused() ? QStringLiteral("paused") : m_scanService->state())
+                       .arg(fast ? QStringLiteral("fast") : QStringLiteral("ordinary"))
+                       .arg(m_scanService->scanWorkers())
+                       .arg(m_scanService->excludedItems())
+                       .arg(m_scanService->partialCount())
+                       .arg(m_scanService->fileCount())
+                       .arg(m_scanService->dirCount())
+                       .arg(m_scanService->skippedDirs());
+    if (!m_scanService->fallbackReason().isEmpty()) {
+        line += QStringLiteral("\tfallback=%1").arg(m_scanService->fallbackReason());
+    }
+    return line + QStringLiteral("\n");
 }
 
 bool QmlHost::runSelfTest(QString* report)
@@ -108,7 +161,10 @@ bool QmlHost::runSelfTest(QString* report)
             break;
         }
     }
-    const bool pass = !hit.isEmpty() && regions && transform && navigate && back;
+    // A scan that could be held and then let go is part of what the scan mode
+    // has to show.
+    const bool paused = m_options.scanPath.isEmpty() || m_pauseVerified;
+    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused;
 
     *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\n")
                   .arg(m_options.viewMode)
@@ -121,12 +177,14 @@ bool QmlHost::runSelfTest(QString* report)
     if (!m_options.scanPath.isEmpty() && m_scanService) {
         // What the scan made of the settings, and how much of it was published
         // before it was over.
-        *report += QStringLiteral("scan\tworkers=%1\texcluded=%2\tpartials=%3\tfiles=%4\tdirs=%5\n")
+        *report += QStringLiteral("scan\tworkers=%1\texcluded=%2\tpartials=%3\tfiles=%4\tdirs=%5\tskipped=%6\tpause=%7\n")
                       .arg(m_scanService->scanWorkers())
                       .arg(m_scanService->excludedItems())
                       .arg(m_scanService->partialCount())
                       .arg(m_scanService->fileCount())
-                      .arg(m_scanService->dirCount());
+                      .arg(m_scanService->dirCount())
+                      .arg(m_scanService->skippedDirs())
+                      .arg(m_pauseVerified ? QStringLiteral("verified") : QStringLiteral("bad"));
     }
     return pass;
 }
@@ -199,6 +257,8 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->selfTest = true;
         } else if (argument == QStringLiteral("--settings")) {
             options->openSettings = true;
+        } else if (argument == QStringLiteral("--pause")) {
+            options->pauseOnStart = true;
         } else {
             *error = QStringLiteral("unknown option %1").arg(argument);
             return false;
@@ -220,6 +280,7 @@ QString QmlHost::usage()
         "  --screenshot <png> save a window grab and exit\n"
         "  --delay <ms>       wait before the grab (default 1200)\n"
         "  --settings         open the scan settings dialog on startup\n"
+        "  --pause            start the scan and hold it there\n"
         "  --self-test        run the interaction checks and print the verdict\n"
         "  -h, --help         show this help\n");
 }

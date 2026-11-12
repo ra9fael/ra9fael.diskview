@@ -58,6 +58,16 @@ QString ScanSettings::filePath() const
     return settingsFilePath();
 }
 
+void ScanSettings::setScanMode(int mode)
+{
+    const int clamped = std::clamp(mode, 0, 2);
+    if (clamped == m_scanMode) {
+        return;
+    }
+    m_scanMode = clamped;
+    emit changed();
+}
+
 void ScanSettings::setWorkers(int workers)
 {
     const int clamped = static_cast<int>(snapWorkerLimit(workers));
@@ -147,6 +157,7 @@ bool ScanSettings::load()
     const QJsonObject object = document.object();
     m_lastPath = object.value(QStringLiteral("path")).toString();
     // Out-of-range values from a hand-edited file are clamped, not trusted.
+    m_scanMode = std::clamp(object.value(QStringLiteral("scanMode")).toInt(0), 0, 2);
     m_workers = static_cast<int>(snapWorkerLimit(object.value(QStringLiteral("workers")).toInt(0)));
     m_media = std::clamp(object.value(QStringLiteral("media")).toInt(0), 0, 3);
     const int interval = object.value(QStringLiteral("previewIntervalMs")).toInt(1500);
@@ -170,6 +181,7 @@ bool ScanSettings::save()
 {
     QJsonObject object;
     object.insert(QStringLiteral("path"), m_lastPath);
+    object.insert(QStringLiteral("scanMode"), m_scanMode);
     object.insert(QStringLiteral("workers"), m_workers);
     object.insert(QStringLiteral("media"), m_media);
     object.insert(QStringLiteral("previewIntervalMs"), m_previewIntervalMs);

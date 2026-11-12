@@ -23,6 +23,9 @@ public:
         // Opens the scan settings dialog right away, so it can be looked at
         // without a pointer.
         bool openSettings = false;
+        // Starts the scan and leaves it paused, so the held state can be
+        // looked at.
+        bool pauseOnStart = false;
     };
 
     explicit QmlHost(Options options, QObject* parent = nullptr);
@@ -33,6 +36,8 @@ public:
     bool saveScreenshot(const QString& path);
     // Opens the scan settings dialog of the window, if it has one.
     bool openSettingsDialog(QString* error);
+    // One line about the scan: what it is doing and what it found.
+    QString scanStatusLine() const;
 
     static bool parseArgs(const QStringList& arguments, Options* options, QString* error);
     static QString usage();
@@ -46,4 +51,7 @@ private:
     QQmlApplicationEngine m_engine;
     ScanService* m_scanService = nullptr;
     ScanSettings* m_scanSettings = nullptr;
+    // The pause held while the scan was waiting: the check is only true when
+    // the paused scan really produced nothing.
+    bool m_pauseVerified = false;
 };

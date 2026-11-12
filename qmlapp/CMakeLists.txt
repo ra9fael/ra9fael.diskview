@@ -13,16 +13,21 @@ qt_add_executable(diskview-qml
     src/ScanService.cpp src/ScanService.h
     src/ScanSettings.cpp src/ScanSettings.h
     src/ChartItem.cpp src/ChartItem.h
-    src/DiskViewModel.cpp src/DiskViewModel.h)
+    src/DiskViewModel.cpp src/DiskViewModel.h
+    # The elevated scan helper reads the NTFS MFT with this reader.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
-    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml)
+    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
     FILES fixtures/disk-tree.json)
 target_link_libraries(diskview-qml PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+# The scan helper needs the shell (to ask for authorization), the security
+# API (for the pipe's access control) and COM (for the session id).
+target_link_libraries(diskview-qml PRIVATE user32 shell32 advapi32 ole32 uuid)
 # The generated type registration includes the QML_ELEMENT headers by their
 # bare name, so their folder has to be on the include path. The branch root
 # holds scan.h and tree.h, which the scanner reuses.
@@ -66,8 +71,25 @@ foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set_target_properties(diskview-settings-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/tests")
 endforeach()
 
+# The scanner's contract with the caller: a held scan, the service on top of
+# it, and the directories the scan could not read.
+add_executable(diskview-scan-tests tests/scan-tests.cpp src/ScanService.cpp src/ScanSettings.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
+target_link_libraries(diskview-scan-tests PRIVATE Qt6::Core user32 shell32 advapi32 ole32 uuid)
+target_include_directories(diskview-scan-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_definitions(diskview-scan-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+if(MSVC)
+    set_target_properties(diskview-scan-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+set_target_properties(diskview-scan-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(diskview-scan-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/tests")
+endforeach()
+
 enable_testing()
 add_test(NAME diskview_chart_geometry COMMAND diskview-chart-geometry-tests)
 set_tests_properties(diskview_chart_geometry PROPERTIES TIMEOUT 30)
 add_test(NAME diskview_scan_settings COMMAND diskview-settings-tests)
 set_tests_properties(diskview_scan_settings PROPERTIES TIMEOUT 30)
+add_test(NAME diskview_scan_behaviour COMMAND diskview-scan-tests)
+set_tests_properties(diskview_scan_behaviour PROPERTIES TIMEOUT 60)

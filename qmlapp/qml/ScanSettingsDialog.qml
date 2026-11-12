@@ -11,12 +11,13 @@ Dialog {
     title: "扫描设置"
     modal: true
     width: 480
-    height: 440
+    height: 520
     anchors.centerIn: Overlay.overlay
 
     ListModel { id: draftExcluded }
 
     onOpened: {
+        modeBox.currentIndex = scanSettings.scanMode
         workersBox.currentIndex = scanSettings.workers === 0 ? 0 : [1, 2, 4, 8].indexOf(scanSettings.workers) + 1
         mediaBox.currentIndex = scanSettings.media
         previewBox.currentIndex = scanSettings.previewIntervalMs > 1500 ? 1 : 0
@@ -28,6 +29,7 @@ Dialog {
     }
     onAccepted: {
         const values = [0, 1, 2, 4, 8]
+        scanSettings.scanMode = modeBox.currentIndex
         scanSettings.workers = values[workersBox.currentIndex]
         scanSettings.media = mediaBox.currentIndex
         scanSettings.previewIntervalMs = previewBox.currentIndex === 1 ? 5000 : 1500
@@ -37,6 +39,11 @@ Dialog {
         }
         scanSettings.excludedPaths = paths
         scanSettings.save()
+        // The settings only mean something for the next scan, so the next scan
+        // is started right away when the user asked for it.
+        if (rescanCheck.checked && scanSettings.lastPath.length > 0) {
+            scanService.rescan()
+        }
     }
 
     standardButtons: Dialog.NoButton
@@ -65,6 +72,16 @@ Dialog {
             columns: 2
             columnSpacing: 12
             rowSpacing: 10
+
+            Label { text: "扫描方式"; color: "#243246" }
+            ComboBox {
+                id: modeBox
+                Layout.fillWidth: true
+                // The fast scan reads the NTFS MFT through a helper that asks
+                // for administrator rights; it only works on a fixed NTFS
+                // drive root.
+                model: ["自动", "快扫（MFT，需管理员）", "普通遍历"]
+            }
 
             Label { text: "普通扫描并发上限"; color: "#243246" }
             ComboBox {
@@ -145,6 +162,14 @@ Dialog {
                     excludedInput.text = ""
                 }
             }
+        }
+
+        CheckBox {
+            id: rescanCheck
+            Layout.fillWidth: true
+            visible: scanSettings.lastPath.length > 0
+            checked: true
+            text: "确定后立即重新扫描（" + scanSettings.lastPath + "）"
         }
 
         Label {

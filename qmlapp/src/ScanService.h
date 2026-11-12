@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
@@ -34,6 +35,21 @@ class ScanService : public QObject {
     // how many items the exclusion list kept out.
     Q_PROPERTY(int scanWorkers READ scanWorkers NOTIFY stateChanged)
     Q_PROPERTY(quint32 excludedItems READ excludedItems NOTIFY stateChanged)
+    // The scan is holding still: the workers wait until it is resumed.
+    Q_PROPERTY(bool paused READ paused NOTIFY stateChanged)
+    // The fast scan (the NTFS MFT through the elevated helper) was the one that
+    // produced the result.
+    Q_PROPERTY(bool fast READ fast NOTIFY stateChanged)
+    // Why the fast scan was not used, when it was asked for and could not run.
+    Q_PROPERTY(QString fallbackReason READ fallbackReason NOTIFY stateChanged)
+    // The directories the scan could not read, and the files whose size it
+    // could not determine. A scan that reports them is still usable.
+    Q_PROPERTY(int skippedDirs READ skippedDirs NOTIFY stateChanged)
+    Q_PROPERTY(int skippedLinks READ skippedLinks NOTIFY stateChanged)
+    Q_PROPERTY(int unknownSizes READ unknownSizes NOTIFY stateChanged)
+    Q_PROPERTY(int orphanRecords READ orphanRecords NOTIFY stateChanged)
+    // The same, as a list: {path, code, message} per entry.
+    Q_PROPERTY(QVariantList issues READ issues NOTIFY stateChanged)
 
 public:
     explicit ScanService(QObject* parent = nullptr);
@@ -52,16 +68,34 @@ public:
     int partialCount() const { return m_partialCount; }
     int scanWorkers() const { return m_scanWorkers; }
     quint32 excludedItems() const { return m_excludedItems; }
+    bool paused() const { return m_pause.load(); }
+    bool fast() const { return m_fast; }
+    QString fallbackReason() const { return m_fallbackReason; }
+    int skippedDirs() const { return m_skippedDirs; }
+    int skippedLinks() const { return m_skippedLinks; }
+    int unknownSizes() const { return m_unknownSizes; }
+    int orphanRecords() const { return m_orphanRecords; }
+    QVariantList issues() const { return m_issues; }
 
     // The settings decide the worker count, the media, the preview interval
     // and the excluded paths of the next scan.
     void setSettings(ScanSettings* settings) { m_settings = settings; }
     ScanSettings* settings() const { return m_settings; }
 
+    // The window the elevated helper's authorization prompt belongs to.
+    void setOwnerWindow(quintptr window) { m_ownerWindow = window; }
+
     // Starts a scan of the given path. False when a scan is already running.
     Q_INVOKABLE bool start(const QString& path);
+    // The same, but the scan waits until it is resumed.
+    Q_INVOKABLE bool startPaused(const QString& path);
     Q_INVOKABLE void cancel();
-    Q_INVOKABLE bool isRunning() const { return m_running; }
+    // Holds the scan still, and lets it go again.
+    Q_INVOKABLE void pause();
+    Q_INVOKABLE void resume();
+    // Runs the last path again, with the settings as they are now.
+    Q_INVOKABLE bool rescan();
+    Q_INVOKABLE bool isRunning() const { return m_running.load(); }
 
 signals:
     void stateChanged();
@@ -77,6 +111,7 @@ signals:
 
 private:
     void setState(const QString& state);
+    bool beginScan(const QString& path, bool startPaused);
 
     QString m_state = QStringLiteral("idle");
     QString m_statusText;
@@ -91,9 +126,18 @@ private:
     int m_partialCount = 0;
     int m_scanWorkers = 0;
     quint32 m_excludedItems = 0;
+    bool m_fast = false;
+    QString m_fallbackReason;
+    int m_skippedDirs = 0;
+    int m_skippedLinks = 0;
+    int m_unknownSizes = 0;
+    int m_orphanRecords = 0;
+    QVariantList m_issues;
     ScanSettings* m_settings = nullptr;
+    quintptr m_ownerWindow = 0;
 
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_running{false};
+    std::atomic<bool> m_pause{false};
     std::thread m_thread;
 };

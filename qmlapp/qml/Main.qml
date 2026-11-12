@@ -28,6 +28,7 @@ ApplicationWindow {
     }
 
     ScanSettingsDialog { id: settingsDialog; objectName: "scanSettingsDialog" }
+    ScanIssuesDialog { id: issuesDialog; objectName: "scanIssuesDialog" }
 
     ColumnLayout {
         anchors.fill: parent
@@ -45,7 +46,7 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 Label {
                     text: scanService.state === "done" ? "真实扫描"
-                          : scanService.state === "scanning" ? "扫描中"
+                          : scanService.state === "scanning" ? (scanService.paused ? "扫描已暂停" : "扫描中")
                           : scanService.state === "cancelled" ? "已取消的扫描"
                           : scanService.state === "error" ? "扫描失败"
                           : "固定快照"
@@ -64,12 +65,26 @@ ApplicationWindow {
                     selectByMouse: true
                 }
                 Button {
-                    text: "扫描"
+                    text: (scanService.state === "done" || scanService.state === "cancelled") ? "重新扫描" : "扫描"
                     Layout.minimumWidth: 64
                     enabled: pathField.text.trim().length > 0 && scanService.state !== "scanning"
                     onClicked: scanService.start(pathField.text.trim())
                 }
-                Button { text: "取消"; Layout.minimumWidth: 64; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
+                Button {
+                    text: scanService.paused ? "继续" : "暂停"
+                    Layout.minimumWidth: 64
+                    visible: scanService.state === "scanning"
+                    enabled: scanService.state === "scanning"
+                    onClicked: scanService.paused ? scanService.resume() : scanService.pause()
+                }
+                Button { text: "取消"; Layout.minimumWidth: 64; visible: scanService.state === "scanning"; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
+                Button {
+                    text: "扫描问题"
+                    Layout.minimumWidth: 76
+                    visible: scanService.skippedDirs > 0 || scanService.skippedLinks > 0
+                          || scanService.unknownSizes > 0 || scanService.fallbackReason.length > 0
+                    onClicked: issuesDialog.open()
+                }
                 Button { text: "扫描设置"; Layout.minimumWidth: 76; onClicked: settingsDialog.open() }
                 BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 16; implicitHeight: 16 }
             }
@@ -147,11 +162,13 @@ ApplicationWindow {
                         leftPadding: 12
                         verticalAlignment: Text.AlignVCenter
                         text: scanService.state === "error" ? "扫描失败：" + scanService.errorText
+                              : scanService.paused ? "扫描已暂停 · 点「继续」让它接着扫"
                               : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
+                              : scanService.skippedDirs > 0 ? "扫描完成 · " + scanService.skippedDirs + " 个目录无法读取"
                               : "C++ 模型 · ListView 虚拟化 · 真实扫描已接入"
                         font.pixelSize: 11
                         color: scanService.state === "error" ? "#b3261e"
-                              : diskModel.partial ? "#a76414" : "#66758a"
+                              : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? "#a76414" : "#66758a"
                         elide: Text.ElideRight
                     }
                 }
@@ -163,6 +180,7 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
                 Label { text: diskModel.currentName; font.weight: Font.DemiBold; color: "#202b3c" }
                 Label { Layout.fillWidth: true; text: diskModel.currentPath; elide: Text.ElideMiddle; color: "#56657b"; font.pixelSize: 12 }
+                Label { text: scanService.fast ? "快扫" : "普通遍历"; color: "#56657b"; font.pixelSize: 12 }
                 Label { text: scanService.statusText; color: "#56657b"; font.pixelSize: 12 }
                 Label { text: "选中："+(diskModel.selectedId.length?diskModel.selectedId:"无"); color: "#56657b"; font.pixelSize: 12 }
             }
