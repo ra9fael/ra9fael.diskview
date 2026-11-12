@@ -1,0 +1,252 @@
+{
+  "name": "DiskView QML sample · fixed fixture",
+  "size": 10067378176,
+  "dir": true,
+  "children": [
+    {
+      "name": "WinShun",
+      "size": 5772410880,
+      "dir": true,
+      "children": [
+        {
+          "name": "build",
+          "size": 3222274048,
+          "dir": true,
+          "children": [
+            {
+              "name": "debug",
+              "size": 1880096768,
+              "dir": true,
+              "children": [
+                {
+                  "name": "WinShun.exe",
+                  "size": 838860800,
+                  "dir": false
+                },
+                {
+                  "name": "Qt6Quick.dll",
+                  "size": 536870912,
+                  "dir": false
+                },
+                {
+                  "name": "symbols.pdb",
+                  "size": 402653184,
+                  "dir": false
+                },
+                {
+                  "name": "cache.bin",
+                  "size": 101711872,
+                  "dir": false
+                }
+              ]
+            },
+            {
+              "name": "asan",
+              "size": 536870912,
+              "dir": true,
+              "children": [
+                {
+                  "name": "asan-tests.exe",
+                  "size": 301989888,
+                  "dir": false
+                },
+                {
+                  "name": "report.json",
+                  "size": 234881024,
+                  "dir": false
+                }
+              ]
+            },
+            {
+              "name": "release.zip",
+              "size": 536870912,
+              "dir": false
+            },
+            {
+              "name": "cmake-cache.bin",
+              "size": 268435456,
+              "dir": false
+            }
+          ]
+        },
+        {
+          "name": "src",
+          "size": 1207959552,
+          "dir": true,
+          "children": [
+            {
+              "name": "app",
+              "size": 805306368,
+              "dir": true,
+              "children": [
+                {
+                  "name": "MainWindow.cpp",
+                  "size": 402653184,
+                  "dir": false
+                },
+                {
+                  "name": "MainWindow.h",
+                  "size": 201326592,
+                  "dir": false
+                },
+                {
+                  "name": "theme.qml",
+                  "size": 201326592,
+                  "dir": false
+                }
+              ]
+            },
+            {
+              "name": "plugin",
+              "size": 402653184,
+              "dir": true,
+              "children": [
+                {
+                  "name": "runner.cpp",
+                  "size": 268435456,
+                  "dir": false
+                },
+                {
+                  "name": "manifest.json",
+                  "size": 134217728,
+                  "dir": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "docs",
+          "size": 402653184,
+          "dir": true,
+          "children": [
+            {
+              "name": "architecture.md",
+              "size": 201326592,
+              "dir": false
+            },
+            {
+              "name": "validation.md",
+              "size": 201326592,
+              "dir": false
+            }
+          ]
+        },
+        {
+          "name": "diskview.exe",
+          "size": 536870912,
+          "dir": false
+        },
+        {
+          "name": "Qt6Core.dll",
+          "size": 402653184,
+          "dir": false
+        }
+      ]
+    },
+    {
+      "name": "Games",
+      "size": 2147483648,
+      "dir": true,
+      "children": [
+        {
+          "name": "Library",
+          "size": 1610612736,
+          "dir": true,
+          "children": [
+            {
+              "name": "GameA",
+              "size": 1073741824,
+              "dir": true,
+              "children": [
+                {
+                  "name": "data.pak",
+                  "size": 805306368,
+                  "dir": false
+                },
+                {
+                  "name": "audio.bank",
+                  "size": 268435456,
+                  "dir": false
+                }
+              ]
+            },
+            {
+              "name": "GameB",
+              "size": 536870912,
+              "dir": true,
+              "children": [
+                {
+                  "name": "assets.pak",
+                  "size": 402653184,
+                  "dir": false
+                },
+                {
+                  "name": "levels.pak",
+                  "size": 134217728,
+                  "dir": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Capture",
+          "size": 536870912,
+          "dir": true,
+          "children": [
+            {
+              "name": "session.mp4",
+              "size": 402653184,
+              "dir": false
+            },
+            {
+              "name": "thumbs.db",
+              "size": 134217728,
+              "dir": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Backups",
+      "size": 1073741824,
+      "dir": true,
+      "children": [
+        {
+          "name": "weekly.7z",
+          "size": 805306368,
+          "dir": false
+        },
+        {
+          "name": "old",
+          "size": 268435456,
+          "dir": true,
+          "children": [
+            {
+              "name": "image.iso",
+              "size": 201326592,
+              "dir": false
+            },
+            {
+              "name": "notes.txt",
+              "size": 67108864,
+              "dir": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pagefile.sys",
+      "size": 536870912,
+      "dir": false
+    },
+    {
+      "name": "hiberfil.sys",
+      "size": 536870912,
+      "dir": false
+    }
+  ]
+}
