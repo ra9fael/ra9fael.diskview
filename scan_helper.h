@@ -18,7 +18,7 @@ struct Handle {
 };
 constexpr std::uint32_t kMagic=0x32564453, kMaxPacket=2*1024*1024;
 struct Header {std::uint32_t magic=kMagic,type=0,bytes=0;};
-struct Row {std::uint64_t id=0,parent=0,bytes=0;std::uint32_t attributes=0;std::uint16_t chars=0;std::uint8_t directory=0,known=0;};
+struct Row {std::uint64_t id=0,parent=0,bytes=0,modified=0;std::uint32_t attributes=0;std::uint16_t chars=0;std::uint8_t directory=0,known=0;};
 struct Progress {std::uint64_t done=0,total=0;std::uint32_t cluster=4096;};
 template<class T> inline void append(std::vector<std::byte>& out,const T& value) {
     auto start=out.size();out.resize(start+sizeof(T));std::memcpy(out.data()+start,&value,sizeof(T));
@@ -35,7 +35,7 @@ inline std::vector<std::byte> encode(const mft::Batch& batch) {
     append(data,Progress{batch.done,batch.total,batch.cluster});
     for(const auto& e:batch.entries) {
         if(e.name.size()>255)throw std::runtime_error("Invalid MFT name length");
-        append(data,Row{e.id,e.parent,e.bytes,e.attributes,static_cast<std::uint16_t>(e.name.size()),static_cast<std::uint8_t>(e.directory),static_cast<std::uint8_t>(e.known)});
+        append(data,Row{e.id,e.parent,e.bytes,e.modified,e.attributes,static_cast<std::uint16_t>(e.name.size()),static_cast<std::uint8_t>(e.directory),static_cast<std::uint8_t>(e.known)});
         const auto start=data.size();data.resize(start+e.name.size()*sizeof(wchar_t));std::memcpy(data.data()+start,e.name.data(),e.name.size()*sizeof(wchar_t));
     }
     return data;
@@ -51,7 +51,7 @@ inline bool decode(const std::vector<std::byte>& data,mft::Batch& batch) {
         if(row.chars>255||row.directory>1||row.known>1||data.size()-at<row.chars*sizeof(wchar_t))return false;
         std::wstring name(row.chars,L'\0');std::memcpy(name.data(),data.data()+at,row.chars*sizeof(wchar_t));at+=row.chars*sizeof(wchar_t);
         if(name.find_first_of(L"\\/:")!=std::wstring::npos||name.find(L'\0')!=std::wstring::npos)return false;
-        batch.entries.push_back({row.id,row.parent,row.bytes,row.attributes,row.directory!=0,row.known!=0,std::move(name)});
+        batch.entries.push_back({row.id,row.parent,row.bytes,row.attributes,row.directory!=0,row.known!=0,std::move(name),row.modified});
     }
     return true;
 }

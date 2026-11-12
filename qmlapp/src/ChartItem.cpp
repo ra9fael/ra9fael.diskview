@@ -335,7 +335,11 @@ void ChartItem::paint(QPainter* painter)
         painter->setPen(QColor("#243246"));
         QFont font=painter->font();font.setPixelSize(11);font.setWeight(QFont::DemiBold);painter->setFont(font);
         QRectF hole(center.x()-36,center.y()-36,72,72);
-        painter->drawText(hole,Qt::AlignCenter|Qt::TextWordWrap,m_centerLabel);
+        // A long path would spill out of the hole and over the rings, so the
+        // label is elided to what the hole can hold.
+        const QFontMetricsF metrics(font);
+        const QString shortLabel=metrics.elidedText(m_centerLabel,Qt::ElideMiddle,hole.width());
+        painter->drawText(hole,Qt::AlignCenter|Qt::TextWordWrap,shortLabel);
     }
     painter->restore();
 

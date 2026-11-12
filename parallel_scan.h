@@ -100,6 +100,8 @@ inline void scanPath(const std::wstring& path,const ProgressFn& progress,const s
                                 if(excluded(full))++batch.excluded;
                                 else {
                                     Node n;n.name=fd.cFileName;n.dir=(fd.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+                                    n.attributes=fd.dwFileAttributes;
+                                    n.modified=(std::uint64_t(fd.ftLastWriteTime.dwHighDateTime)<<32)|fd.ftLastWriteTime.dwLowDateTime;
                                     if(n.dir){++shared.dirs;if(fd.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)++batch.links;else batch.dirs.push_back(batch.children.size());}
                                     else {n.logical=(std::uint64_t(fd.nFileSizeHigh)<<32)|fd.nFileSizeLow;n.allocApprox=detail::clusterRound(n.logical,result->clusterBytes);++shared.files;shared.bytes+=n.logical;}
                                     batch.children.push_back(std::move(n));

@@ -13,6 +13,7 @@ struct Entry {
     std::uint32_t attributes=0;
     bool directory=false,known=false;
     std::wstring name;
+    std::uint64_t modified=0; // FILETIME, from $STANDARD_INFORMATION
 };
 struct Batch {
     std::vector<Entry> entries;
@@ -46,10 +47,10 @@ inline bool read(ws::ntfs::RecordSource& reader,std::uint32_t cluster,const Sink
             if(record.baseRecord) {
                 if(record.sizeKnown)batch.entries.push_back({base,0,record.size,0,false,true,L""});
                 // Names can live in extension records too.
-                for(const auto& n:record.names)batch.entries.push_back({base,n.parent,record.size,record.attributes,record.directory,record.sizeKnown,std::wstring(n.name.begin(),n.name.end())});
+                for(const auto& n:record.names)batch.entries.push_back({base,n.parent,record.size,record.attributes,record.directory,record.sizeKnown,std::wstring(n.name.begin(),n.name.end()),std::uint64_t(record.modified)});
             } else {
-                batch.entries.push_back({id,0,record.size,record.attributes,record.directory,record.sizeKnown,L""});
-                for(const auto& n:record.names)batch.entries.push_back({id,n.parent,record.size,record.attributes,record.directory,record.sizeKnown,std::wstring(n.name.begin(),n.name.end())});
+                batch.entries.push_back({id,0,record.size,record.attributes,record.directory,record.sizeKnown,L"",std::uint64_t(record.modified)});
+                for(const auto& n:record.names)batch.entries.push_back({id,n.parent,record.size,record.attributes,record.directory,record.sizeKnown,std::wstring(n.name.begin(),n.name.end()),std::uint64_t(record.modified)});
             }
             if(batch.entries.size()>=2048){batch.done=reader.bytesDone();if(!sink(batch))return false;batch.entries.clear();}
         }
@@ -65,12 +66,14 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
     const auto excluded=[&](const std::wstring& p){return std::any_of(options.excludedPaths.begin(),options.excludedPaths.end(),[&](const auto& base){return sameOrBelow(p,base);});};
     if(excluded(root)){out.excludedItems=1;return;}
     std::unordered_map<std::uint64_t,std::uint64_t> sizes;
+    std::unordered_map<std::uint64_t,std::uint64_t> modifieds;
     std::unordered_map<std::uint64_t,std::vector<std::size_t>> children;
     std::unordered_map<std::uint64_t,std::uint32_t> directoryAttributes;
     std::uint64_t rootId=ws::ntfs::kRootRecord;
     for(std::size_t i=0;i<entries.size();++i) {
         if(cancelled()){out.cancelled=true;return;}
         const auto& e=entries[i];if(e.known)sizes[e.id]=e.bytes;
+        if(e.modified)modifieds[e.id]=e.modified;
         // Extension records need not repeat STANDARD_INFORMATION. Preserve
         // reparse attributes from the base record when merging their names.
         if(e.directory)directoryAttributes[e.id]|=e.attributes;
@@ -97,6 +100,11 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
             if(cancelled())break;
             if(!visited.insert(index).second)continue;
             const auto& e=entries[index];Node n;n.name=e.name;n.dir=directoryAttributes.count(e.id)!=0;
+            // The metadata is on the base record; the name may come from an
+            // extension record that repeats less of it.
+            n.attributes=n.dir?directoryAttributes[e.id]:e.attributes;
+            const auto stamp=modifieds.find(e.id);
+            if(stamp!=modifieds.end())n.modified=stamp->second;
             const auto full=childPath(path,e.name);
             if(excluded(full)){++out.excludedItems;if(n.dir)ignore(e.id);continue;}
             if(n.dir) {

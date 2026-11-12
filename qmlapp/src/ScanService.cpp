@@ -44,6 +44,12 @@ QVariantMap toVariantTree(const diskview::Node& node)
         // The space the file system really spends on it.
         {"alloc", static_cast<double>(node.allocApprox)},
         {"dir", node.dir},
+        {"items", static_cast<int>(node.files) + static_cast<int>(node.dirs)},
+        {"files", static_cast<int>(node.files)},
+        {"dirs", static_cast<int>(node.dirs)},
+        // FILETIME as a decimal string: a double would lose the low bits.
+        {"modified", QString::number(static_cast<qulonglong>(node.modified))},
+        {"attrs", static_cast<uint>(node.attributes)},
         {"children", children},
     };
 }

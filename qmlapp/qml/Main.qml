@@ -16,6 +16,21 @@ ApplicationWindow {
     DiskViewModel { id: diskModel; objectName: "diskModel" }
     Component.onCompleted: {
         diskModel.loadFixture(fixtureSource)
+        // The file view remembers how it was left.
+        diskModel.fuzzyMatch = scanSettings.fuzzyMatch
+        diskModel.wholeTree = scanSettings.wholeTree
+    }
+
+    // Which table columns are on. The name column is not listed: it never
+    // goes away.
+    function columnHidden(key) { return scanSettings.hiddenColumns.indexOf(key) >= 0 }
+    function toggleColumn(key) {
+        const hidden = scanSettings.hiddenColumns.slice()
+        const at = hidden.indexOf(key)
+        if (at >= 0) hidden.splice(at, 1)
+        else hidden.push(key)
+        scanSettings.hiddenColumns = hidden
+        scanSettings.save()
     }
 
     // The breadcrumb of the current folder, shortened when it gets long the
@@ -161,10 +176,10 @@ ApplicationWindow {
             }
         }
 
-        // ---- view tabs and filter ---------------------------------------
+        // ---- view tabs, search scope and the columns menu ---------------
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 34
+            Layout.preferredHeight: 36
             color: "#ffffff"
             border.color: "#dce2e8"
             RowLayout {
@@ -187,11 +202,73 @@ ApplicationWindow {
                         border.color: "#dce2e8"
                     }
                 }
+                // The file view is a file finder: say where it looks and how
+                // loosely it matches.
+                ComboBox {
+                    visible: diskModel.viewMode === 1
+                    implicitWidth: 108
+                    implicitHeight: 26
+                    font.pixelSize: 11
+                    model: ["当前目录", "整个扫描"]
+                    currentIndex: diskModel.wholeTree ? 1 : 0
+                    onActivated: { diskModel.wholeTree = (index === 1); scanSettings.wholeTree = diskModel.wholeTree; scanSettings.save() }
+                }
+                ComboBox {
+                    visible: diskModel.viewMode === 1
+                    implicitWidth: 96
+                    implicitHeight: 26
+                    font.pixelSize: 11
+                    model: ["子串匹配", "模糊匹配"]
+                    currentIndex: diskModel.fuzzyMatch ? 1 : 0
+                    onActivated: { diskModel.fuzzyMatch = (index === 1); scanSettings.fuzzyMatch = diskModel.fuzzyMatch; scanSettings.save() }
+                }
                 Item { Layout.fillWidth: true }
+                ToolButton {
+                    text: "列"
+                    implicitWidth: 34
+                    implicitHeight: 26
+                    font.pixelSize: 11
+                    ToolTip.visible: hovered
+                    ToolTip.text: "显示或隐藏列"
+                    onClicked: columnsMenu.open()
+                    contentItem: Label {
+                        text: parent.text
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        color: "#33445c"
+                    }
+                }
+                Menu {
+                    id: columnsMenu
+                    // The name column always stays: a table of numbers with no
+                    // names is not usable.
+                    Repeater {
+                        model: [
+                            { key: "pct", label: "% 父级" },
+                            { key: "alloc", label: "已分配" },
+                            { key: "items", label: "项目" },
+                            { key: "files", label: "文件" },
+                            { key: "dirs", label: "文件夹" },
+                            { key: "modified", label: "修改时间" },
+                            { key: "attributes", label: "属性" }
+                        ]
+                        delegate: MenuItem {
+                            text: modelData.label
+                            checkable: true
+                            checked: !window.columnHidden(modelData.key)
+                            onClicked: window.toggleColumn(modelData.key)
+                        }
+                    }
+                }
                 TextField {
                     id: filterField
                     Layout.preferredWidth: 200
-                    placeholderText: "筛选名称…"
+                    Layout.preferredHeight: 26
+                    topPadding: 4
+                    bottomPadding: 4
+                    font.pixelSize: 11
+                    placeholderText: diskModel.viewMode === 1 ? "查找文件名…" : "筛选名称…"
                     selectByMouse: true
                     onTextEdited: diskModel.filter = text
                 }
@@ -229,11 +306,14 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label {
                                     Layout.fillWidth: true
+                                    Layout.minimumWidth: 120
                                     text: "文件夹 / 名称" + (diskModel.sortKey === 1 ? (diskModel.ascending ? " ↑" : " ↓") : "")
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
+                                    elide: Text.ElideRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(1) }
                                 }
                                 Label {
+                                    visible: !window.columnHidden("pct")
                                     Layout.preferredWidth: columns.pct
                                     text: "% 父级"
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
@@ -246,10 +326,19 @@ ApplicationWindow {
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(0) }
                                 }
-                                Label { Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label {
+                                    visible: !window.columnHidden("modified")
+                                    Layout.preferredWidth: columns.modified
+                                    text: "修改时间" + (diskModel.sortKey === 2 ? (diskModel.ascending ? " ↑" : " ↓") : "")
+                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
+                                    horizontalAlignment: Text.AlignRight
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(2) }
+                                }
+                                Label { visible: !window.columnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
                             }
                         }
                         ListView {
@@ -277,6 +366,8 @@ ApplicationWindow {
                                 required property string allocText
                                 required property string path
                                 required property string extColor
+                                required property string modifiedText
+                                required property string attributes
                                 required property real percent
                                 required property int depth
                                 required property int items
@@ -289,7 +380,13 @@ ApplicationWindow {
                                 height: 24
                                 padding: 0
                                 highlighted: nodeId === diskModel.selectedId
-                                onClicked: diskModel.select(nodeId)
+                                // A click on a folder row opens it in place; a
+                                // double click goes into it. The triangle is
+                                // still there, so nobody has to guess.
+                                onClicked: {
+                                    diskModel.select(nodeId)
+                                    if (directory && hasChildren) diskModel.toggleExpanded(nodeId)
+                                }
                                 onDoubleClicked: if (directory) diskModel.navigate(nodeId)
                                 TapHandler {
                                     acceptedButtons: Qt.RightButton
@@ -333,6 +430,7 @@ ApplicationWindow {
                                         }
                                     }
                                     Item {
+                                        visible: !window.columnHidden("pct")
                                         Layout.preferredWidth: columns.pct
                                         Layout.fillHeight: true
                                         Rectangle {
@@ -352,25 +450,43 @@ ApplicationWindow {
                                         }
                                     }
                                     Label { Layout.preferredWidth: columns.size; text: rowItem.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#33445c"; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
                                     Label {
+                                        visible: !window.columnHidden("items")
                                         Layout.preferredWidth: columns.items
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.items) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: "#56657b"; font.pixelSize: 11
                                     }
                                     Label {
+                                        visible: !window.columnHidden("files")
                                         Layout.preferredWidth: columns.files
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.files) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: "#56657b"; font.pixelSize: 11
                                     }
                                     Label {
+                                        visible: !window.columnHidden("dirs")
                                         Layout.preferredWidth: columns.dirs
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.dirs) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: "#56657b"; font.pixelSize: 11
-                                    }                                }
+                                    }
+                                    Label {
+                                        visible: !window.columnHidden("modified")
+                                        Layout.preferredWidth: columns.modified
+                                        text: rowItem.modifiedText
+                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                        color: "#56657b"; font.pixelSize: 11
+                                    }
+                                    Label {
+                                        visible: !window.columnHidden("attributes")
+                                        Layout.preferredWidth: columns.attrs
+                                        text: rowItem.attributes
+                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                        color: "#56657b"; font.pixelSize: 11
+                                    }
+                                }
                             }
                         }
                     }
@@ -390,10 +506,11 @@ ApplicationWindow {
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label { Layout.preferredWidth: 18; text: "" }
-                                Label { Layout.fillWidth: true; text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b" }
-                                Label { Layout.preferredWidth: 56; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 72; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 60; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.fillWidth: true; Layout.minimumWidth: 70; text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b" }
+                                Label { Layout.preferredWidth: 52; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: 66; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: 66; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: 52; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
                             }
                         }
                         ListView {
@@ -419,13 +536,35 @@ ApplicationWindow {
                                     }
                                     Label {
                                         Layout.fillWidth: true
+                                        Layout.minimumWidth: 70
                                         text: (modelData.ext.length ? modelData.ext : "(无)") + "  " + modelData.label
                                         elide: Text.ElideRight
                                         color: "#243246"; font.pixelSize: 11
                                     }
-                                    Label { Layout.preferredWidth: 56; text: modelData.percent.toFixed(1) + "%"; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#33445c"; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: 72; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#33445c"; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: 60; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
+                                    Item {
+                                        Layout.preferredWidth: 52
+                                        Layout.fillHeight: true
+                                        Rectangle {
+                                            x: 2
+                                            y: parent.height / 2 - 4
+                                            height: 8
+                                            radius: 2
+                                            color: modelData.color
+                                            opacity: 0.55
+                                            width: Math.max(0, Math.min(1, modelData.percent / 100)) * (parent.width - 4)
+                                        }
+                                        Label {
+                                            anchors.fill: parent
+                                            anchors.rightMargin: 2
+                                            verticalAlignment: Text.AlignVCenter
+                                            horizontalAlignment: Text.AlignRight
+                                            text: modelData.percent.toFixed(1) + "%"
+                                            color: "#33445c"; font.pixelSize: 11
+                                        }
+                                    }
+                                    Label { Layout.preferredWidth: 66; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#33445c"; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: 66; text: modelData.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: 52; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
                                 }
                             }
                         }
@@ -607,5 +746,7 @@ ApplicationWindow {
         readonly property int items: 62
         readonly property int files: 62
         readonly property int dirs: 58
+        readonly property int modified: 118
+        readonly property int attrs: 64
     }
 }

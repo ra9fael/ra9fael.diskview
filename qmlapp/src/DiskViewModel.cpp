@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QUrl>
+#include <QDateTime>
 #include <algorithm>
 
 namespace {
@@ -14,6 +15,47 @@ namespace {
 quint64 allocatedFor(quint64 size)
 {
     return (size + 4095u) / 4096u * 4096u;
+}
+
+// WizTree shows the same date shape everywhere, so the column does not jump
+// around: yyyy-MM-dd HH:mm.
+QString modifiedText(quint64 fileTime)
+{
+    if (!fileTime) return QStringLiteral("—");
+    // FILETIME counts 100 ns ticks from 1601-01-01 UTC.
+    const qint64 msecsSinceEpoch = static_cast<qint64>(fileTime / 10000ull) - 11644473600000ll;
+    if (msecsSinceEpoch <= 0) return QStringLiteral("—");
+    return QDateTime::fromMSecsSinceEpoch(msecsSinceEpoch).toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+}
+
+// The Windows attribute letters, the same set the Explorer shows.
+QString attributesText(quint32 attributes)
+{
+    if (!attributes) return QStringLiteral("—");
+    QString text;
+    if (attributes & 0x1u) text += QLatin1Char('R');    // read only
+    if (attributes & 0x2u) text += QLatin1Char('H');    // hidden
+    if (attributes & 0x4u) text += QLatin1Char('S');    // system
+    if (attributes & 0x10u) text += QLatin1Char('D');   // directory
+    if (attributes & 0x20u) text += QLatin1Char('A');   // archive
+    if (attributes & 0x400u) text += QLatin1Char('L');  // reparse point
+    if (attributes & 0x800u) text += QLatin1Char('C');  // compressed
+    return text.isEmpty() ? QStringLiteral("—") : text;
+}
+
+// A subsequence match: "scm" finds "scan-manager". Cheaper and more
+// predictable than an edit distance, and it is what a fuzzy file finder
+// means in practice.
+bool fuzzyContains(const QString& haystack, const QString& needle)
+{
+    if (needle.isEmpty()) return true;
+    int at = 0;
+    for (const QChar ch : needle) {
+        const int found = haystack.indexOf(ch, at, Qt::CaseInsensitive);
+        if (found < 0) return false;
+        at = found + 1;
+    }
+    return true;
 }
 }
 
@@ -78,6 +120,15 @@ int DiskViewModel::appendNode(const QVariantMap& node, int parent, const QString
     // The scan reports the space actually taken; the fixture does not.
     if (node.contains("alloc")) e.alloc = static_cast<quint64>(node.value("alloc").toDouble());
     if (e.alloc == 0) e.alloc = allocatedFor(e.size);
+    // The scan knows the entry counts; the fixture does not, and they are
+    // summed up afterwards.
+    e.countFiles = static_cast<quint64>(node.value("files").toDouble());
+    e.countDirs = static_cast<quint64>(node.value("dirs").toDouble());
+    const QString stamp = node.value("modified").toString();
+    if (!stamp.isEmpty()) {
+        e.modified = stamp.toULongLong(&e.hasModified);
+    }
+    e.attributes = node.value("attrs").toUInt();
     e.directory = node.value("dir").toBool();
     e.parent = parent;
     e.ext = e.directory ? QString() : diskviewqml::extensionOf(e.name);
@@ -191,6 +242,9 @@ QVariant DiskViewModel::data(const QModelIndex& index, int role) const
     case ItemsRole: return static_cast<int>(e.countFiles + e.countDirs);
     case FilesRole: return static_cast<int>(e.countFiles);
     case DirsRole: return static_cast<int>(e.countDirs);
+    case ModifiedTextRole: return e.hasModified ? modifiedText(e.modified) : QStringLiteral("—");
+    case ModifiedValueRole: return QVariant::fromValue<qulonglong>(e.hasModified ? e.modified : 0);
+    case AttributesRole: return attributesText(e.attributes);
     default: return {};
     }
 }
@@ -201,7 +255,9 @@ QHash<int, QByteArray> DiskViewModel::roleNames() const
             {PercentRole, "percent"}, {DirectoryRole, "directory"}, {PathRole, "path"},
             {DepthRole, "depth"}, {HasChildrenRole, "hasChildren"}, {ExpandedRole, "expanded"},
             {AllocTextRole, "allocText"}, {ExtRole, "ext"}, {ExtColorRole, "extColor"},
-            {ItemsRole, "items"}, {FilesRole, "files"}, {DirsRole, "dirs"}};
+            {ItemsRole, "items"}, {FilesRole, "files"}, {DirsRole, "dirs"},
+            {ModifiedTextRole, "modifiedText"}, {ModifiedValueRole, "modifiedValue"},
+            {AttributesRole, "attributes"}};
 }
 
 int DiskViewModel::indexForId(const QString& id) const
@@ -219,17 +275,22 @@ int DiskViewModel::depthOf(int index) const
 
 void DiskViewModel::sortEntries(QVector<int>& entries) const
 {
-    const bool byName = m_sortKey == SortByName;
     std::stable_sort(entries.begin(), entries.end(), [&](int a, int b) {
         const Entry& x = m_nodes[a];
         const Entry& y = m_nodes[b];
-        if (byName) {
-            const int order = QString::compare(x.name, y.name, Qt::CaseInsensitive);
-            if (order != 0) return m_ascending ? order < 0 : order > 0;
-            return false;
+        int order = 0;
+        switch (m_sortKey) {
+        case SortByName:
+            order = QString::compare(x.name, y.name, Qt::CaseInsensitive);
+            break;
+        case SortByModified:
+            if (x.modified != y.modified) order = x.modified < y.modified ? -1 : 1;
+            break;
+        default:
+            if (x.size != y.size) order = x.size < y.size ? -1 : 1;
+            break;
         }
-        if (x.size != y.size) return m_ascending ? x.size < y.size : x.size > y.size;
-        return false;
+        return m_ascending ? order < 0 : order > 0;
     });
 }
 
@@ -280,10 +341,14 @@ void DiskViewModel::rebuildRows()
     if (m_current < 0) return;
     if (m_viewMode == FileView) {
         QVector<int> files;
-        collectFiles(m_current, files);
+        collectFiles(m_wholeTree ? 0 : m_current, files);
         if (!m_filter.isEmpty()) {
             files.erase(std::remove_if(files.begin(), files.end(), [this](int i) {
-                return !m_nodes[i].path.contains(m_filter, Qt::CaseInsensitive);
+                const QString& name = m_nodes[i].name;
+                // The folder scope is narrow enough to keep matching the
+                // whole path, the whole-tree one only makes sense on the name.
+                return m_fuzzyMatch ? !fuzzyContains(name, m_filter)
+                                    : !m_nodes[i].path.contains(m_filter, Qt::CaseInsensitive);
             }), files.end());
         }
         sortEntries(files);
@@ -374,7 +439,7 @@ void DiskViewModel::openSelected()
 
 void DiskViewModel::toggleSort(int key)
 {
-    const int wanted = (key == SortByName) ? SortByName : SortBySize;
+    const int wanted = (key == SortByName || key == SortByModified) ? key : SortBySize;
     // The same head flips the direction, another head takes over and starts
     // in its own natural direction.
     m_ascending = (m_sortKey == wanted) ? !m_ascending : (wanted == SortByName);
@@ -385,7 +450,7 @@ void DiskViewModel::toggleSort(int key)
 
 void DiskViewModel::setSortKey(int key)
 {
-    const int wanted = (key == SortByName) ? SortByName : SortBySize;
+    const int wanted = (key == SortByName || key == SortByModified) ? key : SortBySize;
     if (m_sortKey == wanted) return;
     m_sortKey = wanted;
     rebuildRows();
@@ -413,6 +478,22 @@ void DiskViewModel::setViewMode(int mode)
     const int wanted = (mode == FileView) ? FileView : TreeView;
     if (m_viewMode == wanted) return;
     m_viewMode = wanted;
+    rebuildRows();
+    emit listChanged();
+}
+
+void DiskViewModel::setFuzzyMatch(bool enabled)
+{
+    if (m_fuzzyMatch == enabled) return;
+    m_fuzzyMatch = enabled;
+    rebuildRows();
+    emit listChanged();
+}
+
+void DiskViewModel::setWholeTree(bool enabled)
+{
+    if (m_wholeTree == enabled) return;
+    m_wholeTree = enabled;
     rebuildRows();
     emit listChanged();
 }

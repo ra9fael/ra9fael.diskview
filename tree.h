@@ -25,6 +25,10 @@ struct Node {
     std::wstring name;                 // file or folder name; root: the scan path
     std::uint64_t logical = 0;         // bytes; a directory: the sum of its subtree
     std::uint64_t allocApprox = 0;     // cluster-rounded bytes; a directory: the sum
+    // FILETIME of the last write. A directory keeps its own, not the newest
+    // one below it. 0 means the scan could not tell.
+    std::uint64_t modified = 0;
+    std::uint32_t attributes = 0;      // FILE_ATTRIBUTE_* of the entry itself
     bool dir = false;
     std::uint32_t files = 0;           // a directory: files in its subtree (self not counted)
     std::uint32_t dirs = 0;            // a directory: folders in its subtree (self not counted)

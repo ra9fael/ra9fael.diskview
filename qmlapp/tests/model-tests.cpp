@@ -116,6 +116,22 @@ void testFileView()
     model.setViewMode(DiskViewModel::FileView);
     check(namesOf(model) == QStringList({"big.bin", "tiny.txt"}),
           "the file view follows the folder it is in");
+    // The whole-tree scope looks through everything again.
+    model.setWholeTree(true);
+    check(model.rowCount() == 4, "the whole-tree scope lists every file of the scan");
+}
+
+void testFileSearch()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    model.setViewMode(DiskViewModel::FileView);
+    model.setFilter(QStringLiteral("bgn"));
+    check(model.rowCount() == 0, "a subsequence is not a match unless fuzzy is on");
+    model.setFuzzyMatch(true);
+    check(namesOf(model) == QStringList({"big.bin"}), "fuzzy matching finds a subsequence of the name");
+    model.setFilter(QStringLiteral("mid"));
+    check(namesOf(model) == QStringList({"mid.dat"}), "fuzzy matching still finds plain substrings");
 }
 
 void testExpanding()
@@ -150,6 +166,35 @@ void testExtensions()
     check(first.value("files").toInt() == 2, "the extension counts its files");
     check(!first.value("color").toString().isEmpty(), "every extension has a colour");
     check(first.value("label").toString().length() > 0, "every extension has a name");
+}
+
+void testMetadataColumns()
+{
+    // 2026-11-13 01:51 UTC as a FILETIME; the column prints it in local time,
+    // so the check only insists on a real stamp being shown.
+    const quint64 stamp = 133'000'000'000'000'000ull;
+    const QVariantMap fileWithMeta = {{"name", QStringLiteral("a.txt")}, {"size", 10.0},
+                                      {"dir", false}, {"modified", QString::number(stamp)},
+                                      {"attrs", 0x20u}};
+    const QVariantMap treeWithMeta = {{"name", QStringLiteral("D:\\")}, {"size", 10.0}, {"dir", true},
+                                      {"children", QVariantList{fileWithMeta}}};
+    DiskViewModel model;
+    model.loadTree(treeWithMeta);
+    const QModelIndex row = model.index(0, 0);
+    check(model.data(row, DiskViewModel::AttributesRole).toString() == QStringLiteral("A"),
+          "the attributes column spells out the flags");
+    check(model.data(row, DiskViewModel::ModifiedTextRole).toString().contains(QLatin1Char('-')),
+          "the modified column formats the stamp as a date");
+    check(model.data(row, DiskViewModel::ModifiedTextRole).toString() != QStringLiteral("—"),
+          "a row without a stamp shows a dash instead");
+
+    // A tree without the fields keeps the dash.
+    DiskViewModel plain;
+    plain.loadTree(tree());
+    check(plain.data(plain.index(0, 0), DiskViewModel::ModifiedTextRole).toString() == QStringLiteral("—"),
+          "a scan without timestamps shows a dash");
+    check(plain.data(plain.index(0, 0), DiskViewModel::AttributesRole).toString() == QStringLiteral("—"),
+          "a scan without attributes shows a dash");
 }
 
 void testHistory()
@@ -190,8 +235,10 @@ int main()
     testSorting();
     testFilter();
     testFileView();
+    testFileSearch();
     testExpanding();
     testExtensions();
+    testMetadataColumns();
     testHistory();
     testFormatting();
     if (g_failures == 0) {

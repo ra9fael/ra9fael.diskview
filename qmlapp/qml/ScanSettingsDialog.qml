@@ -11,7 +11,8 @@ Dialog {
     title: "扫描设置"
     modal: true
     width: 480
-    height: 520
+    // The height follows the content: a fixed one left the buttons outside
+    // the frame whenever a row was added.
     anchors.centerIn: Overlay.overlay
 
     ListModel { id: draftExcluded }
@@ -63,8 +64,10 @@ Dialog {
     }
 
     ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: 18
+        id: content
+        width: root.availableWidth
+        // No anchors.fill here: the dialog takes the height from the content,
+        // so the footer can never end up outside the frame.
         spacing: 12
 
         GridLayout {
@@ -110,7 +113,7 @@ Dialog {
         Label { text: "排除路径"; color: "#243246"; font.weight: Font.DemiBold }
         Rectangle {
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.preferredHeight: 150
             color: "#f7f9fb"
             border.color: "#dce2e8"
             radius: 4

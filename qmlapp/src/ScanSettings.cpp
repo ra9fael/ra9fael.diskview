@@ -109,6 +109,45 @@ void ScanSettings::setLastPath(const QString& path)
     emit changed();
 }
 
+void ScanSettings::setHiddenColumns(const QStringList& columns)
+{
+    // Only the names the table knows; a stale entry from an older build is
+    // dropped rather than kept forever.
+    static const QStringList known{QStringLiteral("pct"), QStringLiteral("alloc"),
+                                   QStringLiteral("items"), QStringLiteral("files"),
+                                   QStringLiteral("dirs"), QStringLiteral("modified"),
+                                   QStringLiteral("attributes")};
+    QStringList kept;
+    for (const QString& column : columns) {
+        if (known.contains(column) && !kept.contains(column)) {
+            kept.append(column);
+        }
+    }
+    if (kept == m_hiddenColumns) {
+        return;
+    }
+    m_hiddenColumns = kept;
+    emit changed();
+}
+
+void ScanSettings::setFuzzyMatch(bool fuzzy)
+{
+    if (fuzzy == m_fuzzyMatch) {
+        return;
+    }
+    m_fuzzyMatch = fuzzy;
+    emit changed();
+}
+
+void ScanSettings::setWholeTree(bool whole)
+{
+    if (whole == m_wholeTree) {
+        return;
+    }
+    m_wholeTree = whole;
+    emit changed();
+}
+
 void ScanSettings::addExcludedPath(const QString& path)
 {
     const QString trimmed = path.trimmed();
@@ -173,6 +212,14 @@ bool ScanSettings::load()
             m_excludedPaths.append(path);
         }
     }
+    QStringList hidden;
+    const QJsonArray hiddenArray = object.value(QStringLiteral("hiddenColumns")).toArray();
+    for (const QJsonValue& item : hiddenArray) {
+        if (item.isString()) hidden.append(item.toString());
+    }
+    setHiddenColumns(hidden);
+    m_fuzzyMatch = object.value(QStringLiteral("fuzzyMatch")).toBool(false);
+    m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
     emit changed();
     return true;
 }
@@ -185,6 +232,13 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("workers"), m_workers);
     object.insert(QStringLiteral("media"), m_media);
     object.insert(QStringLiteral("previewIntervalMs"), m_previewIntervalMs);
+    QJsonArray hidden;
+    for (const QString& column : m_hiddenColumns) {
+        hidden.append(column);
+    }
+    object.insert(QStringLiteral("hiddenColumns"), hidden);
+    object.insert(QStringLiteral("fuzzyMatch"), m_fuzzyMatch);
+    object.insert(QStringLiteral("wholeTree"), m_wholeTree);
     QJsonArray excluded;
     for (const QString& path : m_excludedPaths) {
         excluded.append(path);

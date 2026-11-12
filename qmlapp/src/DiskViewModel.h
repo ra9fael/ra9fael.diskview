@@ -31,6 +31,10 @@ class DiskViewModel : public QAbstractListModel {
     Q_PROPERTY(bool ascending READ ascending WRITE setAscending NOTIFY listChanged)
     Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY listChanged)
     Q_PROPERTY(int viewMode READ viewMode WRITE setViewMode NOTIFY listChanged)
+    // The file view: match a subsequence of the name, and look through the
+    // whole scan instead of the folder that is open.
+    Q_PROPERTY(bool fuzzyMatch READ fuzzyMatch WRITE setFuzzyMatch NOTIFY listChanged)
+    Q_PROPERTY(bool wholeTree READ wholeTree WRITE setWholeTree NOTIFY listChanged)
     // The legend rows: what the current folder is made of.
     Q_PROPERTY(QVariantList extensionRows READ extensions NOTIFY listChanged)
     Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY currentPathChanged)
@@ -41,9 +45,10 @@ public:
     enum Roles {
         IdRole = Qt::UserRole + 1, NameRole, SizeRole, SizeTextRole, PercentRole,
         DirectoryRole, PathRole, DepthRole, HasChildrenRole, ExpandedRole,
-        AllocTextRole, ExtRole, ExtColorRole, ItemsRole, FilesRole, DirsRole
+        AllocTextRole, ExtRole, ExtColorRole, ItemsRole, FilesRole, DirsRole,
+        ModifiedTextRole, ModifiedValueRole, AttributesRole
     };
-    enum SortKey { SortBySize = 0, SortByName = 1 };
+    enum SortKey { SortBySize = 0, SortByName = 1, SortByModified = 2 };
     enum ViewMode { TreeView = 0, FileView = 1 };
 
     explicit DiskViewModel(QObject* parent = nullptr);
@@ -70,6 +75,10 @@ public:
     void setFilter(const QString& filter);
     int viewMode() const { return m_viewMode; }
     void setViewMode(int mode);
+    bool fuzzyMatch() const { return m_fuzzyMatch; }
+    void setFuzzyMatch(bool enabled);
+    bool wholeTree() const { return m_wholeTree; }
+    void setWholeTree(bool enabled);
     bool canGoBack() const { return m_historyPos > 0; }
     bool canGoForward() const { return m_historyPos >= 0 && m_historyPos + 1 < m_history.size(); }
     bool canGoUp() const { return m_current > 0; }
@@ -105,7 +114,10 @@ private:
         QString id, name, path, ext;
         quint64 size = 0, alloc = 0;
         quint64 countFiles = 0, countDirs = 0;
+        quint64 modified = 0;   // FILETIME ticks; 0 when the source has no stamp
+        quint32 attributes = 0;
         bool directory = false;
+        bool hasModified = false;
         int parent = -1;
         QVector<int> children;
     };
@@ -133,4 +145,6 @@ private:
     bool m_ascending = false;
     int m_viewMode = TreeView;
     bool m_partial = false;
+    bool m_fuzzyMatch = false;
+    bool m_wholeTree = false;
 };

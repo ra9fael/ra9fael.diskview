@@ -117,6 +117,10 @@ void testRoundTrip()
     saved.addExcludedPath(QStringLiteral("D:\\工作\\node_modules"));
     saved.addExcludedPath(QStringLiteral("D:\\工作\\build"));
     saved.addExcludedPath(QStringLiteral("D:\\工作\\build")); // a duplicate is ignored
+    saved.setHiddenColumns({QStringLiteral("attributes"), QStringLiteral("modified"),
+                            QStringLiteral("nonsense")});
+    saved.setFuzzyMatch(true);
+    saved.setWholeTree(true);
     check(saved.save(), "the settings are written");
 
     ScanSettings back;
@@ -127,6 +131,9 @@ void testRoundTrip()
     check(back.previewIntervalMs() == 5000, "the preview interval survives the round trip");
     check(back.lastPath() == QStringLiteral("D:\\工作"), "the last path survives the round trip");
     check(back.excludedPaths().size() == 2, "the excluded paths survive the round trip without duplicates");
+    check(back.hiddenColumns().size() == 2, "only the known columns are kept");
+    check(back.fuzzyMatch(), "the fuzzy mode survives the round trip");
+    check(back.wholeTree(), "the whole-tree scope survives the round trip");
 
     // A hand-edited file with nonsense in it must not be trusted.
     const QString file = QDir(dir.path()).filePath(QStringLiteral("diskview-qml.json"));

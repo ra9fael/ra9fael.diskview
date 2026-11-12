@@ -19,6 +19,13 @@ class ScanSettings : public QObject {
     Q_PROPERTY(int previewIntervalMs READ previewIntervalMs WRITE setPreviewIntervalMs NOTIFY changed)
     Q_PROPERTY(QStringList excludedPaths READ excludedPaths WRITE setExcludedPaths NOTIFY changed)
     Q_PROPERTY(QString lastPath READ lastPath WRITE setLastPath NOTIFY changed)
+    // The table columns the user hid. New columns default to visible, so a
+    // setting file from an older build still shows everything it knows.
+    Q_PROPERTY(QStringList hiddenColumns READ hiddenColumns WRITE setHiddenColumns NOTIFY changed)
+    // The file view: match loosely (a subsequence of the name) and look
+    // through the whole scan instead of the folder that is open.
+    Q_PROPERTY(bool fuzzyMatch READ fuzzyMatch WRITE setFuzzyMatch NOTIFY changed)
+    Q_PROPERTY(bool wholeTree READ wholeTree WRITE setWholeTree NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -38,6 +45,12 @@ public:
     void setExcludedPaths(const QStringList& paths);
     QString lastPath() const { return m_lastPath; }
     void setLastPath(const QString& path);
+    QStringList hiddenColumns() const { return m_hiddenColumns; }
+    void setHiddenColumns(const QStringList& columns);
+    bool fuzzyMatch() const { return m_fuzzyMatch; }
+    void setFuzzyMatch(bool fuzzy);
+    bool wholeTree() const { return m_wholeTree; }
+    void setWholeTree(bool whole);
     QString filePath() const;
 
     Q_INVOKABLE bool load();
@@ -55,4 +68,7 @@ private:
     int m_previewIntervalMs = 1500;
     QStringList m_excludedPaths;
     QString m_lastPath;
+    QStringList m_hiddenColumns;
+    bool m_fuzzyMatch = false;
+    bool m_wholeTree = false;
 };

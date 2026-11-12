@@ -315,6 +315,8 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
             const bool reparse = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
             const std::uint64_t logical =
                 (static_cast<std::uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+            const std::uint64_t modified =
+                (static_cast<std::uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
             if (isDir && reparse) {
                 // A junction or a directory symlink: shown as an entry of zero
                 // size, never followed (no loops, no double-counting).
@@ -325,6 +327,8 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
                 link.name = n;
                 link.dir = true;
                 link.skippedChildren = 0;
+                link.attributes = fd.dwFileAttributes;
+                link.modified = modified;
                 node.children.push_back(std::move(link));
             } else if (isDir) {
                 ++ctx.dirs;
@@ -332,6 +336,8 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
                 Node& d = node.children.back();
                 d.name = n;
                 d.dir = true;
+                d.attributes = fd.dwFileAttributes;
+                d.modified = modified;
                 const bool childDone = walkDir(childPath(prefixedDir, n), childPath(displayDir, n), d, depth + 1, ctx, out);
                 selfLogical += d.logical;
                 selfAlloc += d.allocApprox;
@@ -347,6 +353,8 @@ inline bool walkDir(const std::wstring& prefixedDir, const std::wstring& display
                 f.dir = false;
                 f.logical = logical;
                 f.allocApprox = clusterRound(logical, ctx.clusterBytes);
+                f.attributes = fd.dwFileAttributes;
+                f.modified = modified;
                 selfLogical += logical;
                 selfAlloc += f.allocApprox;
                 selfFiles += 1;
