@@ -79,6 +79,19 @@
 - 发现 fixture 的 `WinShun/build/debug` 子项总和比声明多 1 MiB，已修复样机 JSON 并加入 `tests/check-fixture.cjs` 递归检查。截图中的未填充扇区代表叶文件没有下一层子项，并非绘制断裂。
 - HTML 交互演示位于 `../ra9fael.diskview/design/compact-layout-prototype.html`，提示文案已区分浏览器仿真与 Qt 实测，并提供 Qt 截图及 QML 源码链接。`node build/compact-prototype-check.cjs`：26 项全部通过。
 
+### 阶段 8：图表交互与信息显示
+
+手工在真实窗口里点了一遍，暴露的问题逐个修掉：
+
+- **双击目录进不去**：两个原因。一是 `ChartItem` 只接管了按下，没有 `mouseReleaseEvent`，`m_dragging` 从不复位，点一下之后图表跟着鼠标漂移，双击的第二个落点已经不是原来那块；二是方块图默认递归到 24 层，父 tile 被子 tile 完全覆盖，能点到的永远是文件。补上 release、把平移挪进 `mouseMoveEvent`，并把「1 层/2 层」接到 `treemapTiles/sunburstSlices` 的 `maxDepth`（默认 1 层），目录才成为可双击的整块。另外把 `emit activated` 移出 `m_regions` 循环——QML 收到信号会重建这张表，在循环里 emit 等于让迭代器当场失效。
+- **圆盘中心双击不返回**：判定半径写死 24px，而中心孔半径是 `maxR*0.22`（本窗口约 84px），点在 24~84px 的环里被当成普通扇区。改为按 `m_innerRadius` 判定。
+- **方块/扇区没有信息**：照 `drawTiles` 与 `drawSlices` 的规则补微型标签（方块 ≥48×14 画名称、≥32 高补大小；扇区张角 >0.35 且环宽 >26px），文字颜色按底色亮度取黑/白。
+- **悬停看不到信息**：补 `drawTooltip` 的等价物——QML 浮层显示名称/完整路径/「文件夹 · 大小 · 占比」/操作提示，数据来自 `ChartItem::hoverInfo(id)`（扫描时顺手建了 id→{名称,路径,大小,类型} 的索引，悬停不必再走树）。悬停只高亮，单击才选中，和原生的分工一致。
+- **顶部控件重叠**：一行塞了路径框、状态和 5 个按钮，在 860px 最小宽度下挤到互相覆盖。拆成两行。
+- **导航按钮过大 / 图标**：`Button`（隐式最小宽 64px）换成 28×28 的 `ToolButton`，用 Unicode 箭头 glyph 并带 tooltip；面包屑分隔符 15px、颜色加深，可点段加内边距扩大命中区。
+- **右键菜单**：按「只补只读项」的决定，加了复制完整路径、在资源管理器中显示、定位到所在目录三项；文件操作留到宿主集成阶段。复制走 `QGuiApplication::clipboard`，资源管理器定位走 `ShellExecuteW`（含引号的路径直接拒绝，避免拼进参数）。
+- 顺带把 QML 加载失败的诊断补上：引擎的 `warnings` 信号收集到错误文本里，`rightPadding` 那次误用就是靠它定位的。
+
 ### 阶段 7：列表面板与导航（B2）
 
 对照原生 `viewer.h` 的列表面板逐条对齐，语义而不是外观照抄：
@@ -100,6 +113,11 @@
 - 检查脚本的扫描一律读临时设置 `{"scanMode": 2}`、扫临时目录，因此自动化过程中不可能弹 UAC；快扫的 UAC 正常路径只能由人在盘符根目录上手动触发。
 - 界面目视核对（截图 `build/qml-scan-paused.png`、`build/qml-settings-mode.png`）：顶栏「扫描已暂停」+「继续」按钮，底栏「扫描已暂停 · 点「继续」让它接着扫」，设置对话框新增「扫描方式 = 普通遍历」一行与勾选的「确定后立即重新扫描」。
 
+## 验证结果（阶段 8）
+- `tests/check-prototype.ps1` 全绿，自检报告新增 `chart` 一列：treemap `chart=double`、sunburst `chart=double,center`、真实扫描 `chart=double`。
+- 图表交互改用真实鼠标事件验证：`drag` 检查发 press→move→release→hover，断言「拖动会平移、松开后悬停不再平移」；`chart` 检查发 press→release→dblclick→release，断言方块图双击目录能进入、圆盘在中心孔双击能回到上级。
+- 两张截图人工核对：方块图 5 个顶层 tile 各自带名称与大小、悬停浮层内容正确；圆盘三个大扇区带标签、中心显示当前目录名；顶栏两行不再重叠，导航按钮为 28px 小图标。
+
 ## 验证结果（B2）
 - `tests/check-prototype.ps1` 全绿，自检报告多出一列 `list=sort,name,filter,largest,history`：`0 8 regions transform navigate return list=... PASS`、`1 2 ... PASS`、真实扫描 `0 4 ... PASS`。
 - 新增 `tests/model-tests.cpp`（`diskview-model-tests.exe`，`PASS`），32 项断言：默认大小降序；名称列升序/再点降序；切到大小列回到降序；过滤命中/忽略大小写/无命中/清空/匹配整条路径；最大文件在根上是 4 个文件、进入 `zulu` 后只剩它自己的 2 个；历史 back/forward/up 往返且 `goUp` 记得刚离开的目录；格式化 `512 B`、`1.5 KB`、`200 MB`、`1,234`。
@@ -112,4 +130,4 @@
 - 尚未接入 WinShun 协议、文件操作或 host plugin launcher；管理员快扫 helper 已接线，但 UAC 正常路径尚未由人手动跑过（需在固定 NTFS 卷的盘符根目录上触发）。
 - QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
-- B1、B2 已完成并提交；下一步按 roadmap 是 B3（QSGGeometryNode 渲染路径、抗锯齿圆盘、大目录压力测试）。
+- B1、B2 与图表交互修复已完成并提交；下一步按 roadmap 是 B3（QSGGeometryNode 渲染路径、抗锯齿圆盘、大目录压力测试）。
