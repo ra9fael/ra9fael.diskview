@@ -37,7 +37,7 @@
 
 已接入真实扫描：`ScanService` 在工作线程上跑分支根部的 `diskview::scanPath`（`scan.h` + `tree.h` + 仓库内的 SDK 头 `winshun.h`），把 `Node` 树转成与快照同形的 `QVariantMap`，再交给 `DiskViewModel::loadTree`。窗口顶栏有路径框、扫描与取消按钮，底栏显示文件数、目录数与耗时；命令行 `--scan <路径>` 走同一条路径。扫描不跟随 reparse point、不打开文件内容。
 
-未接入 WinShun 协议与 MFT 快扫：`mft_scan.h` 依赖 `vendor/winshun/Ntfs.cpp` 的 NTFS reader，宿主集成阶段再评估。
+未接入 WinShun 协议与文件操作；MFT 快扫当时未接入（`mft_scan.h` 依赖 `vendor/winshun/Ntfs.cpp` 的 NTFS reader），已在阶段 6 补上。
 
 ### 阶段 3：列表模型
 
@@ -57,8 +57,17 @@
 - `QmlHost` 在设置载入后才设 context property，`initialScanPath` 因此可以在命令行没给路径时回落到上次扫描的路径；`--settings` 让 wrapper 启动即打开设置对话框，便于截图核对。
 - 状态标签区分「真实扫描 / 扫描中 / 已取消的扫描 / 扫描失败 / 固定快照」，失败时底栏直接显示错误文本。
 
-## 本轮验证结果
+### 阶段 6：扫描控制（MFT 快扫、暂停/继续、扫描问题）
 
+补齐 B1：内核能力全部复用分支根部已有的东西，QML 侧只做接线。`parallel_scan.h` 本来就有 `ScanOptions::paused`（`const std::atomic<bool>*`，工作线程里的 `waitPause()` 与派发循环都看它），`scan_helper.h` 本来就有提权 helper 的管道协议，根部的 `main.cpp` 本来就有 `--scan-helper` 分派。
+
+- **暂停/继续**：`ScanService` 持有 `std::atomic<bool> m_pause`，`pause()`/`resume()` 通过 `stateChanged` 通知界面；`cancel()` 必须先把按住状态放开，否则被按住的扫描看不到取消。wrapper 的自检会先按住 400 ms，确认模型一项都没读到（`pause=verified`），再放开跑完交互检查——这条断言不靠人眼。
+- **快扫**：`ScanSettings` 增加 `scanMode`（0 自动 / 1 快扫 / 2 普通遍历），与原生 `ViewConfig` 的 `scanMode` 同义。`ScanService` 在盘符根目录且 `mft::eligible()` 成立时用 `helper::scan()` 走提权 helper；`Outcome::Fallback`（UAC 被拒、helper 失败）自动退回普通遍历并把原因记进 `fallbackReason`。helper 用 `ShellExecuteExW` 的 `runas` 启动**同一个 exe**，管道 `\\.\pipe\DiskView.Scan.<guid>` 传数据；`main.cpp` 在任何 GUI 之前拦截 `--scan-helper`，所以它是个短命的纯读取进程。UAC 的窗口句柄由 `QmlHost` 把 `QQuickWindow::winId()` 交给 `ScanService`。
+- **扫描问题**：`ScanResult` 的 `skippedList`（最多 32 条 `{path,error}`）、`skippedDirs`、`skippedLinks`、`unknownSizes` 被整理成 `issues`（`{path, code, message}`），错误文本用 `FormatMessageW` 取。`ScanIssuesDialog.qml` 在有问题时以「扫描问题」按钮出现。
+- **用新设置重扫**：设置对话框加「确定后立即重新扫描」勾选项，接受时调 `ScanService::rescan()`；顶栏的按钮在扫描结束后变成「重新扫描」。
+- 顺带修掉一个既有缺陷：扫描线程原先直接读 `m_settings` 的成员，而设置对话框可能在 GUI 线程上同时改它们。现在在 GUI 线程里读一次设置、按值拷进 `ScanOptions` 再交给线程。
+
+## 验证结果（阶段 3–5）
 - Qt SDK：`D:/tools/Qt/6.12.0/msvc2022_64`；host DLL：Qt 6.12.0.0；MSVC 19.51.36260。
 - CMake 配置与构建通过（`vcvars64.bat` + Ninja，MSVC 19.51.36260），产物 `qmlapp/build/bin/diskview-qml.exe`；早前的手工 `moc` + `cl` + `link` 链路已由 CMake 取代。QML 目标挂在分支根部 CMake 的 `DISKVIEW_BUILD_QML` 开关后面，关闭时不查找 Qt，原生目标不受影响。
 - `tests/check-prototype.ps1` 通过：递归 fixture 总和校验、C++ chart geometry tests、扫描设置单元测试（25 项断言）、部署独立运行包、两种模式截图、可见节点 hit-test、zoom/pan inverse transform、DiskViewModel 目录进入/返回、**真实扫描用例**（脚本先写出一棵小树，再 `--scan` 扫描它并验证命中/变换/进出目录）。treemap 截图 `build/qml-treemap-native.png` 约 40 KB（mode 0 命中 ID `8`）；sunburst 截图 `build/qml-sunburst-painted.png` 约 87 KB（mode 1 命中 ID `2`）；扫描截图 `build/qml-scan-real.png` 约 41 KB。检查跑的是部署后的副本，且已把 Qt SDK 从 PATH 里摘掉。
@@ -70,9 +79,18 @@
 - 发现 fixture 的 `WinShun/build/debug` 子项总和比声明多 1 MiB，已修复样机 JSON 并加入 `tests/check-fixture.cjs` 递归检查。截图中的未填充扇区代表叶文件没有下一层子项，并非绘制断裂。
 - HTML 交互演示位于 `../ra9fael.diskview/design/compact-layout-prototype.html`，提示文案已区分浏览器仿真与 Qt 实测，并提供 Qt 截图及 QML 源码链接。`node build/compact-prototype-check.cjs`：26 项全部通过。
 
+## 验证结果（B1）
+- `tests/check-prototype.ps1` 全绿：`qml-treemap-native.png`（46967 字节）、`qml-sunburst-painted.png`（95237 字节）、`qml-scan-real.png`（45083 字节，自检里带 `pause=verified`）、`qml-scan-paused.png`（状态行 `scan	state=paused	mode=ordinary	workers=0	excluded=0	partials=0	files=0	dirs=0	skipped=0`）、helper 分派（`--scan-helper 'Z:' 坏管道名` 退出码 2，且不落进 GUI 的用法输出）。
+- 新增 `tests/scan-tests.cpp`（`diskview-scan-tests.exe`，`scan tests: PASS`），三个用例：
+  - 按住的扫描一个字节都不读（引擎级，400 ms 后 `seen==0`），放开后文件 3 个、目录 3 个；
+  - `ScanService::startPaused()` → `paused()` 为真且模型 0 项 → `resume()` 后 `state=="done"`、文件 3、目录 3；
+  - 用 `CreateFileW` 独占句柄锁住一个目录，扫描读不到它 → `skippedDirs()==1`、`issues().size()==1`，路径指向被锁目录、错误文本非空。
+- 检查脚本的扫描一律读临时设置 `{"scanMode": 2}`、扫临时目录，因此自动化过程中不可能弹 UAC；快扫的 UAC 正常路径只能由人在盘符根目录上手动触发。
+- 界面目视核对（截图 `build/qml-scan-paused.png`、`build/qml-settings-mode.png`）：顶栏「扫描已暂停」+「继续」按钮，底栏「扫描已暂停 · 点「继续」让它接着扫」，设置对话框新增「扫描方式 = 普通遍历」一行与勾选的「确定后立即重新扫描」。
+
 ## 阻塞及下一步
 
-- 尚未接入 WinShun 协议、MFT helper、文件操作或 host plugin launcher；真实扫描目前只走 `scan.h` 的普通目录遍历。用户已决定 QML 版保留管理员快扫 helper，这属于 B1 待办。
+- 尚未接入 WinShun 协议、文件操作或 host plugin launcher；管理员快扫 helper 已接线，但 UAC 正常路径尚未由人手动跑过（需在固定 NTFS 卷的盘符根目录上触发）。
 - QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
-- 设置对话框与设置生效路径已实测，但设置**只影响下一次扫描**，界面没有「用新设置重扫」的入口；等 B1 的暂停/继续与扫描控制一起做。
+- B1 已完成并提交；下一步按 roadmap 是 B2（列表排序/过滤/分页、最大文件面板、历史与面包屑、键盘导航）。
