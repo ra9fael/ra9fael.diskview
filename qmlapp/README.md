@@ -1,14 +1,15 @@
 # Disk View QML 技术样机
 
-本目录是 `ra9fael.diskview` 的 **QML 分支（`qml`）** 里的 Qt Quick 应用目录，与原生版共存于同一棵仓库树：原生 `main.cpp`、`viewer.h`、`scan.h`、`tree.h` 仍在分支根部，QML 代码集中在 `qmlapp/`。当前阶段先验证 Qt Quick 的数据模型与双图表渲染；没有完整扫描器接入前，样机使用可重复的 JSON 快照。
+本目录是 `ra9fael.diskview` 的 **QML 分支（`qml`）** 里的 Qt Quick 应用目录，与原生版共存于同一棵仓库树：原生 `main.cpp`、`viewer.h`、`scan.h`、`tree.h` 仍在分支根部，QML 代码集中在 `qmlapp/`。当前阶段先验证 Qt Quick 的数据模型与双图表渲染；固定快照仍作为默认数据源，真实扫描已接入。
 
 ## 当前状态
 
 - 阶段 0：隔离目录与构建决策记录已建立。
 - 阶段 1：独立启动的 wrapper（`diskview-qml.exe`）已完成，可脱离 WinShun 宿主单独运行、自检与截图。
 - 阶段 2：真实扫描已接入（复用分支根部的 `scan.h`），固定快照仍作为默认数据源。
-- 阶段 3：虚拟化列表待实施。
-- 阶段 4：Scene Graph 方块图与圆盘图待实施（当前用 `QQuickPaintedItem` 绘制）。
+- 阶段 3：扫描设置（并发上限、介质策略、预览发布频率、排除路径）与扫描中的局部快照已实现。
+- 阶段 4：虚拟化列表待实施。
+- 阶段 5：Scene Graph 方块图与圆盘图待实施（当前用 `QQuickPaintedItem` 绘制）。
 
 ## 安全边界
 
@@ -49,10 +50,11 @@ wrapper 的命令行：
 | `--qml-dir <目录>` | 加载目录里的 `Main.qml`，用于原型试验 |
 | `--screenshot <路径>` | 延时后抓图并退出 |
 | `--delay <毫秒>` | 抓图前的等待时间，默认 1200 |
+| `--settings` | 启动即打开扫描设置对话框 |
 | `--self-test` | 跑命中/变换/导航自检并打印制表符分隔的报告 |
 | `--help` | 用法 |
 
-自检报告形如 `0<TAB>8<TAB>regions<TAB>transform<TAB>navigate<TAB>return<TAB>PASS`，末列 `PASS` 表示全部通过。
+自检报告形如 `0<TAB>8<TAB>regions<TAB>transform<TAB>navigate<TAB>return<TAB>PASS`，末列 `PASS` 表示全部通过。带 `--scan` 时还会多一行 `scan<TAB>workers=…<TAB>excluded=…<TAB>partials=…<TAB>files=…<TAB>dirs=…`。
 
 ## 真实扫描
 
@@ -62,9 +64,27 @@ wrapper 的命令行：
 - 扫描与界面解耦：进度、取消和最终结果都通过队列回到 GUI 线程。
 - 命令行 `--scan <路径>` 走的是同一条路径，`--self-test` 会额外验证扫描结果能进模型、能命中、能进目录再退回。
 
-## 两个环境坑
+## 扫描设置
+
+`ScanSettings` 把设置存在 `diskview-qml.json`（位置取 `WS_DATA_DIR`，否则 `QStandardPaths::AppDataLocation`）。文件名与原生插件的 `diskview.json` 刻意不同，因为两个插件要并存安装，各读各的。
+
+| 设置 | 取值 | 说明 |
+| --- | --- | --- |
+| 并发上限 | 自动 / 1 / 2 / 4 / 8 | 自动时由扫描器决定；填别的数会吸附到最近的一档 |
+| 介质策略 | 自动检测 / SSD / 机械硬盘 / 网络目录 | 传给扫描器的 `ScanOptions::Media` |
+| 预览发布 | 平衡（1.5s）/ 更少更新（5s） | 局部快照的发布间隔 |
+| 排除路径 | 路径列表 | 扫描时跳过的目录 |
+
+设置只影响下一次扫描，当前结果不变。对话框是草稿式的：改动先落在对话框的副本上，点「确定」才写回，点「取消」什么都不改。
+
+## 局部快照
+
+扫描过程中，扫描器每隔一段时间把当前已经读到的树发回来一次，界面随即刷新，不必等整个目录读完。底栏的来源标签会区分「扫描中」「已取消的扫描」「扫描失败」和「固定快照」；被取消的扫描仍会显示它已经读到的那部分，并标注「部分结果 · 扫描未完成，数据仍在变化」。
+
+## 三个环境坑
 
 - **必须用动态 CRT**：Qt 官方 DLL 是 `/MD` 编译的，静态 CRT（`/MT`）的 exe 与 Qt DLL 不共享堆，QML 类型注册跨堆写入时会触发堆断言。CMake 里固定为 `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL`。
 - **offscreen 平台没有字体**：offscreen 用的是 FreeType 字体库，不设 `QT_QPA_FONTDIR` 时所有文字都是空方框。wrapper 在 `QT_QPA_PLATFORM=offscreen`/`minimal` 时自动把 `QT_QPA_FONTDIR` 指向 `C:\Windows\Fonts`。
+- **offscreen 的通用字族名不可信**：那套 FreeType 字体库把通用的 "Sans Serif" 解析成了 Agency Gothic CT，拉丁字母的字形是错的（"QML" 显示成 "D4"）。wrapper 在 offscreen/minimal 下把应用字体显式定为 Segoe UI，并留 Microsoft YaHei 等中文字体兜底。原生（windows/D3D11）路径不受影响。
 
 详见 [迁移执行记录](design/migration-status.md)。

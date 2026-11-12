@@ -41,25 +41,38 @@
 
 ### 阶段 3：列表模型
 
-已完成固定 JSON 快照的 `DiskViewModel`：C++ 持有节点、稳定 ID、父子关系、大小格式化和当前目录；QML 使用 `QAbstractListModel` + `ListView`，截图已验证当前层显示 5 项。真实 `ScanResult` 尚未接入，当前仍是固定快照。
+已完成固定 JSON 快照的 `DiskViewModel`：C++ 持有节点、稳定 ID、父子关系、大小格式化和当前目录；QML 使用 `QAbstractListModel` + `ListView`，截图已验证当前层显示 5 项。随后阶段 2 的真实 `ScanResult` 也用同一套模型承载。
 
 ### 阶段 4：图表样机
 
 已把正式 `tree.h` 的 `treemapTiles` 与 `sunburstSlices` 接入 ChartItem；treemap/sunburst 共享缓存几何和命中坐标，支持滚轮缩放、拖动平移、悬停选择、双击目录进入。圆盘中心显示当前目录名，双击中心返回父级。绘制使用 `QQuickPaintedItem`/QPainterPath；先前 QSGGeometryNode 在当前 software/offscreen 环境没有呈现，故暂用可靠适配器，性能路径尚未验收。
 
+### 阶段 5：扫描设置与局部快照
+
+按「先补体验类功能」的决定，先把扫描设置与局部快照做掉，再回头补 MFT 快扫等内核能力。
+
+- `ScanSettings`（`qmlapp/src/ScanSettings.{h,cpp}`）把并发上限、介质策略、预览发布间隔、排除路径和上次扫描路径存在 `diskview-qml.json`。文件名与原生插件的 `diskview.json` 刻意分开：两个插件要并存安装，各读各的设置。并发值超出 `{0,1,2,4,8}` 时吸附到最近的一档，保证设置永远是扫描器认得的数。
+- `ScanSettingsDialog.qml` 是草稿式对话框：改动先落在对话框副本上，「确定」才写回设置并保存，「取消」什么都不改（第一版直接在控件变更时写内存设置，取消后残留改动，已改掉）。
+- `ScanService` 新增 `started`/`partialTree` 信号与 `partialCount`/`scanWorkers`/`excludedItems` 属性。扫描器每隔 `previewIntervalMs` 把已读到的树发回界面，长目录不必等读完才有画面。取消时仍把已读到的部分作为「部分结果」交给模型，并在底栏标注「扫描未完成，数据仍在变化」。
+- `QmlHost` 在设置载入后才设 context property，`initialScanPath` 因此可以在命令行没给路径时回落到上次扫描的路径；`--settings` 让 wrapper 启动即打开设置对话框，便于截图核对。
+- 状态标签区分「真实扫描 / 扫描中 / 已取消的扫描 / 扫描失败 / 固定快照」，失败时底栏直接显示错误文本。
+
 ## 本轮验证结果
 
 - Qt SDK：`D:/tools/Qt/6.12.0/msvc2022_64`；host DLL：Qt 6.12.0.0；MSVC 19.51.36260。
 - CMake 配置与构建通过（`vcvars64.bat` + Ninja，MSVC 19.51.36260），产物 `qmlapp/build/bin/diskview-qml.exe`；早前的手工 `moc` + `cl` + `link` 链路已由 CMake 取代。QML 目标挂在分支根部 CMake 的 `DISKVIEW_BUILD_QML` 开关后面，关闭时不查找 Qt，原生目标不受影响。
-- `tests/check-prototype.ps1` 通过：递归 fixture 总和校验、C++ chart geometry tests、部署独立运行包、两种模式截图、可见节点 hit-test、zoom/pan inverse transform、DiskViewModel 目录进入/返回、**真实扫描用例**（脚本先写出一棵小树，再 `--scan` 扫描它并验证命中/变换/进出目录）。treemap 截图 `build/qml-treemap-native.png` 约 40 KB（mode 0 命中 ID `8`）；sunburst 截图 `build/qml-sunburst-painted.png` 约 87 KB（mode 1 命中 ID `2`）；扫描截图 `build/qml-scan-real.png` 约 41 KB。检查跑的是部署后的副本，且已把 Qt SDK 从 PATH 里摘掉。
-- 两个环境坑及其结论：
+- `tests/check-prototype.ps1` 通过：递归 fixture 总和校验、C++ chart geometry tests、扫描设置单元测试（25 项断言）、部署独立运行包、两种模式截图、可见节点 hit-test、zoom/pan inverse transform、DiskViewModel 目录进入/返回、**真实扫描用例**（脚本先写出一棵小树，再 `--scan` 扫描它并验证命中/变换/进出目录）。treemap 截图 `build/qml-treemap-native.png` 约 40 KB（mode 0 命中 ID `8`）；sunburst 截图 `build/qml-sunburst-painted.png` 约 87 KB（mode 1 命中 ID `2`）；扫描截图 `build/qml-scan-real.png` 约 41 KB。检查跑的是部署后的副本，且已把 Qt SDK 从 PATH 里摘掉。
+- 设置确实作用到了扫描：把 `qmlapp/build` 加进排除路径后，自检报告的 `excluded=1`，文件数从 1816 降到 224；并发设 1 被采纳（默认自动时是 4）。扫描 `D:/` 用时 97 秒，报告 `partials=8`，局部快照确实在扫描中途发布过。
+- 三个环境坑及其结论：
   - **静态 CRT 会崩**：目标原先用 `/MTd`，与官方 `/MD` 的 Qt DLL 不共享堆，QML 类型注册的静态初始化跨堆写入时触发 `__acrt_first_block == header` 堆断言（进程卡在弹窗上）。改为 `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL` 后 Debug/Release 均正常。
   - **offscreen 没有字体**：offscreen 走 FreeType 字体库且 Qt 6 不再自带字体目录，不设 `QT_QPA_FONTDIR` 时所有字形都是空方框（截图只有 8 KB）。wrapper 在 offscreen/minimal 平台自动把 `QT_QPA_FONTDIR` 指向 `C:\Windows\Fonts`，字形恢复正常。
+  - **offscreen 的通用字族名不可信**：上面那条补上字体目录之后，拉丁字母仍然是错的（"QML" 显示成 "D4"、"GB" 显示成 "BB"，所有字母都偏大写）。用一支字体探针程序（`build/fontprobe/`，不入库）逐个渲染后确认：这套 FreeType 字体库把通用的 "Sans Serif" 解析成了 Agency Gothic CT。改成在 offscreen/minimal 下显式把应用字体定为 Segoe UI（中文回落到 Microsoft YaHei 等）后字形正确。原生 windows/D3D11 路径一直是对的，此坑只在无头验证路径上出现。
 - 发现 fixture 的 `WinShun/build/debug` 子项总和比声明多 1 MiB，已修复样机 JSON 并加入 `tests/check-fixture.cjs` 递归检查。截图中的未填充扇区代表叶文件没有下一层子项，并非绘制断裂。
 - HTML 交互演示位于 `../ra9fael.diskview/design/compact-layout-prototype.html`，提示文案已区分浏览器仿真与 Qt 实测，并提供 Qt 截图及 QML 源码链接。`node build/compact-prototype-check.cjs`：26 项全部通过。
 
 ## 阻塞及下一步
 
-- 尚未接入 WinShun 协议、MFT helper、文件操作或 host plugin launcher；真实扫描目前只走 `scan.h` 的普通目录遍历。
-- QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始。
+- 尚未接入 WinShun 协议、MFT helper、文件操作或 host plugin launcher；真实扫描目前只走 `scan.h` 的普通目录遍历。用户已决定 QML 版保留管理员快扫 helper，这属于 B1 待办。
+- QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
+- 设置对话框与设置生效路径已实测，但设置**只影响下一次扫描**，界面没有「用新设置重扫」的入口；等 B1 的暂停/继续与扫描控制一起做。
