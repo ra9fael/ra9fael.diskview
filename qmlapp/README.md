@@ -18,7 +18,15 @@
 
 ## 构建与验证
 
-- `qmlapp/CMakeLists.txt` 是独立的原型工程，尚未挂进根 `CMakeLists.txt`。
+构建必须在加载了 MSVC 环境的终端里进行，否则 CMake 的编译器探测会失败：
+
+```
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmake -S qmlapp -B qmlapp/build-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build qmlapp/build-cmake
+```
+
+- `qmlapp/CMakeLists.txt` 是独立的原型工程，尚未挂进分支根部的 `CMakeLists.txt`。
 - `qmlapp/tests/check-prototype.ps1` 覆盖 fixture 递归求和、chart geometry 单元测试、treemap/sunburst 双模式截图、可见节点命中与 zoom/pan 逆变换、模型目录进入/返回。
 
 详见 [迁移执行记录](design/migration-status.md)。
