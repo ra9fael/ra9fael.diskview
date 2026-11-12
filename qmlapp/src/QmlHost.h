@@ -38,6 +38,8 @@ public:
     bool openSettingsDialog(QString* error);
     // One line about the scan: what it is doing and what it found.
     QString scanStatusLine() const;
+    // The list panel has to sort, filter, rank and go back and forth again.
+    bool runListChecks(class DiskViewModel* model, QString* detail);
 
     static bool parseArgs(const QStringList& arguments, Options* options, QString* error);
     static QString usage();
@@ -54,4 +56,7 @@ private:
     // The pause held while the scan was waiting: the check is only true when
     // the paused scan really produced nothing.
     bool m_pauseVerified = false;
+    // What the QML engine complained about while loading; the reasons only
+    // arrive through its warnings signal.
+    QStringList m_loadWarnings;
 };

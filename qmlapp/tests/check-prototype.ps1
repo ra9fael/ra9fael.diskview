@@ -10,6 +10,7 @@ $exe = Join-Path $deploy 'diskview-qml.exe'
 $geometryExe = Join-Path $build 'tests\diskview-chart-geometry-tests.exe'
 $settingsExe = Join-Path $build 'tests\diskview-settings-tests.exe'
 $scanExe = Join-Path $build 'tests\diskview-scan-tests.exe'
+$modelExe = Join-Path $build 'tests\diskview-model-tests.exe'
 
 node (Join-Path $PSScriptRoot 'check-fixture.cjs')
 if ($LASTEXITCODE -ne 0) { throw 'Fixture totals are inconsistent' }
@@ -29,6 +30,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Chart geometry unit tests failed' }
 # and need Qt on the PATH.
 if (-not (Test-Path $settingsExe)) { throw "Missing settings tests: $settingsExe" }
 if (-not (Test-Path $scanExe)) { throw "Missing scan tests: $scanExe" }
+if (-not (Test-Path $modelExe)) { throw "Missing list model tests: $modelExe" }
 $savedPath = $env:PATH
 $env:PATH = "$sdk\bin;$env:PATH"
 Push-Location $build
@@ -37,12 +39,15 @@ try {
   $settingsExit = $LASTEXITCODE
   & $scanExe
   $scanExit = $LASTEXITCODE
+  & $modelExe
+  $modelExit = $LASTEXITCODE
 } finally {
   Pop-Location
   $env:PATH = $savedPath
 }
 if ($settingsExit -ne 0) { throw 'Scan settings unit tests failed' }
 if ($scanExit -ne 0) { throw 'Scan behaviour unit tests failed' }
+if ($modelExit -ne 0) { throw 'List model unit tests failed' }
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $qmlApp 'tools\deploy-wrapper.ps1') -QtPrefix $sdk -BuildDir $build -OutputDir $deploy
 if ($LASTEXITCODE -ne 0) { throw 'Deployment of the standalone launcher failed' }
@@ -73,7 +78,7 @@ foreach ($mode in 0,1) {
   $report = ($text -split "`r?`n" | Where-Object { $_ -match "`t" -and $_ -match '(PASS|FAIL)$' }) | Select-Object -First 1
   if (-not $report) { throw "No self-test report in mode ${mode}: $text" }
   $fields = $report -split "`t"
-  if ($fields.Count -ne 7 -or $fields[0] -ne "$mode" -or [string]::IsNullOrWhiteSpace($fields[1]) -or $fields[2] -ne 'regions' -or $fields[3] -ne 'transform' -or $fields[4] -ne 'navigate' -or $fields[5] -ne 'return' -or $fields[6] -ne 'PASS') { throw "Self-test failed in mode ${mode}: $report" }
+  if ($fields.Count -ne 8 -or $fields[0] -ne "$mode" -or [string]::IsNullOrWhiteSpace($fields[1]) -or $fields[2] -ne 'regions' -or $fields[3] -ne 'transform' -or $fields[4] -ne 'navigate' -or $fields[5] -ne 'return' -or $fields[6] -notmatch '^list=' -or $fields[7] -ne 'PASS') { throw "Self-test failed in mode ${mode}: $report" }
   if (-not (Test-Path $image)) { throw "Missing screenshot $image" }
   $item = Get-Item $image
   if ($item.Length -lt 20000) { throw "Screenshot seems blank: $name ($($item.Length) bytes)" }
@@ -100,7 +105,8 @@ if ($errors) { throw "Runtime error on the real scan: $($errors -join '; ')" }
 $report = ($text -split "`r?`n" | Where-Object { $_ -match "`t" -and $_ -match '(PASS|FAIL)$' }) | Select-Object -First 1
 if (-not $report) { throw "No self-test report on the real scan: $text" }
 $fields = $report -split "`t"
-if ($fields.Count -ne 7 -or $fields[6] -ne 'PASS') { throw "Self-test failed on the real scan: $report" }
+if ($fields.Count -ne 8 -or $fields[7] -ne 'PASS') { throw "Self-test failed on the real scan: $report" }
+if ($fields[6] -notmatch '^list=') { throw "The list panel checks did not run: $report" }
 if (-not (Test-Path $scanImage)) { throw "Missing screenshot $scanImage" }
 $item = Get-Item $scanImage
 if ($item.Length -lt 20000) { throw "Scan screenshot seems blank: $($item.Length) bytes" }

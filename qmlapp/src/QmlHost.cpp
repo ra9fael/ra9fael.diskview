@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QQmlContext>
+#include <QQmlError>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
@@ -38,9 +39,15 @@ bool QmlHost::load(QString* error)
         "initialScanPath",
         m_options.scanPath.isEmpty() ? m_scanSettings->lastPath() : m_options.scanPath);
 
+    // The engine only says why a load failed through this signal.
+    connect(&m_engine, &QQmlApplicationEngine::warnings, this, [this](const QList<QQmlError>& warnings) {
+        for (const QQmlError& warning : warnings) {
+            m_loadWarnings << warning.toString();
+        }
+    });
+
     if (m_options.qmlDir.isEmpty()) {
-        m_engine.loadFromModule("DiskViewPrototype", "Main");
-    } else {
+        m_engine.loadFromModule("DiskViewPrototype", "Main");    } else {
         const QString mainQml = QDir(m_options.qmlDir).filePath("Main.qml");
         if (!QFileInfo::exists(mainQml)) {
             *error = QStringLiteral("no Main.qml under %1").arg(m_options.qmlDir);
@@ -50,9 +57,14 @@ bool QmlHost::load(QString* error)
     }
 
     if (m_engine.rootObjects().isEmpty()) {
+        // The engine reports the reasons through its warnings signal, which is
+        // the only way to say why the module did not load.
         *error = m_options.qmlDir.isEmpty()
                      ? QStringLiteral("the built-in QML module failed to load")
                      : QStringLiteral("Main.qml failed to load from %1").arg(m_options.qmlDir);
+        if (!m_loadWarnings.isEmpty()) {
+            *error += QStringLiteral(": ") + m_loadWarnings.join(QStringLiteral("; "));
+        }
         return false;
     }
     // The elevated helper asks for its authorization with our window as the
@@ -125,6 +137,79 @@ QString QmlHost::scanStatusLine() const
     return line + QStringLiteral("\n");
 }
 
+bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
+{
+    if (!model) {
+        *detail = QStringLiteral("no-model");
+        return false;
+    }
+    const QString rootPath = model->currentPath();
+    const auto value = [&](int row, int role) {
+        return model->data(model->index(row, 0), role);
+    };
+
+    // The list starts with the biggest entries first.
+    bool sizeSorted = true;
+    for (int row = 1; row < model->rowCount(); ++row) {
+        if (value(row - 1, DiskViewModel::SizeRole).toULongLong() < value(row, DiskViewModel::SizeRole).toULongLong()) {
+            sizeSorted = false;
+            break;
+        }
+    }
+    // The name head sorts by name and flips the direction when it is clicked
+    // again.
+    model->toggleSort(DiskViewModel::SortByName);
+    bool nameSorted = true;
+    for (int row = 1; row < model->rowCount(); ++row) {
+        const QString previous = value(row - 1, DiskViewModel::NameRole).toString();
+        const QString current = value(row, DiskViewModel::NameRole).toString();
+        if (QString::compare(previous, current, Qt::CaseInsensitive) > 0) {
+            nameSorted = false;
+            break;
+        }
+    }
+    model->toggleSort(DiskViewModel::SortByName);
+    model->toggleSort(DiskViewModel::SortBySize);
+
+    // The filter looks at the whole path.
+    const int allRows = model->rowCount();
+    const QString sample = allRows > 0 ? value(0, DiskViewModel::NameRole).toString() : QString();
+    model->setFilter(sample);
+    const bool filterWorks = !sample.isEmpty() && model->rowCount() >= 1 && model->rowCount() <= allRows;
+    model->setFilter(QString());
+
+    // The largest mode lists the files of the subtree.
+    model->setListMode(DiskViewModel::ListLargest);
+    bool largest = model->rowCount() > 0;
+    for (int row = 0; row < model->rowCount() && largest; ++row) {
+        if (value(row, DiskViewModel::DirectoryRole).toBool()) largest = false;
+    }
+    model->setListMode(DiskViewModel::ListCurrent);
+
+    // The history goes back and forward again.
+    bool history = false;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        if (!value(row, DiskViewModel::DirectoryRole).toBool()) continue;
+        model->navigate(value(row, DiskViewModel::IdRole).toString());
+        const QString inside = model->currentPath();
+        model->goBack();
+        const bool back = model->currentPath() == rootPath;
+        model->goForward();
+        history = back && inside != rootPath && model->currentPath() == inside;
+        model->goBack();
+        break;
+    }
+
+    QStringList passed;
+    if (sizeSorted) passed << QStringLiteral("sort");
+    if (nameSorted) passed << QStringLiteral("name");
+    if (filterWorks) passed << QStringLiteral("filter");
+    if (largest) passed << QStringLiteral("largest");
+    if (history) passed << QStringLiteral("history");
+    *detail = passed.join(QLatin1Char(','));
+    return passed.size() == 5;
+}
+
 bool QmlHost::runSelfTest(QString* report)
 {
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
@@ -164,15 +249,19 @@ bool QmlHost::runSelfTest(QString* report)
     // A scan that could be held and then let go is part of what the scan mode
     // has to show.
     const bool paused = m_options.scanPath.isEmpty() || m_pauseVerified;
-    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused;
+    QString listDetail;
+    const bool list = runListChecks(model, &listDetail);
+    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list;
 
-    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\n")
+    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\n")
                   .arg(m_options.viewMode)
                   .arg(hit)
                   .arg(regions ? QStringLiteral("regions") : QStringLiteral("no-regions"))
                   .arg(transform ? QStringLiteral("transform") : QStringLiteral("bad-transform"))
                   .arg(navigate ? QStringLiteral("navigate") : QStringLiteral("bad-navigate"))
                   .arg(back ? QStringLiteral("return") : QStringLiteral("bad-return"))
+                  .arg(listDetail.isEmpty() ? QStringLiteral("bad-list")
+                                             : QStringLiteral("list=%1").arg(listDetail))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
     if (!m_options.scanPath.isEmpty() && m_scanService) {
         // What the scan made of the settings, and how much of it was published

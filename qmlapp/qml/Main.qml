@@ -18,6 +18,14 @@ ApplicationWindow {
         diskModel.loadFixture(fixtureSource)
     }
 
+    // The breadcrumb of the current folder, shortened when it gets long the
+    // way the native panel shortens it.
+    property var crumbs: {
+        const all = diskModel.breadcrumb
+        if (all.length <= 6) return all
+        return [all[0], { name: "…", id: "", current: false }].concat(all.slice(all.length - 4))
+    }
+
     Connections {
         target: scanService
         function onStarted(path) { diskModel.clear() }
@@ -29,6 +37,31 @@ ApplicationWindow {
 
     ScanSettingsDialog { id: settingsDialog; objectName: "scanSettingsDialog" }
     ScanIssuesDialog { id: issuesDialog; objectName: "scanIssuesDialog" }
+
+    Connections {
+        target: diskModel
+        function onSelectedChanged() {
+            if (diskModel.selectedRow >= 0) list.positionViewAtIndex(diskModel.selectedRow, ListView.Contain)
+        }
+        function onListChanged() {
+            // Navigating clears the filter in the model, so the field has to
+            // follow it.
+            if (filterField.text !== diskModel.filter) filterField.text = diskModel.filter
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+F"
+        onActivated: { filterField.forceActiveFocus(); filterField.selectAll() }
+    }
+    Shortcut {
+        sequence: "Ctrl+L"
+        onActivated: { pathField.forceActiveFocus(); pathField.selectAll() }
+    }
+    Shortcut { sequence: "F5"; onActivated: scanService.start(pathField.text.trim()) }
+    Shortcut { sequence: "Alt+Left"; onActivated: diskModel.goBack() }
+    Shortcut { sequence: "Alt+Right"; onActivated: diskModel.goForward() }
+    Shortcut { sequence: "Esc"; onActivated: { diskModel.filter = ""; filterField.text = "" } }
 
     ColumnLayout {
         anchors.fill: parent
@@ -93,8 +126,31 @@ ApplicationWindow {
         RowLayout {
             Layout.fillWidth: true; Layout.preferredHeight: 40; Layout.leftMargin: 12; Layout.rightMargin: 12
             spacing: 8
-            Button { text: "←"; enabled: diskModel.currentPath.indexOf("\\") >= 0; onClicked: diskModel.goUp() }
-            Label { Layout.fillWidth: true; text: diskModel.breadcrumbText; elide: Text.ElideMiddle; color: "#075db8" }
+            Button { text: "←"; Layout.minimumWidth: 30; enabled: diskModel.canGoBack; onClicked: diskModel.goBack() }
+            Button { text: "→"; Layout.minimumWidth: 30; enabled: diskModel.canGoForward; onClicked: diskModel.goForward() }
+            Button { text: "↑"; Layout.minimumWidth: 30; enabled: diskModel.canGoUp; onClicked: diskModel.goUp() }
+            Row {
+                id: crumbRow
+                spacing: 4
+                Repeater {
+                    model: window.crumbs
+                    delegate: Row {
+                        spacing: 4
+                        Label {
+                            text: modelData.name
+                            color: modelData.current ? "#202b3c" : "#075db8"
+                            font.weight: modelData.current ? Font.DemiBold : Font.Normal
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: if (modelData.id.length) diskModel.navigate(modelData.id)
+                            }
+                        }
+                        Label { text: "›"; color: "#9aa7b8"; visible: index < window.crumbs.length - 1 }
+                    }
+                }
+            }
+            Item { Layout.fillWidth: true }
             Label { text: diskModel.totalText; color: "#56657b" }
             Button { text: "1 层"; checkable: true; checked: true }
             Button { text: "2 层"; checkable: true }
@@ -122,20 +178,73 @@ ApplicationWindow {
                     anchors.fill: parent; spacing: 0
                     RowLayout {
                         Layout.fillWidth: true; Layout.preferredHeight: 38; Layout.leftMargin: 10; Layout.rightMargin: 10
-                        Label { text: "当前层"; font.weight: Font.DemiBold; color: "#202b3c" }
-                        Item { Layout.fillWidth: true }
-                        Label { text: diskModel.itemCount+" 项"; color: "#66758a"; font.pixelSize: 12 }
+                        spacing: 6
+                        Button {
+                            text: "当前层"
+                            flat: true
+                            onClicked: diskModel.listMode = 0
+                            background: Rectangle {
+                                radius: 3
+                                color: diskModel.listMode === 0 ? "#e3eefb" : "transparent"
+                                border.color: "#dce2e8"
+                            }
+                        }
+                        Button {
+                            text: "最大文件"
+                            flat: true
+                            onClicked: diskModel.listMode = 1
+                            background: Rectangle {
+                                radius: 3
+                                color: diskModel.listMode === 1 ? "#e3eefb" : "transparent"
+                                border.color: "#dce2e8"
+                            }
+                        }
+                        TextField {
+                            id: filterField
+                            Layout.fillWidth: true
+                            Layout.maximumWidth: 190
+                            placeholderText: "筛选列表，图表保持完整"
+                            selectByMouse: true
+                            onTextEdited: diskModel.filter = text
+                        }
+                        Label { text: diskModel.formatCount(diskModel.itemCount)+" 项"; color: "#66758a"; font.pixelSize: 12 }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#e5eaf0" }
                     RowLayout {
                         Layout.fillWidth: true; Layout.preferredHeight: 28; Layout.leftMargin: 12; Layout.rightMargin: 12
-                        Label { Layout.fillWidth: true; text: "名称"; color: "#66758a"; font.pixelSize: 11 }
-                        Label { text: "大小"; color: "#66758a"; font.pixelSize: 11; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: 92 }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "名称" + (diskModel.sortKey === 1 ? (diskModel.ascending ? " ↑" : " ↓") : "")
+                            color: "#66758a"; font.pixelSize: 11
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: diskModel.toggleSort(1)
+                            }
+                        }
+                        Label {
+                            text: "大小" + (diskModel.sortKey === 0 ? (diskModel.ascending ? " ↑" : " ↓") : "")
+                            color: "#66758a"; font.pixelSize: 11; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: 92
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: diskModel.toggleSort(0)
+                            }
+                        }
                         Label { text: "%"; color: "#66758a"; font.pixelSize: 11; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: 48 }
                     }
                     ListView {
                         id: list; Layout.fillWidth: true; Layout.fillHeight: true
                         model: diskModel; clip: true; reuseItems: true; boundsBehavior: Flickable.StopAtBounds
+                        focus: true
+                        keyNavigationEnabled: false
+                        Keys.onPressed: function(event) {
+                            if (event.key === Qt.Key_Up) { diskModel.moveSelection(-1); event.accepted = true }
+                            else if (event.key === Qt.Key_Down) { diskModel.moveSelection(1); event.accepted = true }
+                            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { diskModel.openSelected(); event.accepted = true }
+                            else if (event.key === Qt.Key_Right) { diskModel.openSelected(); event.accepted = true }
+                            else if (event.key === Qt.Key_Left || event.key === Qt.Key_Backspace) { diskModel.goUp(); event.accepted = true }
+                        }
                         delegate: ItemDelegate {
                             required property string nodeId
                             required property string name
@@ -156,20 +265,35 @@ ApplicationWindow {
                         }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#e5eaf0" }
-                    Label {
+                    RowLayout {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
-                        leftPadding: 12
-                        verticalAlignment: Text.AlignVCenter
-                        text: scanService.state === "error" ? "扫描失败：" + scanService.errorText
-                              : scanService.paused ? "扫描已暂停 · 点「继续」让它接着扫"
-                              : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
-                              : scanService.skippedDirs > 0 ? "扫描完成 · " + scanService.skippedDirs + " 个目录无法读取"
-                              : "C++ 模型 · ListView 虚拟化 · 真实扫描已接入"
-                        font.pixelSize: 11
-                        color: scanService.state === "error" ? "#b3261e"
-                              : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? "#a76414" : "#66758a"
-                        elide: Text.ElideRight
+                        Layout.leftMargin: 12
+                        Layout.rightMargin: 8
+                        spacing: 6
+                        Label {
+                            Layout.fillWidth: true
+                            verticalAlignment: Text.AlignVCenter
+                            text: scanService.state === "error" ? "扫描失败：" + scanService.errorText
+                                  : scanService.paused ? "扫描已暂停 · 点「继续」让它接着扫"
+                                  : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
+                                  : scanService.skippedDirs > 0 ? "扫描完成 · " + scanService.skippedDirs + " 个目录无法读取"
+                                  : "C++ 模型 · ListView 虚拟化 · 真实扫描已接入"
+                            font.pixelSize: 11
+                            color: scanService.state === "error" ? "#b3261e"
+                                  : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? "#a76414" : "#66758a"
+                            elide: Text.ElideRight
+                        }
+                        Button {
+                            text: "上一页"
+                            enabled: list.contentY > 0
+                            onClicked: list.contentY = Math.max(0, list.contentY - list.height)
+                        }
+                        Button {
+                            text: "下一页"
+                            enabled: list.contentHeight - list.height - list.contentY > 1
+                            onClicked: list.contentY = Math.min(list.contentHeight - list.height, list.contentY + list.height)
+                        }
                     }
                 }
             }
