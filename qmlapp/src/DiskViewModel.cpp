@@ -2,12 +2,14 @@
 
 #include "ExtensionColors.h"
 
+#include <QDateTime>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QUrl>
-#include <QDateTime>
 #include <algorithm>
+#include <new>
 
 namespace {
 // A file system hands out space in clusters, and the fixture JSON does not
@@ -59,7 +61,20 @@ bool fuzzyContains(const QString& haystack, const QString& needle)
 }
 }
 
-DiskViewModel::DiskViewModel(QObject* parent) : QAbstractListModel(parent) {}
+DiskViewModel::DiskViewModel(QObject* parent) : QAbstractListModel(parent)
+{
+    // The chart's payload follows the folder the window is in; one signal for
+    // both keeps the QML binding simple.
+    connect(this, &DiskViewModel::currentPathChanged, this, &DiskViewModel::chartChanged);
+}
+
+void DiskViewModel::setChartDepth(int depth)
+{
+    const int clamped = std::clamp(depth, 1, 5);
+    if (clamped == m_chartDepth) return;
+    m_chartDepth = clamped;
+    emit chartChanged();
+}
 
 bool DiskViewModel::loadFixture(const QString& fileName)
 {
@@ -71,43 +86,89 @@ bool DiskViewModel::loadFixture(const QString& fileName)
     return loadTree(doc.object().toVariantMap());
 }
 
-bool DiskViewModel::loadFlat(const FlatTree& tree, bool partial)
+void DiskViewModel::resetStorage()
 {
-    if (tree.isEmpty()) return false;
-    beginResetModel();
-    m_nodes.clear(); m_visible.clear(); m_history.clear(); m_expanded.clear();
-    m_selectedId.clear(); m_filter.clear();
+    m_tree = FlatTree {};
+    m_childStart.clear();
+    m_childCount.clear();
+    m_children.clear();
+    m_visible.clear();
+    m_history.clear();
+    m_expanded.clear();
+    m_selectedId.clear();
+    m_filter.clear();
+    m_current = -1;
     m_historyPos = -1;
-    // The flat arrays already hold the scan's own counts, so nothing has to be
-    // summed up afterwards.
-    m_nodes.resize(tree.count());
-    for (int i = 0; i < tree.count(); ++i) {
-        Entry& e = m_nodes[i];
-        e.name = tree.names.at(i);
-        e.size = static_cast<quint64>(tree.sizes.at(i));
-        e.alloc = static_cast<quint64>(std::max<qint64>(0, tree.allocs.at(i)));
-        if (e.alloc == 0) e.alloc = allocatedFor(e.size);
-        e.countFiles = tree.fileCounts.at(i);
-        e.countDirs = tree.dirCounts.at(i);
-        e.modified = static_cast<quint64>(std::max<qint64>(0, tree.modified.at(i)));
-        e.hasModified = (tree.flags.at(i) & 2) != 0;
-        e.attributes = tree.attributes.at(i);
-        e.directory = (tree.flags.at(i) & 1) != 0;
-        e.parent = tree.parents.at(i);
-        e.ext = e.directory ? QString() : diskviewqml::extensionOf(e.name);
-        if (e.parent >= 0) m_nodes[e.parent].children.push_back(i);
+}
+
+void DiskViewModel::buildChildren()
+{
+    const int count = nodeCount();
+    m_childStart.fill(-1, count);
+    m_childCount.fill(0, count);
+    m_children.clear();
+    if (count <= 1) return;
+    // One entry per node that is not the root: the children always sit after
+    // their parent, so a single forward pass is enough, and a parent pointer
+    // that points forward is a broken tree rather than something to follow.
+    for (int i = 1; i < count; ++i) {
+        int& parent = m_tree.parents[i];
+        if (parent < 0 || parent >= i) parent = -1;
+        else ++m_childCount[parent];
     }
-    // The paths are one string per node either way, but the walk is a simple
-    // loop over the parents instead of a recursion through variant maps.
-    for (int i = 0; i < m_nodes.size(); ++i) {
-        Entry& e = m_nodes[i];
-        const QString& base = e.parent >= 0 ? m_nodes[e.parent].path : QString();
-        e.path = base.isEmpty() ? e.name : (base.endsWith('\\') ? base + e.name : base + "\\" + e.name);
+    m_children.resize(count - 1);
+    int running = 0;
+    for (int i = 0; i < count; ++i) {
+        if (m_childCount.at(i) == 0) continue;
+        m_childStart[i] = running;
+        running += m_childCount.at(i);
     }
-    m_current = 0;
-    pushHistory(0);
-    rebuildRows();
+    QVector<int> cursor = m_childStart;
+    for (int i = 1; i < count; ++i) {
+        const int parent = m_tree.parents.at(i);
+        if (parent < 0) continue;
+        m_children[cursor[parent]++] = i;
+    }
+}
+
+bool DiskViewModel::loadFlat(FlatTree tree, bool partial)
+{
+    const int count = tree.names.size();
+    // The scan builds all of the arrays in one pass, so they agree with each
+    // other; a tree that does not would be read out of bounds later.
+    if (count == 0 || tree.parents.size() != count || tree.sizes.size() != count
+        || tree.allocs.size() != count || tree.modified.size() != count
+        || tree.attributes.size() != count || tree.fileCounts.size() != count
+        || tree.dirCounts.size() != count || tree.flags.size() != count) {
+        return false;
+    }
+    bool loaded = false;
+    beginResetModel();
+    try {
+        // The arrays are taken over as they are: the model keeps the scan's
+        // names, sizes and parents instead of copying them into per-node
+        // structs. That is one tree in memory, not two.
+        resetStorage();
+        m_tree = std::move(tree);
+        buildChildren();
+        m_current = count > 0 ? 0 : -1;
+        pushHistory(m_current);
+        rebuildRows();
+        loaded = true;
+    } catch (const std::bad_alloc&) {
+        // The host caps this process's memory. A tree that does not fit leaves
+        // an empty window and a reason, not a dead process.
+        resetStorage();
+    }
     endResetModel();
+    if (!loaded) {
+        setLoadError(QStringLiteral("内存不足，无法显示这棵树（%1 个节点）").arg(count));
+        emit currentPathChanged();
+        emit selectedChanged();
+        emit listChanged();
+        return false;
+    }
+    setLoadError(QString());
     setPartial(partial);
     emit currentPathChanged();
     emit selectedChanged();
@@ -118,16 +179,29 @@ bool DiskViewModel::loadFlat(const FlatTree& tree, bool partial)
 bool DiskViewModel::loadTree(const QVariantMap& tree, bool partial)
 {
     if (tree.isEmpty()) return false;
+    bool loaded = false;
     beginResetModel();
-    m_nodes.clear(); m_visible.clear(); m_history.clear(); m_expanded.clear();
-    m_selectedId.clear(); m_filter.clear();
-    m_historyPos = -1;
-    appendNode(tree, -1, {});
-    countItems();
-    m_current = 0;
-    pushHistory(0);
-    rebuildRows();
+    try {
+        resetStorage();
+        appendNode(tree, -1);
+        buildChildren();
+        countItems();
+        m_current = nodeCount() > 0 ? 0 : -1;
+        pushHistory(m_current);
+        rebuildRows();
+        loaded = true;
+    } catch (const std::bad_alloc&) {
+        resetStorage();
+    }
     endResetModel();
+    if (!loaded) {
+        setLoadError(QStringLiteral("内存不足，无法显示这棵树"));
+        emit currentPathChanged();
+        emit selectedChanged();
+        emit listChanged();
+        return false;
+    }
+    setLoadError(QString());
     setPartial(partial);
     emit currentPathChanged();
     emit selectedChanged();
@@ -138,15 +212,20 @@ bool DiskViewModel::loadTree(const QVariantMap& tree, bool partial)
 void DiskViewModel::clear()
 {
     beginResetModel();
-    m_nodes.clear(); m_visible.clear(); m_history.clear(); m_expanded.clear();
-    m_selectedId.clear(); m_filter.clear();
-    m_current = -1;
-    m_historyPos = -1;
+    resetStorage();
     endResetModel();
+    setLoadError(QString());
     setPartial(false);
     emit currentPathChanged();
     emit selectedChanged();
     emit listChanged();
+}
+
+void DiskViewModel::setLoadError(const QString& message)
+{
+    if (m_loadError == message) return;
+    m_loadError = message;
+    emit loadErrorChanged();
 }
 
 void DiskViewModel::setPartial(bool partial)
@@ -156,34 +235,29 @@ void DiskViewModel::setPartial(bool partial)
     emit partialChanged();
 }
 
-int DiskViewModel::appendNode(const QVariantMap& node, int parent, const QString& path)
+int DiskViewModel::appendNode(const QVariantMap& node, int parent)
 {
-    Entry e;
-    e.name = node.value("name").toString();
-    e.size = static_cast<quint64>(node.value("size").toDouble());
-    // The scan reports the space actually taken; the fixture does not.
-    if (node.contains("alloc")) e.alloc = static_cast<quint64>(node.value("alloc").toDouble());
-    if (e.alloc == 0) e.alloc = allocatedFor(e.size);
-    // The scan knows the entry counts; the fixture does not, and they are
-    // summed up afterwards.
-    e.countFiles = static_cast<quint64>(node.value("files").toDouble());
-    e.countDirs = static_cast<quint64>(node.value("dirs").toDouble());
+    const QString name = node.value("name").toString();
     const QString stamp = node.value("modified").toString();
-    if (!stamp.isEmpty()) {
-        e.modified = stamp.toULongLong(&e.hasModified);
-    }
-    e.attributes = node.value("attrs").toUInt();
-    e.directory = node.value("dir").toBool();
-    e.parent = parent;
-    e.ext = e.directory ? QString() : diskviewqml::extensionOf(e.name);
-    // A root that already ends with a separator keeps it, so the paths read
-    // the way they do in the file system.
-    e.path = path.isEmpty() ? e.name : (path.endsWith('\\') ? path + e.name : path + "\\" + e.name);
-    const int index = m_nodes.size();
-    m_nodes.push_back(e);
-    if (parent >= 0) m_nodes[parent].children.push_back(index);
+    bool hasModified = false;
+    const quint64 modified = stamp.isEmpty() ? 0 : stamp.toULongLong(&hasModified);
+    const int index = m_tree.names.size();
+    m_tree.names.append(name);
+    m_tree.parents.append(parent);
+    m_tree.sizes.append(static_cast<qint64>(node.value("size").toDouble()));
+    // The scan reports the space actually taken; the fixture does not, and
+    // allocOf() falls back to the cluster size in that case.
+    m_tree.allocs.append(node.contains("alloc") ? static_cast<qint64>(node.value("alloc").toDouble()) : 0);
+    m_tree.modified.append(static_cast<qint64>(modified));
+    m_tree.attributes.append(node.value("attrs").toUInt());
+    // The scan knows the entry counts; the fixture does not, and countItems()
+    // sums them up afterwards.
+    m_tree.fileCounts.append(static_cast<quint32>(node.value("files").toDouble()));
+    m_tree.dirCounts.append(static_cast<quint32>(node.value("dirs").toDouble()));
+    const bool directory = node.value("dir").toBool();
+    m_tree.flags.append(static_cast<quint8>((directory ? 1 : 0) | (hasModified ? 2 : 0)));
     for (const auto& child : node.value("children").toList()) {
-        if (child.canConvert<QVariantMap>()) appendNode(child.toMap(), index, e.path);
+        if (child.canConvert<QVariantMap>()) appendNode(child.toMap(), index);
     }
     return index;
 }
@@ -192,27 +266,27 @@ void DiskViewModel::countItems()
 {
     // Children always sit after their parent, so a backward walk has every
     // child's totals ready when the parent asks for them.
-    for (int i = m_nodes.size() - 1; i >= 0; --i) {
-        if (!m_nodes[i].directory) continue;
+    for (int i = nodeCount() - 1; i >= 0; --i) {
+        if (!directoryOf(i)) continue;
         quint64 files = 0, dirs = 0;
-        for (int child : m_nodes[i].children) {
-            if (m_nodes[child].directory) {
-                dirs += 1 + m_nodes[child].countDirs;
-                files += m_nodes[child].countFiles;
+        for (int position = 0; position < childCountOf(i); ++position) {
+            const int child = childAt(i, position);
+            if (directoryOf(child)) {
+                dirs += 1 + m_tree.dirCounts.at(child);
+                files += m_tree.fileCounts.at(child);
             } else {
                 ++files;
             }
         }
-        m_nodes[i].countFiles = files;
-        m_nodes[i].countDirs = dirs;
+        m_tree.fileCounts[i] = static_cast<quint32>(files);
+        m_tree.dirCounts[i] = static_cast<quint32>(dirs);
     }
 }
 
 int DiskViewModel::nodeItems() const
 {
     if (m_current < 0) return 0;
-    const Entry& e = m_nodes[m_current];
-    return static_cast<int>(e.countFiles + e.countDirs);
+    return static_cast<int>(m_tree.fileCounts.at(m_current) + m_tree.dirCounts.at(m_current));
 }
 
 QString DiskViewModel::formatSize(qint64 bytes) const
@@ -234,9 +308,9 @@ QString DiskViewModel::formatCount(qint64 count) const
     return digits;
 }
 
-QString DiskViewModel::currentName() const { return m_current >= 0 ? m_nodes[m_current].name : QString(); }
-QString DiskViewModel::currentPath() const { return m_current >= 0 ? m_nodes[m_current].path : QString(); }
-QString DiskViewModel::totalText() const { return m_current >= 0 ? formatSize(m_nodes[m_current].size) : QString(); }
+QString DiskViewModel::currentName() const { return m_current >= 0 ? nameOf(m_current) : QString(); }
+QString DiskViewModel::currentPath() const { return pathOf(m_current); }
+QString DiskViewModel::totalText() const { return m_current >= 0 ? formatSize(static_cast<qint64>(sizeOf(m_current))) : QString(); }
 QString DiskViewModel::breadcrumbText() const { return currentPath().replace('\\', "  /  "); }
 
 QVariantList DiskViewModel::breadcrumb() const
@@ -244,10 +318,9 @@ QVariantList DiskViewModel::breadcrumb() const
     QVariantList crumbs;
     if (m_current < 0) return crumbs;
     QVector<int> chain;
-    for (int index = m_current; index >= 0; index = m_nodes[index].parent) chain.push_back(index);
+    for (int index = m_current; index >= 0; index = parentOf(index)) chain.push_back(index);
     for (int i = chain.size() - 1; i >= 0; --i) {
-        const Entry& e = m_nodes[chain[i]];
-        crumbs.push_back(QVariantMap{{"name", e.name}, {"id", QString::number(chain[i] + 1)}, {"current", chain[i] == m_current}});
+        crumbs.push_back(QVariantMap{{"name", nameOf(chain[i])}, {"id", QString::number(chain[i] + 1)}, {"current", chain[i] == m_current}});
     }
     return crumbs;
 }
@@ -265,29 +338,31 @@ int DiskViewModel::rowCount(const QModelIndex& parent) const { return parent.isV
 QVariant DiskViewModel::data(const QModelIndex& index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_visible.size()) return {};
-    const int nodeIndex = m_visible[index.row()];
-    const Entry& e = m_nodes[nodeIndex];
-    const double parentTotal = e.parent >= 0 ? std::max<quint64>(1, m_nodes[e.parent].size) : 1;
+    const int nodeIndex = m_visible.at(index.row());
+    const int parent = parentOf(nodeIndex);
+    const quint64 size = sizeOf(nodeIndex);
+    const quint64 parentTotal = parent >= 0 ? std::max<quint64>(1, sizeOf(parent)) : 1;
+    const bool directory = directoryOf(nodeIndex);
     switch (role) {
     case IdRole: return QString::number(nodeIndex + 1);
-    case NameRole: return e.name;
-    case SizeRole: return QVariant::fromValue<qulonglong>(e.size);
-    case SizeTextRole: return formatSize(e.size);
-    case PercentRole: return 100.0 * e.size / parentTotal;
-    case DirectoryRole: return e.directory;
-    case PathRole: return e.path;
+    case NameRole: return nameOf(nodeIndex);
+    case SizeRole: return QVariant::fromValue<qulonglong>(size);
+    case SizeTextRole: return formatSize(static_cast<qint64>(size));
+    case PercentRole: return 100.0 * static_cast<double>(size) / static_cast<double>(parentTotal);
+    case DirectoryRole: return directory;
+    case PathRole: return pathOf(nodeIndex);
     case DepthRole: return depthOf(nodeIndex);
-    case HasChildrenRole: return e.directory && !e.children.isEmpty();
+    case HasChildrenRole: return directory && childCountOf(nodeIndex) > 0;
     case ExpandedRole: return m_expanded.contains(nodeIndex);
-    case AllocTextRole: return formatSize(e.alloc);
-    case ExtRole: return e.directory ? QString() : e.ext;
-    case ExtColorRole: return e.directory ? QStringLiteral("#8f9aa8") : diskviewqml::extensionColor(e.ext).name();
-    case ItemsRole: return static_cast<int>(e.countFiles + e.countDirs);
-    case FilesRole: return static_cast<int>(e.countFiles);
-    case DirsRole: return static_cast<int>(e.countDirs);
-    case ModifiedTextRole: return e.hasModified ? modifiedText(e.modified) : QStringLiteral("—");
-    case ModifiedValueRole: return QVariant::fromValue<qulonglong>(e.hasModified ? e.modified : 0);
-    case AttributesRole: return attributesText(e.attributes);
+    case AllocTextRole: return formatSize(static_cast<qint64>(allocOf(nodeIndex)));
+    case ExtRole: return extOf(nodeIndex);
+    case ExtColorRole: return directory ? QStringLiteral("#8f9aa8") : diskviewqml::extensionColor(extOf(nodeIndex)).name();
+    case ItemsRole: return static_cast<int>(m_tree.fileCounts.at(nodeIndex) + m_tree.dirCounts.at(nodeIndex));
+    case FilesRole: return static_cast<int>(m_tree.fileCounts.at(nodeIndex));
+    case DirsRole: return static_cast<int>(m_tree.dirCounts.at(nodeIndex));
+    case ModifiedTextRole: return hasModifiedOf(nodeIndex) ? modifiedText(modifiedOf(nodeIndex)) : QStringLiteral("—");
+    case ModifiedValueRole: return QVariant::fromValue<qulonglong>(hasModifiedOf(nodeIndex) ? modifiedOf(nodeIndex) : 0);
+    case AttributesRole: return attributesText(attributesOf(nodeIndex));
     default: return {};
     }
 }
@@ -311,32 +386,50 @@ int DiskViewModel::indexForId(const QString& id) const
     const int value = id.toInt(&ok);
     if (!ok) return -1;
     const int index = value - 1;
-    return index >= 0 && index < m_nodes.size() ? index : -1;
+    return index >= 0 && index < nodeCount() ? index : -1;
 }
 
 int DiskViewModel::depthOf(int index) const
 {
     int depth = 0;
-    for (int p = m_nodes[index].parent; p >= 0 && p != m_current; p = m_nodes[p].parent) ++depth;
+    for (int p = parentOf(index); p >= 0 && p != m_current; p = parentOf(p)) ++depth;
     return depth;
+}
+
+quint64 DiskViewModel::allocOf(int index) const
+{
+    const qint64 alloc = m_tree.allocs.at(index);
+    return alloc > 0 ? static_cast<quint64>(alloc) : allocatedFor(sizeOf(index));
+}
+
+QVector<int> DiskViewModel::childrenOf(int index) const
+{
+    const int count = childCountOf(index);
+    if (count <= 0) return {};
+    const int start = m_childStart.at(index);
+    return QVector<int>(m_children.constData() + start, m_children.constData() + start + count);
 }
 
 void DiskViewModel::sortEntries(QVector<int>& entries) const
 {
     std::stable_sort(entries.begin(), entries.end(), [&](int a, int b) {
-        const Entry& x = m_nodes[a];
-        const Entry& y = m_nodes[b];
         int order = 0;
         switch (m_sortKey) {
         case SortByName:
-            order = QString::compare(x.name, y.name, Qt::CaseInsensitive);
+            order = QString::compare(nameOf(a), nameOf(b), Qt::CaseInsensitive);
             break;
-        case SortByModified:
-            if (x.modified != y.modified) order = x.modified < y.modified ? -1 : 1;
+        case SortByModified: {
+            const quint64 x = hasModifiedOf(a) ? modifiedOf(a) : 0;
+            const quint64 y = hasModifiedOf(b) ? modifiedOf(b) : 0;
+            if (x != y) order = x < y ? -1 : 1;
             break;
-        default:
-            if (x.size != y.size) order = x.size < y.size ? -1 : 1;
+        }
+        default: {
+            const quint64 x = sizeOf(a);
+            const quint64 y = sizeOf(b);
+            if (x != y) order = x < y ? -1 : 1;
             break;
+        }
         }
         return m_ascending ? order < 0 : order > 0;
     });
@@ -344,32 +437,78 @@ void DiskViewModel::sortEntries(QVector<int>& entries) const
 
 void DiskViewModel::collectFiles(int node, QVector<int>& out) const
 {
+    if (node < 0 || node >= nodeCount()) return;
     QVector<int> stack{node};
     while (!stack.isEmpty()) {
         const int index = stack.takeLast();
-        for (int child : m_nodes[index].children) {
-            if (m_nodes[child].directory) stack.push_back(child);
+        const int count = childCountOf(index);
+        for (int position = 0; position < count; ++position) {
+            const int child = childAt(index, position);
+            if (directoryOf(child)) stack.push_back(child);
             else out.push_back(child);
         }
     }
 }
 
+QString DiskViewModel::pathOf(int index) const
+{
+    if (index < 0 || index >= nodeCount()) return {};
+    QVector<int> chain;
+    for (int i = index; i >= 0; i = parentOf(i)) chain.push_back(i);
+    QString path;
+    for (int i = chain.size() - 1; i >= 0; --i) {
+        const QString& name = nameOf(chain[i]);
+        if (path.isEmpty()) path = name;
+        else if (path.endsWith('\\')) path += name;
+        else path += '\\' + name;
+    }
+    return path;
+}
+
+QString DiskViewModel::extOf(int index) const
+{
+    return directoryOf(index) ? QString() : diskviewqml::extensionOf(nameOf(index));
+}
+
 QSet<int> DiskViewModel::filterKeepSet() const
 {
     QSet<int> keep;
-    if (m_filter.isEmpty()) return keep;
+    if (m_filter.isEmpty() || nodeCount() == 0) return keep;
     // A match keeps its whole path visible, otherwise the row would float
-    // without the folder it lives in.
-    for (int i = 0; i < m_nodes.size(); ++i) {
-        if (!m_nodes[i].path.contains(m_filter, Qt::CaseInsensitive)) continue;
-        for (int a = i; a >= 0; a = m_nodes[a].parent) keep.insert(a);
-    }
+    // without the folder it lives in. The path lives in one string that grows
+    // and shrinks with the walk, so the filter costs no memory of its own.
+    QString path;
+    filterWalk(0, path, keep);
     return keep;
+}
+
+void DiskViewModel::filterWalk(int index, QString& path, QSet<int>& keep) const
+{
+    const int mark = path.size();
+    if (!path.isEmpty() && !path.endsWith('\\')) path += '\\';
+    path += nameOf(index);
+    if (path.contains(m_filter, Qt::CaseInsensitive)) {
+        for (int a = index; a >= 0; a = parentOf(a)) keep.insert(a);
+    }
+    const int count = childCountOf(index);
+    for (int position = 0; position < count; ++position) filterWalk(childAt(index, position), path, keep);
+    path.truncate(mark);
+}
+
+void DiskViewModel::collectFilesFiltered(int node, QString& path, QVector<int>& out) const
+{
+    const int mark = path.size();
+    if (!path.isEmpty() && !path.endsWith('\\')) path += '\\';
+    path += nameOf(node);
+    if (!directoryOf(node) && path.contains(m_filter, Qt::CaseInsensitive)) out.push_back(node);
+    const int count = childCountOf(node);
+    for (int position = 0; position < count; ++position) collectFilesFiltered(childAt(node, position), path, out);
+    path.truncate(mark);
 }
 
 void DiskViewModel::appendTreeRows(int parent, const QSet<int>& keep, bool filtering)
 {
-    QVector<int> kids = m_nodes[parent].children;
+    QVector<int> kids = childrenOf(parent);
     sortEntries(kids);
     for (int child : kids) {
         if (filtering && !keep.contains(child)) continue;
@@ -377,26 +516,41 @@ void DiskViewModel::appendTreeRows(int parent, const QSet<int>& keep, bool filte
         // While a filter is on, the path to every match is shown open; the
         // folders the user opened by hand are left exactly as they were.
         const bool open = m_expanded.contains(child) || filtering;
-        if (m_nodes[child].directory && open) {
+        if (directoryOf(child) && open) {
             appendTreeRows(child, keep, filtering);
         }
     }
 }
 
-void DiskViewModel::rebuildRows()
+void DiskViewModel::applyRowChange()
 {
-    m_visible.clear();
+    // A reset, not a dataChanged: the rows themselves are different now, and
+    // the view has to ask for the new count. The row set of one folder is
+    // small, so the cost of a full reset is not worth finer signals here.
+    beginResetModel();
+    rebuildRows();
+    endResetModel();
+    emit listChanged();
+}
+
+void DiskViewModel::rebuildRows()
+{    m_visible.clear();
     if (m_current < 0) return;
     if (m_viewMode == FileView) {
         QVector<int> files;
-        collectFiles(m_wholeTree ? 0 : m_current, files);
-        if (!m_filter.isEmpty()) {
+        if (!m_filter.isEmpty() && !m_fuzzyMatch) {
+            // The walk carries the full path down instead of deriving it per
+            // file; it starts from the row above the view root so the filter
+            // still sees where the current folder sits.
+            QString path = pathOf(parentOf(m_current));
+            collectFilesFiltered(m_current, path, files);
+        } else {
+            collectFiles(m_wholeTree ? 0 : m_current, files);
+        }
+        if (!m_filter.isEmpty() && m_fuzzyMatch) {
+            // The whole-tree search only makes sense on the name.
             files.erase(std::remove_if(files.begin(), files.end(), [this](int i) {
-                const QString& name = m_nodes[i].name;
-                // The folder scope is narrow enough to keep matching the
-                // whole path, the whole-tree one only makes sense on the name.
-                return m_fuzzyMatch ? !fuzzyContains(name, m_filter)
-                                    : !m_nodes[i].path.contains(m_filter, Qt::CaseInsensitive);
+                return !fuzzyContains(nameOf(i), m_filter);
             }), files.end());
         }
         sortEntries(files);
@@ -409,6 +563,7 @@ void DiskViewModel::rebuildRows()
 
 void DiskViewModel::pushHistory(int index)
 {
+    if (index < 0) return;
     if (m_historyPos >= 0 && m_historyPos < m_history.size() && m_history[m_historyPos] == index) return;
     m_history.resize(m_historyPos + 1);
     m_history.push_back(index);
@@ -417,7 +572,7 @@ void DiskViewModel::pushHistory(int index)
 
 void DiskViewModel::resetAt(int index)
 {
-    if (index < 0 || index >= m_nodes.size()) return;
+    if (index < 0 || index >= nodeCount()) return;
     beginResetModel();
     m_current = index;
     // Navigating clears the filter, the way the native panel does.
@@ -433,14 +588,15 @@ void DiskViewModel::resetAt(int index)
 void DiskViewModel::navigate(const QString& id)
 {
     const int i = indexForId(id);
-    if (i >= 0 && m_nodes[i].directory) { pushHistory(i); resetAt(i); }
+    if (i >= 0 && directoryOf(i)) { pushHistory(i); resetAt(i); }
 }
 
 void DiskViewModel::goUp()
 {
     if (m_current <= 0) return;
     const int leaving = m_current;
-    const int parent = m_nodes[leaving].parent;
+    const int parent = parentOf(leaving);
+    if (parent < 0) return;
     pushHistory(parent);
     resetAt(parent);
     m_selectedId = QString::number(leaving + 1);
@@ -482,7 +638,7 @@ void DiskViewModel::moveSelection(int delta)
 void DiskViewModel::openSelected()
 {
     const int i = indexForId(m_selectedId);
-    if (i >= 0 && m_nodes[i].directory) { pushHistory(i); resetAt(i); }
+    if (i >= 0 && directoryOf(i)) { pushHistory(i); resetAt(i); }
 }
 
 void DiskViewModel::toggleSort(int key)
@@ -492,8 +648,7 @@ void DiskViewModel::toggleSort(int key)
     // in its own natural direction.
     m_ascending = (m_sortKey == wanted) ? !m_ascending : (wanted == SortByName);
     m_sortKey = wanted;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::setSortKey(int key)
@@ -501,24 +656,21 @@ void DiskViewModel::setSortKey(int key)
     const int wanted = (key == SortByName || key == SortByModified) ? key : SortBySize;
     if (m_sortKey == wanted) return;
     m_sortKey = wanted;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::setAscending(bool ascending)
 {
     if (m_ascending == ascending) return;
     m_ascending = ascending;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::setFilter(const QString& filter)
 {
     if (m_filter == filter) return;
     m_filter = filter;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::setViewMode(int mode)
@@ -526,34 +678,30 @@ void DiskViewModel::setViewMode(int mode)
     const int wanted = (mode == FileView) ? FileView : TreeView;
     if (m_viewMode == wanted) return;
     m_viewMode = wanted;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::setFuzzyMatch(bool enabled)
 {
     if (m_fuzzyMatch == enabled) return;
     m_fuzzyMatch = enabled;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::setWholeTree(bool enabled)
 {
     if (m_wholeTree == enabled) return;
     m_wholeTree = enabled;
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 void DiskViewModel::toggleExpanded(const QString& id)
 {
     const int i = indexForId(id);
-    if (i < 0 || !m_nodes[i].directory) return;
+    if (i < 0 || !directoryOf(i)) return;
     if (m_expanded.contains(i)) m_expanded.remove(i);
     else m_expanded.insert(i);
-    rebuildRows();
-    emit listChanged();
+    applyRowChange();
 }
 
 bool DiskViewModel::isExpanded(const QString& id) const
@@ -561,19 +709,66 @@ bool DiskViewModel::isExpanded(const QString& id) const
     return m_expanded.contains(indexForId(id));
 }
 
+bool DiskViewModel::expandNode(const QString& id)
+{
+    const int index = indexForId(id);
+    if (index < 0 || !directoryOf(index)) return false;
+    // The chart draws the subtree of the folder the window is in, so the node
+    // is nearly always inside it. When it is not, there is no row to open and
+    // entering the folder is the closest thing to what was asked for.
+    bool inside = false;
+    for (int a = index; a >= 0; a = parentOf(a)) {
+        if (a == m_current) { inside = true; break; }
+    }
+    // The chart only exports the largest few children at each level. A
+    // directory deeper in the tree may not be materialized, or may belong to
+    // a branch the chart omitted; don't silently substitute a navigation.
+    if (!inside) return false;
+    QVector<int> route;
+    for (int a = index; a != m_current; a = parentOf(a)) {
+        if (a < 0) return false;
+        route.push_back(a);
+    }
+    if (route.size() > m_chartDepth) return false;
+    std::reverse(route.begin(), route.end());
+    int parent = m_current;
+    for (int child : route) {
+        QVector<int> visible = childrenOf(parent);
+        constexpr int kChartChildren = 256;
+        if (visible.size() > kChartChildren) {
+            std::nth_element(visible.begin(), visible.begin() + kChartChildren, visible.end(),
+                             [this](int a, int b) { return sizeOf(a) > sizeOf(b); });
+            visible.resize(kChartChildren);
+        }
+        if (!visible.contains(child)) return false;
+        parent = child;
+    }
+    // Open every folder from the view root down to the node, the node itself
+    // included, so its contents show up as rows right below it.
+    for (int a = index; a >= 0; a = parentOf(a)) {
+        if (directoryOf(a)) m_expanded.insert(a);
+        if (a == m_current) break;
+    }
+    if (m_viewMode != TreeView) m_viewMode = TreeView;
+    m_selectedId = QString::number(index + 1);
+    applyRowChange();
+    emit selectedChanged();
+    return true;
+}
+
 bool DiskViewModel::revealNode(const QString& id)
 {
     const int index = indexForId(id);
     if (index < 0) return false;
-    const int parent = m_nodes[index].parent;
+    const int parent = parentOf(index);
     if (parent < 0) return false;
     // Every folder between the view root and the row has to be open for the
     // row to be visible at all.
-    for (int a = parent; a >= 0; a = m_nodes[a].parent) {
-        if (m_nodes[a].directory) m_expanded.insert(a);
+    for (int a = parent; a >= 0; a = parentOf(a)) {
+        if (directoryOf(a)) m_expanded.insert(a);
     }
     if (m_current != parent) { pushHistory(parent); resetAt(parent); }
-    if (m_viewMode != TreeView) { m_viewMode = TreeView; rebuildRows(); }
+    if (m_viewMode != TreeView) { m_viewMode = TreeView; applyRowChange(); }
     m_selectedId = QString::number(index + 1);
     emit listChanged();
     emit selectedChanged();
@@ -588,10 +783,9 @@ QVariantList DiskViewModel::extensions() const
         QVector<int> files;
         collectFiles(m_current, files);
         for (int index : files) {
-            const Entry& e = m_nodes[index];
-            Agg& agg = totals[e.ext];
-            agg.size += e.size;
-            agg.alloc += e.alloc;
+            Agg& agg = totals[extOf(index)];
+            agg.size += sizeOf(index);
+            agg.alloc += allocOf(index);
             agg.files += 1;
         }
     }
@@ -601,7 +795,7 @@ QVariantList DiskViewModel::extensions() const
     std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
         return a.second.size > b.second.size;
     });
-    const double total = m_current >= 0 ? std::max<quint64>(1, m_nodes[m_current].size) : 1;
+    const double total = m_current >= 0 ? static_cast<double>(std::max<quint64>(1, sizeOf(m_current))) : 1;
     QVariantList rows;
     for (const auto& row : sorted) {
         rows.push_back(QVariantMap{
@@ -621,19 +815,36 @@ QVariantList DiskViewModel::extensions() const
 QVariantMap DiskViewModel::chartTree() const
 {
     if (m_current < 0) return {};
-    // The chart draws at most a few levels, and only the largest children of a
-    // folder get a visible tile anyway; handing it the whole subtree copied
-    // hundreds of thousands of nodes on every navigation.
-    constexpr int kChartLevels = 3;
+    // The chart draws as many levels below the current folder as the window
+    // asked for. Only the largest children of a folder get a tile anyway, and
+    // the export is capped in total, so a folder with hundreds of big
+    // subfolders cannot turn a double click into a memory spike.
+    const int levels = std::clamp(m_chartDepth, 1, 5) + 1;
     constexpr int kChartChildren = 256;
+    const int kChartNodes = 2048 * std::clamp(m_chartDepth, 1, 5);
+    int budget = kChartNodes;
     const auto exportNode = [&](auto&& self, int index, int level) -> QVariantMap {
-        const Entry& e = m_nodes[index];
         QVariantList children;
-        if (level < kChartLevels) {
-            const int count = std::min<int>(e.children.size(), kChartChildren);
-            for (int i = 0; i < count; ++i) children.push_back(self(self, e.children[i], level + 1));
+        --budget;
+        if (level + 1 < levels && budget > 0) {
+            QVector<int> kids = childrenOf(index);
+            if (kids.size() > kChartChildren) {
+                // The chart sorts by size itself, so only the largest children
+                // are worth handing over.
+                std::nth_element(kids.begin(), kids.begin() + kChartChildren, kids.end(),
+                                 [this](int a, int b) { return sizeOf(a) > sizeOf(b); });
+                kids.resize(kChartChildren);
+            }
+            for (int child : kids) {
+                if (budget <= 0) break;
+                children.push_back(self(self, child, level + 1));
+            }
         }
-        return {{"id", QString::number(index + 1)}, {"name", e.name}, {"size", double(e.size)}, {"directory", e.directory}, {"children", children}};
+        return {{"id", QString::number(index + 1)}, {"name", nameOf(index)}, {"size", double(sizeOf(index))},
+                {"directory", directoryOf(index)}, {"children", children}};
     };
-    return exportNode(exportNode, m_current, 0);
+    QElapsedTimer timer;
+    timer.start();
+    QVariantMap map = exportNode(exportNode, m_current, 0);
+    return map;
 }

@@ -14,6 +14,11 @@
 // The tree behind the window: the folder table, the file list and the
 // breadcrumb all come from here. The table is a flattened tree, so expanding
 // a folder is a change of the visible rows, not of the model's contents.
+//
+// The scan's own flat arrays are the model's storage: there is no second copy
+// of the tree in a per-node struct. A drive holds millions of nodes and the
+// host caps this process's memory, so the difference between one copy and two
+// is what decides whether a scan can be shown at all.
 class DiskViewModel : public QAbstractListModel {
     Q_OBJECT
     QML_ELEMENT
@@ -22,13 +27,18 @@ class DiskViewModel : public QAbstractListModel {
     Q_PROPERTY(QString totalText READ totalText NOTIFY currentPathChanged)
     Q_PROPERTY(QString selectedId READ selectedId NOTIFY selectedChanged)
     Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectedChanged)
-    Q_PROPERTY(QVariantMap chartTree READ chartTree NOTIFY currentPathChanged)
+    Q_PROPERTY(QVariantMap chartTree READ chartTree NOTIFY chartChanged)
+    // How many levels below the current folder the chart is showing; it shares
+    // the chart's own depth, so the export stops where the drawing stops.
+    Q_PROPERTY(int chartDepth READ chartDepth WRITE setChartDepth NOTIFY chartChanged)
     Q_PROPERTY(QString breadcrumbText READ breadcrumbText NOTIFY currentPathChanged)
     Q_PROPERTY(QVariantList breadcrumb READ breadcrumb NOTIFY currentPathChanged)
     Q_PROPERTY(int itemCount READ itemCount NOTIFY listChanged)
     // The items the current folder holds, all levels down.
     Q_PROPERTY(int nodeItems READ nodeItems NOTIFY currentPathChanged)
     Q_PROPERTY(bool partial READ partial NOTIFY partialChanged)
+    // Why the last tree could not be shown; empty when it was.
+    Q_PROPERTY(QString loadError READ loadError NOTIFY loadErrorChanged)
     Q_PROPERTY(int sortKey READ sortKey WRITE setSortKey NOTIFY listChanged)
     Q_PROPERTY(bool ascending READ ascending WRITE setAscending NOTIFY listChanged)
     Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY listChanged)
@@ -56,17 +66,20 @@ public:
     explicit DiskViewModel(QObject* parent = nullptr);
     Q_INVOKABLE bool loadFixture(const QString& fileName);
     Q_INVOKABLE bool loadTree(const QVariantMap& tree, bool partial = false);
-    // The scan's own form: parallel arrays, no per-node maps to walk.
-    Q_INVOKABLE bool loadFlat(const FlatTree& tree, bool partial = false);
+    // The scan's own form: parallel arrays, taken over as they are.
+    Q_INVOKABLE bool loadFlat(FlatTree tree, bool partial = false);
     Q_INVOKABLE void clear();
     Q_INVOKABLE void setPartial(bool partial);
     bool partial() const { return m_partial; }
+    QString loadError() const { return m_loadError; }
     QString currentPath() const;
     QString currentName() const;
     QString totalText() const;
     QString selectedId() const { return m_selectedId; }
     int selectedRow() const;
     QVariantMap chartTree() const;
+    int chartDepth() const { return m_chartDepth; }
+    void setChartDepth(int depth);
     QString breadcrumbText() const;
     QVariantList breadcrumb() const;
     int itemCount() const { return m_visible.size(); }
@@ -100,6 +113,10 @@ public:
     Q_INVOKABLE void openSelected();
     Q_INVOKABLE void toggleSort(int key);
     Q_INVOKABLE bool revealNode(const QString& id);
+    // Opens the folder in place: every folder on the way to it and the folder
+    // itself are expanded in the list, and its row is selected. The window
+    // stays on the folder it is showing, unlike navigate().
+    Q_INVOKABLE bool expandNode(const QString& id);
     Q_INVOKABLE void toggleExpanded(const QString& id);
     Q_INVOKABLE bool isExpanded(const QString& id) const;
     // What the current folder is made of, biggest extension first.
@@ -112,32 +129,62 @@ signals:
     void selectedChanged();
     void partialChanged();
     void listChanged();
+    void loadErrorChanged();
+    // The chart's payload: a new folder, or another depth.
+    void chartChanged();
 
 private:
-    struct Entry {
-        QString name, path, ext;
-        quint64 size = 0, alloc = 0;
-        quint64 countFiles = 0, countDirs = 0;
-        quint64 modified = 0;   // FILETIME ticks; 0 when the source has no stamp
-        quint32 attributes = 0;
-        bool directory = false;
-        bool hasModified = false;
-        int parent = -1;
-        QVector<int> children;
-    };
-    int appendNode(const QVariantMap& node, int parent, const QString& path);
+    // ---- the tree, read straight out of the flat arrays ---------------------
+    int nodeCount() const { return m_tree.names.size(); }
+    const QString& nameOf(int index) const { return m_tree.names.at(index); }
+    int parentOf(int index) const { return m_tree.parents.at(index); }
+    bool directoryOf(int index) const { return (m_tree.flags.at(index) & 1) != 0; }
+    quint64 sizeOf(int index) const { return static_cast<quint64>(std::max<qint64>(0, m_tree.sizes.at(index))); }
+    // The space the file system really spends on it; the fixture carries no
+    // figure of its own, so the cluster size is assumed there.
+    quint64 allocOf(int index) const;
+    quint64 modifiedOf(int index) const { return static_cast<quint64>(std::max<qint64>(0, m_tree.modified.at(index))); }
+    bool hasModifiedOf(int index) const { return (m_tree.flags.at(index) & 2) != 0; }
+    quint32 attributesOf(int index) const { return m_tree.attributes.at(index); }
+    int childCountOf(int index) const { return m_childCount.at(index); }
+    int childAt(int index, int position) const { return m_children.at(m_childStart.at(index) + position); }
+    // A directory's children, in the order the scan wrote them.
+    QVector<int> childrenOf(int index) const;
+
+    // A directory's children are one contiguous range of m_children, so the
+    // model needs two ints per node instead of a vector per node.
+    void buildChildren();
+    // The subtree counts of a tree that came without them (the fixture).
     void countItems();
+    int appendNode(const QVariantMap& node, int parent);
+    void resetStorage();
+    void setLoadError(const QString& message);
     int indexForId(const QString& id) const;
     void resetAt(int index);
     void rebuildRows();
+    // The set of visible rows changed (a folder opened, the sort flipped, a
+    // letter went into the filter). The view only learns about that from the
+    // model's own reset, so this is the one way to rebuild the rows.
+    void applyRowChange();
     void appendTreeRows(int parent, const QSet<int>& keep, bool filtering);
     void collectFiles(int node, QVector<int>& out) const;
+    // The path is derived from the parents instead of kept per node: a real
+    // drive has millions of nodes, and one string each is a great deal of
+    // memory for something the window reads one row at a time.
+    QString pathOf(int index) const;
+    QString extOf(int index) const;
+    void filterWalk(int index, QString& path, QSet<int>& keep) const;
+    void collectFilesFiltered(int node, QString& path, QVector<int>& out) const;
     QSet<int> filterKeepSet() const;
     void sortEntries(QVector<int>& entries) const;
     void pushHistory(int index);
     int depthOf(int index) const;
 
-    QVector<Entry> m_nodes;
+    FlatTree m_tree;
+    QVector<int> m_childStart; // -1 for a node without children
+    QVector<int> m_childCount;
+    QVector<int> m_children;   // node indices; a directory's range is contiguous
+
     QVector<int> m_visible;
     QVector<int> m_history;
     QSet<int> m_expanded;
@@ -145,9 +192,11 @@ private:
     int m_historyPos = -1;
     QString m_selectedId;
     QString m_filter;
+    QString m_loadError;
     int m_sortKey = SortBySize;
     bool m_ascending = false;
     int m_viewMode = TreeView;
+    int m_chartDepth = 2;
     bool m_partial = false;
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;

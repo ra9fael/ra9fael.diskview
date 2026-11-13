@@ -155,6 +155,49 @@ void testExpanding()
     check(!model.isExpanded(QStringLiteral("2")), "the filter leaves the folder closed in the model");
 }
 
+void testExpandInPlace()
+{
+    // What the chart's double click does: open the folder where it is, instead
+    // of leaving the folder the window is showing.
+    DiskViewModel model;
+    model.loadTree(tree());
+    const QString root = model.currentPath();
+    check(model.expandNode(QStringLiteral("2")), "a folder can be opened in place");
+    check(model.currentPath() == root, "opening a folder in place stays in the same folder");
+    check(model.isExpanded(QStringLiteral("2")), "the folder itself is open");
+    check(model.rowCount() == 5, "the contents of the folder are rows now");
+    check(model.selectedId() == QStringLiteral("2"), "the opened folder is selected");
+    // A folder that is not a folder is not opened, and a node of another tree
+    // is refused instead of read out of bounds.
+    check(!model.expandNode(QStringLiteral("3")), "a file is not a folder to open");
+    check(!model.expandNode(QStringLiteral("99")), "an id that does not exist is refused");
+    // Opening a folder deeper down opens the folders on the way to it.
+    model.navigate(QStringLiteral("99"));
+    check(model.currentPath() == root, "an id that does not exist does not navigate");
+    model.setChartDepth(1);
+    check(model.expandNode(QStringLiteral("2")),
+          "a chart folder on the selected level remains a target");
+}
+
+void testChartDepth()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    check(model.chartDepth() == 2, "the chart starts at two levels");
+    check(!model.chartTree().isEmpty(), "the chart gets a tree");
+    model.setChartDepth(1);
+    const QVariantList top = model.chartTree().value("children").toList();
+    check(!top.isEmpty(), "one level still exports the top level");
+    check(top.first().toMap().value("children").toList().isEmpty(),
+          "one level stops at the top level");
+    model.setChartDepth(3);
+    const QVariantList deep = model.chartTree().value("children").toList();
+    check(!deep.isEmpty() && !deep.first().toMap().value("children").toList().isEmpty(),
+          "three levels export the grandchildren");
+    model.setChartDepth(99);
+    check(model.chartDepth() == 5, "the depth is clamped to the five levels the chart draws");
+}
+
 void testExtensions()
 {
     DiskViewModel model;
@@ -278,6 +321,8 @@ int main()
     testFileView();
     testFileSearch();
     testExpanding();
+    testExpandInPlace();
+    testChartDepth();
     testExtensions();
     testMetadataColumns();
     testFlatLoad();
