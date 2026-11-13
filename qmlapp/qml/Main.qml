@@ -46,8 +46,8 @@ ApplicationWindow {
     Connections {
         target: scanService
         function onStarted(path) { diskModel.clear() }
-        function onPartialTree(tree) { diskModel.loadTree(tree, true) }
-        function onFinished(tree) { diskModel.loadTree(tree, false) }
+        function onPartialTree(tree) { diskModel.loadFlat(tree, true) }
+        function onFinished(tree) { diskModel.loadFlat(tree, false) }
         function onCancelled() { diskModel.setPartial(true) }
         function onFailed(message) { diskModel.setPartial(true) }
     }

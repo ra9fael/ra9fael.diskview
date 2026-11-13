@@ -9,6 +9,8 @@
 #include <QVector>
 #include <QtQml/qqmlregistration.h>
 
+#include "ScanTree.h"
+
 // The tree behind the window: the folder table, the file list and the
 // breadcrumb all come from here. The table is a flattened tree, so expanding
 // a folder is a change of the visible rows, not of the model's contents.
@@ -54,6 +56,8 @@ public:
     explicit DiskViewModel(QObject* parent = nullptr);
     Q_INVOKABLE bool loadFixture(const QString& fileName);
     Q_INVOKABLE bool loadTree(const QVariantMap& tree, bool partial = false);
+    // The scan's own form: parallel arrays, no per-node maps to walk.
+    Q_INVOKABLE bool loadFlat(const FlatTree& tree, bool partial = false);
     Q_INVOKABLE void clear();
     Q_INVOKABLE void setPartial(bool partial);
     bool partial() const { return m_partial; }
@@ -111,7 +115,7 @@ signals:
 
 private:
     struct Entry {
-        QString id, name, path, ext;
+        QString name, path, ext;
         quint64 size = 0, alloc = 0;
         quint64 countFiles = 0, countDirs = 0;
         quint64 modified = 0;   // FILETIME ticks; 0 when the source has no stamp

@@ -179,6 +179,47 @@ QVariantMap syntheticTree(int nodes)
     return QVariantMap{{"name", QStringLiteral("bench")}, {"size", total},
                        {"dir", true}, {"children", top}};
 }
+
+// The same shape as a flat tree, so the two loaders can be compared.
+FlatTree flattenSynthetic(int nodes)
+{
+    const int topCount = 12;
+    const int perTop = std::max(1, (nodes - 1) / topCount);
+    FlatTree out;
+    out.names.append(QStringLiteral("bench"));
+    out.parents.append(-1);
+    out.sizes.append(0);
+    out.allocs.append(0);
+    out.modified.append(0);
+    out.attributes.append(0x10);
+    out.fileCounts.append(perTop * topCount);
+    out.dirCounts.append(topCount);
+    out.flags.append(1);
+    for (int t = 0; t < topCount; ++t) {
+        const int topIndex = out.names.size();
+        out.names.append(QStringLiteral("dir_%1").arg(t));
+        out.parents.append(0);
+        out.sizes.append(perTop * 4096);
+        out.allocs.append(perTop * 4096);
+        out.modified.append(0);
+        out.attributes.append(0x10);
+        out.fileCounts.append(perTop);
+        out.dirCounts.append(0);
+        out.flags.append(1);
+        for (int i = 0; i < perTop; ++i) {
+            out.names.append(QStringLiteral("f_%1_%2.dat").arg(t).arg(i));
+            out.parents.append(topIndex);
+            out.sizes.append(4096);
+            out.allocs.append(4096);
+            out.modified.append(0);
+            out.attributes.append(0x20);
+            out.fileCounts.append(0);
+            out.dirCounts.append(0);
+            out.flags.append(0);
+        }
+    }
+    return out;
+}
 } // namespace
 
 bool QmlHost::runChartBenchmark(int nodes, QString* report)
@@ -191,12 +232,17 @@ bool QmlHost::runChartBenchmark(int nodes, QString* report)
         return false;
     }
     const QVariantMap tree = syntheticTree(nodes);
+    const FlatTree flat = flattenSynthetic(nodes);
     const int runs = 3;
     QElapsedTimer timer;
 
     timer.start();
-    for (int i = 0; i < runs; ++i) model->loadTree(tree);
+    for (int i = 0; i < runs; ++i) model->loadFlat(flat, false);
     const double modelMs = double(timer.nsecsElapsed()) / 1e6 / runs;
+
+    timer.restart();
+    for (int i = 0; i < runs; ++i) model->loadTree(tree);
+    const double nestedMs = double(timer.nsecsElapsed()) / 1e6 / runs;
 
     timer.restart();
     QVariantMap payload;
@@ -210,8 +256,9 @@ bool QmlHost::runChartBenchmark(int nodes, QString* report)
     chart->setDepth(2);
     const QString deep = chart->benchmark(runs);
     chart->setDepth(1);
-    *report = QStringLiteral("bench model=%1ms export=%2ms\nbench depth=1 %3\nbench depth=2 %4\n")
+    *report = QStringLiteral("bench model flat=%1ms nested=%2ms export=%3ms\nbench depth=1 %4\nbench depth=2 %5\n")
                   .arg(modelMs, 0, 'f', 1)
+                  .arg(nestedMs, 0, 'f', 1)
                   .arg(exportMs, 0, 'f', 1)
                   .arg(shallow, deep);
     return true;

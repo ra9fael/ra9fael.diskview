@@ -6,6 +6,8 @@
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
+#include "ScanTree.h"
+
 #include <atomic>
 #include <thread>
 
@@ -103,9 +105,9 @@ signals:
     // it is showing: it belongs to another scan.
     void started(const QString& path);
     // The complete result.
-    void finished(const QVariantMap& tree);
+    void finished(const FlatTree& tree);
     // An immutable snapshot of the scan so far, while the scan runs.
-    void partialTree(const QVariantMap& tree);
+    void partialTree(const FlatTree& tree);
     void failed(const QString& message);
     void cancelled();
 

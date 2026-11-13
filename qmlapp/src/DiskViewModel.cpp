@@ -71,6 +71,50 @@ bool DiskViewModel::loadFixture(const QString& fileName)
     return loadTree(doc.object().toVariantMap());
 }
 
+bool DiskViewModel::loadFlat(const FlatTree& tree, bool partial)
+{
+    if (tree.isEmpty()) return false;
+    beginResetModel();
+    m_nodes.clear(); m_visible.clear(); m_history.clear(); m_expanded.clear();
+    m_selectedId.clear(); m_filter.clear();
+    m_historyPos = -1;
+    // The flat arrays already hold the scan's own counts, so nothing has to be
+    // summed up afterwards.
+    m_nodes.resize(tree.count());
+    for (int i = 0; i < tree.count(); ++i) {
+        Entry& e = m_nodes[i];
+        e.name = tree.names.at(i);
+        e.size = static_cast<quint64>(tree.sizes.at(i));
+        e.alloc = static_cast<quint64>(std::max<qint64>(0, tree.allocs.at(i)));
+        if (e.alloc == 0) e.alloc = allocatedFor(e.size);
+        e.countFiles = tree.fileCounts.at(i);
+        e.countDirs = tree.dirCounts.at(i);
+        e.modified = static_cast<quint64>(std::max<qint64>(0, tree.modified.at(i)));
+        e.hasModified = (tree.flags.at(i) & 2) != 0;
+        e.attributes = tree.attributes.at(i);
+        e.directory = (tree.flags.at(i) & 1) != 0;
+        e.parent = tree.parents.at(i);
+        e.ext = e.directory ? QString() : diskviewqml::extensionOf(e.name);
+        if (e.parent >= 0) m_nodes[e.parent].children.push_back(i);
+    }
+    // The paths are one string per node either way, but the walk is a simple
+    // loop over the parents instead of a recursion through variant maps.
+    for (int i = 0; i < m_nodes.size(); ++i) {
+        Entry& e = m_nodes[i];
+        const QString& base = e.parent >= 0 ? m_nodes[e.parent].path : QString();
+        e.path = base.isEmpty() ? e.name : (base.endsWith('\\') ? base + e.name : base + "\\" + e.name);
+    }
+    m_current = 0;
+    pushHistory(0);
+    rebuildRows();
+    endResetModel();
+    setPartial(partial);
+    emit currentPathChanged();
+    emit selectedChanged();
+    emit listChanged();
+    return true;
+}
+
 bool DiskViewModel::loadTree(const QVariantMap& tree, bool partial)
 {
     if (tree.isEmpty()) return false;
@@ -135,7 +179,6 @@ int DiskViewModel::appendNode(const QVariantMap& node, int parent, const QString
     // A root that already ends with a separator keeps it, so the paths read
     // the way they do in the file system.
     e.path = path.isEmpty() ? e.name : (path.endsWith('\\') ? path + e.name : path + "\\" + e.name);
-    e.id = QString::number(m_nodes.size() + 1);
     const int index = m_nodes.size();
     m_nodes.push_back(e);
     if (parent >= 0) m_nodes[parent].children.push_back(index);
@@ -204,7 +247,7 @@ QVariantList DiskViewModel::breadcrumb() const
     for (int index = m_current; index >= 0; index = m_nodes[index].parent) chain.push_back(index);
     for (int i = chain.size() - 1; i >= 0; --i) {
         const Entry& e = m_nodes[chain[i]];
-        crumbs.push_back(QVariantMap{{"name", e.name}, {"id", e.id}, {"current", chain[i] == m_current}});
+        crumbs.push_back(QVariantMap{{"name", e.name}, {"id", QString::number(chain[i] + 1)}, {"current", chain[i] == m_current}});
     }
     return crumbs;
 }
@@ -212,7 +255,7 @@ QVariantList DiskViewModel::breadcrumb() const
 int DiskViewModel::selectedRow() const
 {
     for (int row = 0; row < m_visible.size(); ++row) {
-        if (m_nodes[m_visible[row]].id == m_selectedId) return row;
+        if (QString::number(m_visible[row] + 1) == m_selectedId) return row;
     }
     return -1;
 }
@@ -226,7 +269,7 @@ QVariant DiskViewModel::data(const QModelIndex& index, int role) const
     const Entry& e = m_nodes[nodeIndex];
     const double parentTotal = e.parent >= 0 ? std::max<quint64>(1, m_nodes[e.parent].size) : 1;
     switch (role) {
-    case IdRole: return e.id;
+    case IdRole: return QString::number(nodeIndex + 1);
     case NameRole: return e.name;
     case SizeRole: return QVariant::fromValue<qulonglong>(e.size);
     case SizeTextRole: return formatSize(e.size);
@@ -262,8 +305,13 @@ QHash<int, QByteArray> DiskViewModel::roleNames() const
 
 int DiskViewModel::indexForId(const QString& id) const
 {
-    for (int i = 0; i < m_nodes.size(); ++i) if (m_nodes[i].id == id) return i;
-    return -1;
+    // The id is the position plus one, so it is read instead of matched
+    // against a stored string: one less allocation per node.
+    bool ok = false;
+    const int value = id.toInt(&ok);
+    if (!ok) return -1;
+    const int index = value - 1;
+    return index >= 0 && index < m_nodes.size() ? index : -1;
 }
 
 int DiskViewModel::depthOf(int index) const
@@ -395,7 +443,7 @@ void DiskViewModel::goUp()
     const int parent = m_nodes[leaving].parent;
     pushHistory(parent);
     resetAt(parent);
-    m_selectedId = m_nodes[leaving].id;
+    m_selectedId = QString::number(leaving + 1);
     emit selectedChanged();
 }
 
@@ -427,7 +475,7 @@ void DiskViewModel::moveSelection(int delta)
     if (row < 0) row = delta > 0 ? -1 : m_visible.size();
     row += delta;
     row = std::clamp<int>(row, 0, m_visible.size() - 1);
-    m_selectedId = m_nodes[m_visible[row]].id;
+    m_selectedId = QString::number(m_visible[row] + 1);
     emit selectedChanged();
 }
 
@@ -526,7 +574,7 @@ bool DiskViewModel::revealNode(const QString& id)
     }
     if (m_current != parent) { pushHistory(parent); resetAt(parent); }
     if (m_viewMode != TreeView) { m_viewMode = TreeView; rebuildRows(); }
-    m_selectedId = m_nodes[index].id;
+    m_selectedId = QString::number(index + 1);
     emit listChanged();
     emit selectedChanged();
     return true;
@@ -585,7 +633,7 @@ QVariantMap DiskViewModel::chartTree() const
             const int count = std::min<int>(e.children.size(), kChartChildren);
             for (int i = 0; i < count; ++i) children.push_back(self(self, e.children[i], level + 1));
         }
-        return {{"id", e.id}, {"name", e.name}, {"size", double(e.size)}, {"directory", e.directory}, {"children", children}};
+        return {{"id", QString::number(index + 1)}, {"name", e.name}, {"size", double(e.size)}, {"directory", e.directory}, {"children", children}};
     };
     return exportNode(exportNode, m_current, 0);
 }

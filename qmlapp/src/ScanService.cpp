@@ -54,6 +54,34 @@ QVariantMap toVariantTree(const diskview::Node& node)
     };
 }
 
+// The same tree without the per-node maps: one pass, appending to parallel
+// arrays. The node's children are appended right after it, so the parent
+// index is all that is needed to rebuild the shape.
+void flattenInto(const diskview::Node& node, int parent, FlatTree& out)
+{
+    const int index = out.names.size();
+    out.names.append(QString::fromStdWString(node.name));
+    out.parents.append(parent);
+    out.sizes.append(static_cast<qint64>(node.logical));
+    out.allocs.append(static_cast<qint64>(node.allocApprox));
+    out.modified.append(static_cast<qint64>(node.modified));
+    out.attributes.append(node.attributes);
+    out.fileCounts.append(node.files);
+    out.dirCounts.append(node.dirs);
+    out.flags.append(static_cast<quint8>((node.dir ? 1 : 0) | (node.modified ? 2 : 0)));
+    for (const diskview::Node& child : node.children) {
+        flattenInto(child, index, out);
+    }
+}
+
+FlatTree flatten(const diskview::Node& root)
+{
+    FlatTree out;
+    out.names.reserve(4096);
+    flattenInto(root, -1, out);
+    return out;
+}
+
 } // namespace
 
 ScanService::ScanService(QObject* parent) : QObject(parent) {}
@@ -165,7 +193,7 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
             if (m_cancel.load()) {
                 return;
             }
-            QVariantMap tree = toVariantTree(partial->root);
+            FlatTree tree = flatten(partial->root);
             QMetaObject::invokeMethod(
                 this,
                 [this, tree] {
@@ -224,9 +252,9 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                 {"message", systemErrorMessage(skipped.error)},
             });
         }
-        QVariantMap tree;
+        FlatTree tree;
         if (!scanFailed) {
-            tree = toVariantTree(result.root);
+            tree = flatten(result.root);
         }
         QMetaObject::invokeMethod(
             this,

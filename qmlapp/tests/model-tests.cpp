@@ -197,6 +197,47 @@ void testMetadataColumns()
           "a scan without attributes shows a dash");
 }
 
+void testFlatLoad()
+{
+    // The same shape as tree(), in the scan's own form. The counts come in
+    // with the arrays instead of being summed up afterwards.
+    FlatTree flat;
+    const auto add = [&flat](const QString& name, int parent, qint64 size, bool dir,
+                             quint32 files, quint32 dirs, quint8 flags) {
+        flat.names.append(name);
+        flat.parents.append(parent);
+        flat.sizes.append(size);
+        flat.allocs.append(size);
+        flat.modified.append(0);
+        flat.attributes.append(dir ? 0x10u : 0x20u);
+        flat.fileCounts.append(files);
+        flat.dirCounts.append(dirs);
+        flat.flags.append(flags);
+        return flat.names.size() - 1;
+    };
+    add(QStringLiteral("D:\\"), -1, 1000000, true, 4, 2, 1);
+    const int zulu = add(QStringLiteral("zulu"), 0, 600000, true, 2, 0, 1);
+    add(QStringLiteral("big.bin"), zulu, 500000, false, 0, 0, 0);
+    add(QStringLiteral("tiny.txt"), zulu, 1000, false, 0, 0, 0);
+    const int alpha = add(QStringLiteral("alpha"), 0, 300000, true, 1, 0, 1);
+    add(QStringLiteral("mid.dat"), alpha, 300000, false, 0, 0, 0);
+    add(QStringLiteral("mike.bin"), 0, 100000, false, 0, 0, 0);
+
+    DiskViewModel model;
+    check(model.loadFlat(flat, false), "the flat tree is loaded");
+    check(model.rowCount() == 3, "the flat tree shows its top level");
+    check(namesOf(model) == QStringList({"zulu", "alpha", "mike.bin"}),
+          "the flat tree keeps the order of the payload");
+    check(model.currentPath() == QStringLiteral("D:\\"), "the root path is built");
+    check(model.nodeItems() == 6, "the item counts come from the payload");
+    model.navigate(QStringLiteral("2"));
+    check(model.currentPath().endsWith(QStringLiteral("zulu")), "navigation works on a flat tree");
+    check(model.data(model.index(0, 0), DiskViewModel::PathRole).toString()
+              == QStringLiteral("D:\\zulu\\big.bin"), "the child paths are built");
+    model.setViewMode(DiskViewModel::FileView);
+    check(model.rowCount() == 2, "the file view reads the flat tree too");
+}
+
 void testHistory()
 {
     DiskViewModel model;
@@ -239,6 +280,7 @@ int main()
     testExpanding();
     testExtensions();
     testMetadataColumns();
+    testFlatLoad();
     testHistory();
     testFormatting();
     if (g_failures == 0) {
