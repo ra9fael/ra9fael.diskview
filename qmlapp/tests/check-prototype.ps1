@@ -107,8 +107,8 @@ if (-not $report) { throw "No self-test report on the real scan: $text" }
 $fields = $report -split "`t"
 if ($fields.Count -ne 10 -or $fields[9] -ne 'PASS') { throw "Self-test failed on the real scan: $report" }
 if ($fields[7] -ne 'drag') { throw "The chart kept dragging after the button was released: $report" }
-if ($fields[8] -notmatch '^chart=double') { throw "The chart did not enter a folder on a double click: $report" }
-if ($fields[6] -notmatch '^list=') { throw "The list panel checks did not run: $report" }
+if ($fields[8] -notmatch '^chart=expand') { throw "The chart did not open the folder in the list on a double click: $report" }
+if ($fields[6] -notmatch '^list=' -or $fields[6] -notmatch 'view') { throw "The list panel checks did not run, or the view did not follow the model: $report" }
 if (-not (Test-Path $scanImage)) { throw "Missing screenshot $scanImage" }
 $item = Get-Item $scanImage
 if ($item.Length -lt 20000) { throw "Scan screenshot seems blank: $($item.Length) bytes" }

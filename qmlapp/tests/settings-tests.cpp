@@ -57,6 +57,7 @@ void testDefaults()
     check(settings.workers() == 0, "a fresh settings object keeps the automatic worker count");
     check(settings.media() == 0, "a fresh settings object keeps the automatic media");
     check(settings.previewIntervalMs() == 1500, "a fresh settings object keeps the 1.5 s preview interval");
+    check(settings.chartDepth() == 2, "a fresh settings object keeps the two-level chart");
     check(settings.excludedPaths().isEmpty(), "a fresh settings object excludes nothing");
 }
 
@@ -84,6 +85,14 @@ void testClamping()
     check(settings.workers() == 2 || settings.workers() == 4, "a worker count between the offered ones is snapped");
     settings.setWorkers(0);
     check(settings.workers() == 0, "zero keeps the automatic worker count");
+
+    // The chart draws between one and five levels of blocks.
+    settings.setChartDepth(0);
+    check(settings.chartDepth() == 1, "the chart depth is clamped to one level");
+    settings.setChartDepth(9);
+    check(settings.chartDepth() == 5, "the chart depth is clamped to five levels");
+    settings.setChartDepth(3);
+    check(settings.chartDepth() == 3, "a depth the chart draws is kept");
 }
 
 void testExcludedPaths()
@@ -121,6 +130,7 @@ void testRoundTrip()
                             QStringLiteral("nonsense")});
     saved.setFuzzyMatch(true);
     saved.setWholeTree(true);
+    saved.setChartDepth(4);
     check(saved.save(), "the settings are written");
 
     ScanSettings back;
@@ -134,6 +144,7 @@ void testRoundTrip()
     check(back.hiddenColumns().size() == 2, "only the known columns are kept");
     check(back.fuzzyMatch(), "the fuzzy mode survives the round trip");
     check(back.wholeTree(), "the whole-tree scope survives the round trip");
+    check(back.chartDepth() == 4, "the chart depth survives the round trip");
 
     // A hand-edited file with nonsense in it must not be trusted.
     const QString file = QDir(dir.path()).filePath(QStringLiteral("diskview-qml.json"));

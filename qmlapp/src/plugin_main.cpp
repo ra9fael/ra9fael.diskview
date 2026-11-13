@@ -46,6 +46,24 @@ int defaultViewMode(const winshun::Json& settings)
     return v.isString() && v.toString() == "sunburst" ? 1 : 0;
 }
 
+// The scan settings the host owns (its own settings page shows and persists
+// them), as the raw values the window applies.
+QVariantMap hostScanSettings(const winshun::Json& settings)
+{
+    QVariantMap map;
+    const auto put = [&map, &settings](const char* key) {
+        const winshun::Json& value = settings[key];
+        if (value.isString() && !value.toString().empty()) {
+            map.insert(QString::fromLatin1(key), QString::fromStdString(value.toString()));
+        }
+    };
+    put("scanMode");
+    put("workers");
+    put("media");
+    put("preview");
+    return map;
+}
+
 // One row per fixed drive, then the row that opens the window; the same shape
 // the native plugin answers with, so the launcher looks unchanged.
 winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
@@ -90,9 +108,10 @@ winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
         .withCopy(usage)
         .withAutocomplete(usage)
         .withPreview(usage + "\n\n"
-                     + tr(zh, "方块图与圆盘共用同一份扫描数据，单击选中、双击进入文件夹；"
-                              "顶部面包屑和退格键返回上级。",
-                              "The treemap and the sunburst share one scan; click to select, double-click to enter; "
+                     + tr(zh, "方块图与圆盘共用同一份扫描数据，单击选中；双击方块在左侧文件树里展开该文件夹，"
+                              "双击列表里的文件夹才进入；顶部面包屑和退格键返回上级。",
+                              "The treemap and the sunburst share one scan; click to select, "
+                              "double-click a tile to expand that folder in the list, and double-click a row to enter; "
                               "the breadcrumb and Backspace go up."));
     items.push_back(std::move(help));
     return items;
@@ -121,6 +140,8 @@ QmlHost* g_host = nullptr;
 QWindow* g_window = nullptr;
 // Where the host's QtQuick modules live: WinShun's qml folder.
 QStringList g_importPaths;
+// The host's settings, kept for windows that are opened later.
+QVariantMap g_hostSettings;
 std::atomic<bool> g_closing{false};
 
 struct WindowRequest {
@@ -157,6 +178,7 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     options.viewMode = request.viewMode;
     options.scanPath = request.path;
     options.importPaths = g_importPaths;
+    options.hostSettings = g_hostSettings;
     auto* host = new QmlHost(options);
     if (!host->load(error)) {
         delete host;
@@ -180,7 +202,12 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     });
     g_host = host;
     g_window = rootWindow;
+    // Do not raise a new window when the action came from the WinShun
+    // launcher: the foreground hand-off has to be granted while we still own
+    // it, before the worker thread asks ShellExecuteEx to show the prompt.
     rootWindow->show();
+    rootWindow->raise();
+    rootWindow->requestActivate();
     // The host asked for this path: start reading it now, the way the
     // standalone launcher does with --scan.
     if (!request.path.isEmpty()) {
@@ -202,6 +229,20 @@ public:
     {
         if (!dataDir().empty()) {
             qputenv("WS_DATA_DIR", QByteArray::fromStdString(dataDir()));
+        }
+        g_hostSettings = hostScanSettings(settings());
+    }
+
+    void settingsChanged(const winshun::Json& s) override
+    {
+        // The host edited its settings page: apply them to the open window at
+        // once, and remember them for the next one.
+        g_hostSettings = hostScanSettings(s);
+        if (g_host) {
+            const QVariantMap map = g_hostSettings;
+            QMetaObject::invokeMethod(qGuiApp, [map] {
+                if (g_host) g_host->applyHostSettings(map);
+            }, Qt::BlockingQueuedConnection);
         }
     }
 

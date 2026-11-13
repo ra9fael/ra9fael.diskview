@@ -94,7 +94,9 @@ void ChartItem::setCenterLabel(const QString& label)
 }
 void ChartItem::setDepth(int depth)
 {
-    depth=std::clamp(depth,1,2);
+    // One level keeps the folders whole and clickable; five is as deep as the
+    // tiles stay readable, the way WizTree stops.
+    depth=std::clamp(depth,1,5);
     if(m_depth==depth)return;
     m_depth=depth;
     emit depthChanged();

@@ -34,11 +34,18 @@ public:
         // folder, plus whatever the package added. Empty leaves the engine to
         // its defaults.
         QStringList importPaths;
+        // The scan settings the host owns (its plugin settings page), as the
+        // raw manifest values. Non-empty means the window must not edit them:
+        // the host is where they are changed.
+        QVariantMap hostSettings;
     };
 
     explicit QmlHost(Options options, QObject* parent = nullptr);
 
     bool load(QString* error);
+    // Puts the host's plugin settings onto the scan settings, in memory: the
+    // host persists them, this only applies them.
+    void applyHostSettings(const QVariantMap& settings);
     // The window the QML module created, for a host that has to manage it.
     QQuickWindow* window() const;
     ScanService* scanner() const { return m_scanService; }

@@ -45,9 +45,17 @@ bool QmlHost::load(QString* error)
     m_scanService = new ScanService(this);
     m_scanSettings = new ScanSettings(this);
     m_scanSettings->load();
+    // The host's own settings, when this window is a plugin: they win over the
+    // local file for the keys the host shows.
+    if (!m_options.hostSettings.isEmpty()) {
+        applyHostSettings(m_options.hostSettings);
+    }
     m_scanService->setSettings(m_scanSettings);
     m_engine.rootContext()->setContextProperty("scanService", m_scanService);
     m_engine.rootContext()->setContextProperty("scanSettings", m_scanSettings);
+    // The settings page in WinShun owns these; the window's dialog must not
+    // offer a second place to change them.
+    m_engine.rootContext()->setContextProperty("hostManagedSettings", !m_options.hostSettings.isEmpty());
     // The window asks the host for the two things QML cannot do on its own.
     m_engine.rootContext()->setContextProperty("appHost", this);
     // A path given on the command line wins over the remembered one.
@@ -89,6 +97,20 @@ bool QmlHost::load(QString* error)
         m_scanService->setOwnerWindow(window->winId());
     }
     return true;
+}
+
+void QmlHost::applyHostSettings(const QVariantMap& settings)
+{
+    if (!m_scanSettings) return;
+    const QString mode = settings.value(QStringLiteral("scanMode")).toString();
+    m_scanSettings->setScanMode(mode == QLatin1String("fast") ? 1 : mode == QLatin1String("ordinary") ? 2 : 0);
+    const QString workers = settings.value(QStringLiteral("workers")).toString();
+    m_scanSettings->setWorkers(workers == QLatin1String("auto") ? 0 : workers.toInt());
+    const QString media = settings.value(QStringLiteral("media")).toString();
+    m_scanSettings->setMedia(media == QLatin1String("ssd") ? 1 : media == QLatin1String("hdd") ? 2
+                             : media == QLatin1String("network") ? 3 : 0);
+    const QString preview = settings.value(QStringLiteral("preview")).toString();
+    m_scanSettings->setPreviewIntervalMs(preview == QLatin1String("less") ? 5000 : 1500);
 }
 
 QQuickWindow* QmlHost::window() const
@@ -310,16 +332,24 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
     model->toggleSort(DiskViewModel::SortByName);
     model->toggleSort(DiskViewModel::SortBySize);
 
-    // The filter looks at the whole path; every row that survives has to
-    // contain it.
+    // The filter looks at the whole path; a row survives when it contains the
+    // text or when it is a folder on the way to one that does.
     const int allRows = model->rowCount();
     const QString sample = allRows > 0 ? value(0, DiskViewModel::NameRole).toString() : QString();
     model->setFilter(sample);
-    bool filterWorks = !sample.isEmpty() && model->rowCount() >= 1;
-    for (int row = 0; row < model->rowCount() && filterWorks; ++row) {
-        if (!value(row, DiskViewModel::PathRole).toString().contains(sample, Qt::CaseInsensitive)) {
-            filterWorks = false;
+    const int filteredRows = model->rowCount();
+    QSet<QString> onTheWay;
+    for (int row = 0; row < filteredRows; ++row) {
+        const QString path = value(row, DiskViewModel::PathRole).toString();
+        if (!path.contains(sample, Qt::CaseInsensitive)) continue;
+        for (int cut = path.indexOf(QLatin1Char('\\'), 3); cut > 0; cut = path.indexOf(QLatin1Char('\\'), cut + 1)) {
+            onTheWay.insert(path.left(cut));
         }
+    }
+    bool filterWorks = !sample.isEmpty() && filteredRows >= 1;
+    for (int row = 0; row < filteredRows && filterWorks; ++row) {
+        const QString path = value(row, DiskViewModel::PathRole).toString();
+        if (!path.contains(sample, Qt::CaseInsensitive) && !onTheWay.contains(path)) filterWorks = false;
     }
     model->setFilter(QString());
 
@@ -446,29 +476,87 @@ bool QmlHost::runSelfTest(QString* report)
             QMouseEvent done(QEvent::MouseButtonRelease, point, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
             QCoreApplication::sendEvent(chart, &done);
         };
+        // A double click on a folder tile opens that folder in the list; it
+        // does not leave the folder the window is showing, so the chart and
+        // the list keep describing the same place.
         const QPointF folder = chart->firstDirectoryCenter();
-        const QString rootPath = model->currentPath();
+        const QString chartRoot = model->currentPath();
         if (!folder.isNull()) {
+            const int rowsBefore = model->rowCount();
             doubleClick(folder);
-            if (model->currentPath() != rootPath) chartDetail << QStringLiteral("double");
+            QCoreApplication::processEvents();
+            const bool stayed = model->currentPath() == chartRoot;
+            const bool opened = model->rowCount() > rowsBefore;
+            if (stayed && opened) chartDetail << QStringLiteral("expand");
         }
-        // The centre of the sunburst returns to the parent. The check runs in
-        // the sunburst mode only; the treemap has no hole.
-        if (m_options.viewMode == 1 && model->currentPath() != rootPath) {
-            const QPointF center(chart->width() / 2, chart->height() / 2);
-            doubleClick(center);
-            if (model->currentPath() == rootPath) chartDetail << QStringLiteral("center");
+        // The centre of the sunburst returns to the parent, so the check goes
+        // into a folder first. It runs in the sunburst mode only; the treemap
+        // has no hole.
+        if (m_options.viewMode == 1) {
+            for (int row = 0; row < model->rowCount(); ++row) {
+                const QModelIndex index = model->index(row, 0);
+                if (!model->data(index, DiskViewModel::DirectoryRole).toBool()) continue;
+                model->navigate(model->data(index, DiskViewModel::IdRole).toString());
+                if (model->currentPath() == rootPath) continue;
+                const QPointF center(chart->width() / 2, chart->height() / 2);
+                doubleClick(center);
+                if (model->currentPath() == rootPath) chartDetail << QStringLiteral("center");
+                break;
+            }
         }
         while (model->canGoBack()) model->goBack();
     }
-    const bool chartOk = chartDetail.contains(QStringLiteral("double"))
+    // The list has to follow the model: opening a folder changes the rows the
+    // model reports, and the view only learns about it through the model's own
+    // reset. Reading the view's count back is the only way to see that.
+    // The interaction checks above open folders; the checks below expect the
+    // top level closed, so close whatever was opened.
+    const auto collapseAll = [model] {
+        QVector<QString> opened;
+        for (int row = 0; row < model->rowCount(); ++row) {
+            const QModelIndex index = model->index(row, 0);
+            if (model->data(index, DiskViewModel::ExpandedRole).toBool()) {
+                opened.push_back(model->data(index, DiskViewModel::IdRole).toString());
+            }
+        }
+        for (const QString& id : opened) model->toggleExpanded(id);
+    };
+    collapseAll();
+    // The list has to follow the model: opening a folder changes the rows the
+    // model reports, and the view only learns about it through the model's own
+    // reset. Reading the view's count back is the only way to see that.
+    bool viewFollows = false;
+    if (auto* view = window->findChild<QObject*>(QStringLiteral("diskViewList"))) {
+        for (int row = 0; row < model->rowCount(); ++row) {
+            const QModelIndex index = model->index(row, 0);
+            if (!model->data(index, DiskViewModel::DirectoryRole).toBool()) continue;
+            if (!model->data(index, DiskViewModel::HasChildrenRole).toBool()) continue;
+            if (model->data(index, DiskViewModel::ExpandedRole).toBool()) continue;
+            const QString id = model->data(index, DiskViewModel::IdRole).toString();
+            const int before = model->rowCount();
+            model->toggleExpanded(id);
+            QCoreApplication::processEvents();
+            viewFollows = model->rowCount() > before
+                          && view->property("count").toInt() == model->rowCount();
+            model->toggleExpanded(id);
+            QCoreApplication::processEvents();
+            break;
+        }
+    }
+    const bool chartOk = chartDetail.contains(QStringLiteral("expand"))
                          && (m_options.viewMode != 1 || chartDetail.contains(QStringLiteral("center")));
     // A scan that could be held and then let go is part of what the scan mode
     // has to show.
     const bool paused = m_options.scanPath.isEmpty() || m_pauseVerified;
     QString listDetail;
     const bool list = runListChecks(model, &listDetail);
-    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list && drag && chartOk;
+    if (viewFollows) {
+        if (!listDetail.isEmpty()) listDetail += QStringLiteral(",view");
+    } else {
+        listDetail = listDetail.isEmpty() ? QStringLiteral("bad-view") : listDetail + QStringLiteral(",bad-view");
+    }
+    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list
+                      && viewFollows && drag && chartOk;
 
 
     *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\n")

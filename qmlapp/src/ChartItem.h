@@ -39,8 +39,7 @@ public:
     // How many levels the chart draws: 1 leaves the folders as whole tiles,
     // which is what makes them clickable at all.
     int depth() const { return m_depth; }
-    void setDepth(int depth);
-    // The extension the legend picked. Every other file is dimmed, so one
+    void setDepth(int depth);    // The extension the legend picked. Every other file is dimmed, so one
     // colour can be followed across the whole chart.
     QString highlightExtension() const { return m_highlightExtension; }
     void setHighlightExtension(const QString& extension);

@@ -19,6 +19,9 @@ ApplicationWindow {
         // The file view remembers how it was left.
         diskModel.fuzzyMatch = scanSettings.fuzzyMatch
         diskModel.wholeTree = scanSettings.wholeTree
+        // ... and so does the chart: how many levels of blocks it draws.
+        diskModel.chartDepth = scanSettings.chartDepth
+        chart.depth = scanSettings.chartDepth
     }
 
     // Which table columns are on. The name column is not listed: it never
@@ -223,6 +226,25 @@ ApplicationWindow {
                     onActivated: { diskModel.fuzzyMatch = (index === 1); scanSettings.fuzzyMatch = diskModel.fuzzyMatch; scanSettings.save() }
                 }
                 Item { Layout.fillWidth: true }
+                // How deep the chart nests its blocks, the way WizTree lets
+                // the picture be as flat or as detailed as the user wants.
+                Label { text: "层级"; font.pixelSize: 11; color: "#56657b" }
+                ComboBox {
+                    id: depthBox
+                    implicitWidth: 86
+                    implicitHeight: 26
+                    font.pixelSize: 11
+                    model: ["1", "2", "3", "4", "5"]
+                    currentIndex: chart.depth - 1
+                    ToolTip.visible: hovered
+                    ToolTip.text: "方块里再画几层文件夹"
+                    onActivated: {
+                        chart.depth = index + 1
+                        diskModel.chartDepth = index + 1
+                        scanSettings.chartDepth = index + 1
+                        scanSettings.save()
+                    }
+                }
                 ToolButton {
                     text: "列"
                     implicitWidth: 34
@@ -343,6 +365,7 @@ ApplicationWindow {
                         }
                         ListView {
                             id: list
+                            objectName: "diskViewList"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             model: diskModel
@@ -659,7 +682,14 @@ ApplicationWindow {
                             centerLabel: diskModel.currentName
                             highlightExtension: window.highlightExt
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
-                            onActivated: function(nodeId, directory) { diskModel.select(nodeId); if(directory) diskModel.navigate(nodeId) }
+                            onActivated: function(nodeId, directory) {
+                                // The chart is a map of the folder the window
+                                // is in: a double click opens that folder in
+                                // the list instead of leaving the folder, so
+                                // the two panels keep showing the same place.
+                                diskModel.select(nodeId)
+                                if (directory) diskModel.expandNode(nodeId)
+                            }
                             onContextRequested: function(nodeId, x, y) {
                                 if (!nodeId.length) return
                                 const info = chart.hoveredInfo(nodeId)
@@ -698,7 +728,7 @@ ApplicationWindow {
                         }
                         Label {
                             anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12
-                            text: "滚轮缩放 · 拖动平移 · 双击目录进入"
+                            text: "滚轮缩放 · 拖动平移 · 双击文件夹在左侧展开 · 双击圆心返回上级"
                             color: "#66758a"; font.pixelSize: 11
                         }
                     }
@@ -718,12 +748,13 @@ ApplicationWindow {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: scanService.state === "error" ? "扫描失败：" + scanService.errorText
+                    text: diskModel.loadError.length ? diskModel.loadError
+                          : scanService.state === "error" ? "扫描失败：" + scanService.errorText
                           : scanService.paused ? "扫描已暂停 · 点「继续」让它接着扫"
                           : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
                           : scanService.skippedDirs > 0 ? "扫描完成 · " + scanService.skippedDirs + " 个目录无法读取"
                           : (scanService.fast ? "快扫" : "普通遍历") + " · " + scanService.statusText
-                    color: scanService.state === "error" ? "#b3261e"
+                    color: diskModel.loadError.length || scanService.state === "error" ? "#b3261e"
                           : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? "#a76414" : "#66758a"
                     font.pixelSize: 11
                     elide: Text.ElideRight
