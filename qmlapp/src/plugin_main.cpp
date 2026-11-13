@@ -120,7 +120,7 @@ QString fromUtf8(const std::string& text)
 QmlHost* g_host = nullptr;
 QWindow* g_window = nullptr;
 // Where the host's QtQuick modules live: WinShun's qml folder.
-QString g_hostQmlPath;
+QStringList g_importPaths;
 std::atomic<bool> g_closing{false};
 
 struct WindowRequest {
@@ -156,7 +156,7 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     QmlHost::Options options;
     options.viewMode = request.viewMode;
     options.scanPath = request.path;
-    options.importPath = g_hostQmlPath;
+    options.importPaths = g_importPaths;
     auto* host = new QmlHost(options);
     if (!host->load(error)) {
         delete host;
@@ -302,12 +302,19 @@ extern "C" __declspec(dllexport) int winshunDiskViewQmlMain(const wchar_t* appDi
     const QString selfDir = selfLength
         ? QFileInfo(QString::fromWCharArray(self, int(selfLength))).absolutePath()
         : QString();
+    // The test is whether a Qt runtime sits beside us, not whether some QML
+    // file does: a package may ship only the modules the host lacks.
     const bool selfContained = !selfDir.isEmpty()
-        && QFileInfo::exists(selfDir + QStringLiteral("/qml/QtQuick/Controls/qmldir"));
+        && QFileInfo::exists(selfDir + QStringLiteral("/Qt6Core.dll"));
     const QString qtDir = selfContained ? selfDir : hostDir;
     QCoreApplication::setLibraryPaths({qtDir});
-    g_hostQmlPath = qtDir + QStringLiteral("/qml");
-    qputenv("QML_IMPORT_PATH", g_hostQmlPath.toUtf8());
+    // Imports come from whatever this package carries first, then the host's
+    // qml tree: a package may ship only the modules the host lacks.
+    if (!selfDir.isEmpty() && QFileInfo::exists(selfDir + QStringLiteral("/qml")))
+        g_importPaths.append(selfDir + QStringLiteral("/qml"));
+    if (!hostDir.isEmpty() && QFileInfo::exists(hostDir + QStringLiteral("/qml")))
+        g_importPaths.append(hostDir + QStringLiteral("/qml"));
+    qputenv("QML_IMPORT_PATH", g_importPaths.join(QLatin1Char(';')).toUtf8());
 
     int argc = 1;
     char name[] = "diskview-qml";

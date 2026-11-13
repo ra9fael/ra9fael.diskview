@@ -30,9 +30,10 @@ QmlHost::QmlHost(Options options, QObject* parent) : QObject(parent), m_options(
 bool QmlHost::load(QString* error)
 {
     // The host's own QtQuick modules, when the app is a plugin on WinShun's Qt
-    // rather than on its own deployment.
-    if (!m_options.importPath.isEmpty()) {
-        m_engine.addImportPath(m_options.importPath);
+    // rather than on its own deployment. Later paths win for a module that
+    // exists in more than one.
+    for (const QString& path : m_options.importPaths) {
+        if (!path.isEmpty()) m_engine.addImportPath(path);
     }
     m_engine.rootContext()->setContextProperty("diskViewMode", m_options.viewMode);
     m_engine.rootContext()->setContextProperty("fixtureSource",

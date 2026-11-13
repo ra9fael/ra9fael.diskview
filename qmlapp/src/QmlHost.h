@@ -31,8 +31,9 @@ public:
         int benchNodes = 0;
         // Where the QtQuick modules live when the app runs on a host's Qt
         // instead of its own: the plugin build sets this to WinShun's qml
-        // folder. Empty leaves the engine to its defaults.
-        QString importPath;
+        // folder, plus whatever the package added. Empty leaves the engine to
+        // its defaults.
+        QStringList importPaths;
     };
 
     explicit QmlHost(Options options, QObject* parent = nullptr);
