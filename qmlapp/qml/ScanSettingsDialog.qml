@@ -18,10 +18,14 @@ Dialog {
     ListModel { id: draftExcluded }
 
     onOpened: {
-        modeBox.currentIndex = scanSettings.scanMode
-        workersBox.currentIndex = scanSettings.workers === 0 ? 0 : [1, 2, 4, 8].indexOf(scanSettings.workers) + 1
-        mediaBox.currentIndex = scanSettings.media
-        previewBox.currentIndex = scanSettings.previewIntervalMs > 1500 ? 1 : 0
+        // The four scan switches belong to WinShun's settings page when this
+        // window is a plugin: the host is where they are shown and changed.
+        if (!hostManagedSettings) {
+            modeBox.currentIndex = scanSettings.scanMode
+            workersBox.currentIndex = scanSettings.workers === 0 ? 0 : [1, 2, 4, 8].indexOf(scanSettings.workers) + 1
+            mediaBox.currentIndex = scanSettings.media
+            previewBox.currentIndex = scanSettings.previewIntervalMs > 1500 ? 1 : 0
+        }
         draftExcluded.clear()
         const saved = scanSettings.excludedPaths
         for (let i = 0; i < saved.length; ++i) {
@@ -29,11 +33,15 @@ Dialog {
         }
     }
     onAccepted: {
-        const values = [0, 1, 2, 4, 8]
-        scanSettings.scanMode = modeBox.currentIndex
-        scanSettings.workers = values[workersBox.currentIndex]
-        scanSettings.media = mediaBox.currentIndex
-        scanSettings.previewIntervalMs = previewBox.currentIndex === 1 ? 5000 : 1500
+        // The four scan switches belong to WinShun's settings page when this
+        // window is a plugin: writing them here would only diverge.
+        if (!hostManagedSettings) {
+            const values = [0, 1, 2, 4, 8]
+            scanSettings.scanMode = modeBox.currentIndex
+            scanSettings.workers = values[workersBox.currentIndex]
+            scanSettings.media = mediaBox.currentIndex
+            scanSettings.previewIntervalMs = previewBox.currentIndex === 1 ? 5000 : 1500
+        }
         const paths = []
         for (let i = 0; i < draftExcluded.count; ++i) {
             paths.push(draftExcluded.get(i).display)
@@ -76,9 +84,12 @@ Dialog {
             columnSpacing: 12
             rowSpacing: 10
 
-            Label { text: "扫描方式"; color: "#243246" }
+            // When WinShun owns these (its plugin settings page), the dialog
+            // leaves them out instead of offering a second place to edit them.
+            Label { text: "扫描方式"; color: "#243246"; visible: !hostManagedSettings }
             ComboBox {
                 id: modeBox
+                visible: !hostManagedSettings
                 Layout.fillWidth: true
                 // The fast scan reads the NTFS MFT through a helper that asks
                 // for administrator rights; it only works on a fixed NTFS
@@ -86,28 +97,39 @@ Dialog {
                 model: ["自动", "快扫（MFT，需管理员）", "普通遍历"]
             }
 
-            Label { text: "普通扫描并发上限"; color: "#243246" }
+            Label { text: "普通扫描并发上限"; color: "#243246"; visible: !hostManagedSettings }
             ComboBox {
                 id: workersBox
+                visible: !hostManagedSettings
                 Layout.fillWidth: true
                 // The same choices the native plugin offers: more workers are
                 // not promised to be faster.
                 model: ["自动", "1", "2", "4", "8"]
             }
 
-            Label { text: "介质策略"; color: "#243246" }
+            Label { text: "介质策略"; color: "#243246"; visible: !hostManagedSettings }
             ComboBox {
                 id: mediaBox
+                visible: !hostManagedSettings
                 Layout.fillWidth: true
                 model: ["自动检测", "SSD / NVMe", "机械硬盘", "网络目录"]
             }
 
-            Label { text: "预览发布"; color: "#243246" }
+            Label { text: "预览发布"; color: "#243246"; visible: !hostManagedSettings }
             ComboBox {
                 id: previewBox
+                visible: !hostManagedSettings
                 Layout.fillWidth: true
                 model: ["平衡", "更少更新"]
             }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: hostManagedSettings
+            text: "扫描方式、并发、介质与预览频率在 WinShun 的插件设置里修改。"
+            color: "#66758a"; font.pixelSize: 11
+            wrapMode: Text.Wrap
         }
 
         Label { text: "排除路径"; color: "#243246"; font.weight: Font.DemiBold }

@@ -139,7 +139,7 @@ B3 原本的计划是「QSGGeometryNode 渲染路径 + 抗锯齿圆盘 + 大目�
 - **设置归属**：`plugin.json` 声明 `scanMode`/`workers`/`media`/`preview` 四项，宿主设置页展示并持久化；`settingsChanged` 经 `BlockingQueuedConnection` 即时推给已打开的窗口，此时窗口内设置对话框对这四项只显示说明。排除路径没有对应的宿主设置类型，留在 `diskview-qml.json`。
 - **顺带修了自检的误报**：`list=filter` 原先要求「每一行路径都包含关键字」，而过滤本来就会保留命中项的祖先目录，于是大树上必然失败。改成「包含关键字，或位于通往命中项的路径上」。
 
-## 验证结果（阶段 14 与 QML 0.1.1）
+## 验证结果（阶段 14 与 QML 0.1.2）
 - `C:\` 普通遍历（4 工作线程，启用完整自检）：约 4.73M 文件 / 867k 目录，峰值工作集约 1405 MB、峰值提交约 1690 MB；在 `CreateJobObject` + `JOB_OBJECT_LIMIT_PROCESS_MEMORY=2048` 下完整扫描、自检 `PASS`，退出码 0。首次内存优化时提交峰值约 1975 MB；将模型改为直接接管列式数组，并用紧凑子节点索引后，降至约 1690 MB。
 - `check-prototype.ps1` 全绿：treemap/sunburst、真实小树、暂停扫描、helper 分派；自检包含 `list=sort,name,filter,files,expand,history,view` 与 `chart=expand`，双图均 `PASS`。
 - QML model/settings/scan/chart geometry 与原生测试全部通过；`git diff --check` 无空白错误。
