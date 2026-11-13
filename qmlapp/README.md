@@ -45,11 +45,13 @@ cmake --build qmlapp/build
 - `diskview-qml.exe`：无 Qt、静态 CRT 的启动器（`qmlapp/stub/main.cpp`），读 `WS_APP_DIR`、把宿主的文件夹加进 DLL 搜索路径，加载同目录的 `DiskViewQmlApp.dll`；
 - `DiskViewQmlApp.dll`：跑在 Qt 上（`qmlapp/src/plugin_main.cpp`），`QGuiApplication` 留在主线程，`winshun::Plugin::serve()` 在工作线程，`query`/`action`/`appearance`/`shutdown` 都接上了；窗口就是现有的 `QmlHost`。
 
-产物在 `build-plugin/plugin/`。`tools/package-qml.py` 打包成 `dist/ra9fael.diskview.qml-<版本>.wsplugin`，`tools/verify/smoke-plugin-qml.py` 用真实协议验证（查询、打开、扫描、主题、关闭）。
+产物在 `build-plugin/plugin/`。`tools/package-qml.py` 打包成 `dist/ra9fael.diskview.qml-<版本>.wsplugin`（1 MB），`tools/verify/smoke-plugin-qml.py` 用真实协议验证（查询、打开、扫描、主题、关闭）。
 
-**为什么随包带 Qt**：宿主的 Qt 只承诺 Core/Gui/Qml/Quick 与它自己那套扁平控件，`QtQuick/Controls` 没有顶层 `qmldir`（模块在 `Qt6QuickControls2.dll` 的资源里），而这个窗口用了 `QtQuick.Controls`。所以清单里**不写** `runtime.qt`/`qtVersion`（这是宿主表达「自带 Qt」的方式），包内附 SDK 的 Qt，`windeployqt --qmldir` 按实际 import 部署，再裁掉没用到的模块。代价是包约 97 MB（宿主上限 256 MB）。
+**只补宿主缺的**：宿主的 Qt 本身很全（Core/Gui/Qml/Quick、Layouts、Templates、各样式都在），唯一缺的是 `qml/QtQuick/Controls` 顶层——那一层只有 `qmldir` + `qtquickcontrols2plugin.dll` + `plugins.qmltypes` 三个文件（约 42 KB），模块本体在宿主的 `Qt6QuickControls2.dll` 里。所以包**不复制任何 Qt DLL**，只把这 3 个文件放到 `qml/QtQuick/Controls/`，`runtime.qt` 保持 `"host"`。整个包 1 MB、7 个文件。
 
-**已知取舍**：设置文件用 `QFile` 直写而不是 `QSaveFile`——后者在这种部署下写同目录临时文件再改名会被拒（"Access is denied"），为此放弃了原子写。超大批量设置的极端情况可能留下半截文件，重开即恢复默认。
+`plugin_main` 按目录里有没有 `Qt6Core.dll` 判断跑哪套 Qt，并把包内的 `qml` 排在宿主的前面。
+
+**已知取舍**：设置文件用 `QFile` 直写而不是 `QSaveFile`——后者在这种部署下写同目录临时文件再改名会被拒（"Access is denied"），为此放弃了原子写。
 
 ## 独立运行包
 

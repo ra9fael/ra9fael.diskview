@@ -119,14 +119,14 @@ B3 原本的计划是「QSGGeometryNode 渲染路径 + 抗锯齿圆盘 + 大目�
 - **DLL** `qmlapp/src/plugin_main.cpp`：`QGuiApplication` 在主线程、`Plugin::serve()` 在工作线程；`query` 返回磁盘行与 `disk.open`（与原生版同形），`action` 经 `BlockingQueuedConnection` 在 GUI 线程开窗，`shutdown` 关窗后退出。`initialized()` 把宿主的 `dataDir` 转成 `WS_DATA_DIR`，设置文件因此落在宿主的数据目录。
 - **窗口复用**：`QmlHost` 原样使用，只加了 `window()`/`scanner()`/`settings()` 三个访问器和 `Options::importPath`。
 - **清单** `qmlapp/plugin.json`：id `ra9fael.diskview.qml`（与原生版并存），程序 `diskview-qml.exe`。
-- **打包** `tools/package-qml.py` → `dist/ra9fael.diskview.qml-0.1.0.wsplugin`（97 MB，1383 个文件）。
+- **打包** `tools/package-qml.py` → `dist/ra9fael.diskview.qml-0.1.0.wsplugin`（1 MB，7 个文件；先做成了 97 MB 自带全 Qt，后改成只补宿主缺的 3 个文件）。
 - **冒烟** `tools/verify/smoke-plugin-qml.py`：真实协议走完查询、打开、扫描、主题、关闭。
 
 过程中踩到并记录的四个坑：
 
 1. **`QGuiApplication` 构造前必须 `setLibraryPaths`**：不设的话它会阻塞地找 `platforms\qwindows.dll`，进程挂死、无任何输出。
 2. **宿主的 Qt 没有 `QtQuick.Controls`**：`qml/QtQuick/Controls/` 只有样式子目录，没有顶层 `qmldir`，模块在 `Qt6QuickControls2.dll` 的资源里。手写 qmldir 补不上（缺 `qtquickcontrols2plugin.dll`）。
-3. **因此随包带 Qt**：清单省略 `runtime.qt`/`qtVersion`（宿主表达「自带 Qt」的方式），包内附 SDK 的 Qt；`plugin_main` 若在同目录发现 `qml/QtQuick/Controls/qmldir` 就用自带的，否则回退宿主的。
+3. **只补宿主缺的三个文件**：宿主 Qt 的 DLL 很全，缺的只是 `qml/QtQuick/Controls` 顶层（`qmldir` + `qtquickcontrols2plugin.dll` + `plugins.qmltypes`，约 42 KB），模块本体在 `Qt6QuickControls2.dll` 里。先把整份 Qt 打进包（97 MB），再按差集改成只放这 3 个文件——包降到 1 MB，冒烟测试照旧通过。`plugin_main` 按目录里有没有 `Qt6Core.dll` 判断用哪套 Qt，导入路径是「包内 qml 优先，宿主 qml 兜底」。
 4. **`QSaveFile` 在此部署下写不进去**（"Access is denied"，普通目录也一样），设置改成 `QFile` 直写，放弃原子写。
 
 ## 验证结果（阶段 13）
