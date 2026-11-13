@@ -109,6 +109,13 @@ void ChartItem::setHighlightExtension(const QString& extension)
     emit highlightChanged();
     update();
 }
+void ChartItem::setTheme(const QString& theme)
+{
+    if(m_theme==theme)return;
+    m_theme=theme;
+    emit themeChanged();
+    update();
+}
 
 QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
 {
@@ -116,8 +123,27 @@ QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
         &&diskviewqml::extensionOf(QString::fromStdWString(node.name))!=m_highlightExtension;
     if(dimmed)*dimmed=hidden;
     if(hidden)return kDimmedFill;
-    if(node.dir)return QColor("#8f9aa8");
+    if(node.dir)return m_theme=="dark"?QColor("#4a5568"):QColor("#8f9aa8");
     return diskviewqml::extensionColor(diskviewqml::extensionOf(QString::fromStdWString(node.name)));
+}
+
+// The tile's own gradient: a vertical fade from a lighter top to the base
+// colour, plus a soft highlight band across the upper third. Flat fills read
+// as one grey mass; the fade gives every block the depth the native chart's
+// colour ramp has.
+QBrush ChartItem::fillBrush(const diskview::Node& node, const QRectF& rect, bool* dimmed) const
+{
+    const QColor base = fillFor(node, dimmed);
+    if (rect.width() < 4 || rect.height() < 4) return base;
+    QColor top = base.lighter(node.dir ? 108 : 128);
+    QColor bottom = base.darker(node.dir ? 104 : 112);
+    top.setAlphaF(base.alphaF());
+    bottom.setAlphaF(base.alphaF());
+    QLinearGradient g(rect.topLeft(), rect.bottomLeft());
+    g.setColorAt(0.0, top);
+    g.setColorAt(0.55, base);
+    g.setColorAt(1.0, bottom);
+    return QBrush(g);
 }
 void ChartItem::geometryChange(const QRectF& now, const QRectF& before)
 {
@@ -341,11 +367,20 @@ void ChartItem::paint(QPainter* painter)
         for(const auto& tile:m_tiles){
             const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
-            QColor fill=fillFor(*tile.node);
+            bool dimmed=false;
+            QBrush fill=fillBrush(*tile.node,rect,&dimmed);
             const bool lit=id==m_selectedId||id==m_hoverId;
-            if(lit)fill=fill.darker(112);
+            // The lit tile takes a lighter ramp so the selection stays inside
+            // the same colour family instead of jumping to another.
+            if(lit){
+                QColor base=fillFor(*tile.node);
+                QLinearGradient g(rect.topLeft(),rect.bottomLeft());
+                g.setColorAt(0.0,base.lighter(150));
+                g.setColorAt(1.0,base.lighter(118));
+                fill=QBrush(g);
+            }
             painter->fillRect(rect,fill);
-            if(id==m_selectedId||id==m_hoverId){painter->setPen(QPen(QColor("#1b2b3a"),id==m_selectedId?2:1));painter->setBrush(Qt::NoBrush);painter->drawRect(rect.adjusted(1,1,-1,-1));}
+            if(id==m_selectedId||id==m_hoverId){painter->setPen(QPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#1b2b3a"),id==m_selectedId?2:1));painter->setBrush(Qt::NoBrush);painter->drawRect(rect.adjusted(1,1,-1,-1));}
         }
     }else{
         for(const auto& slice:m_slices){
@@ -365,14 +400,14 @@ void ChartItem::paint(QPainter* painter)
             path.closeSubpath();
             painter->fillPath(path,fillFor(*slice.node));
             if(id==m_selectedId||id==m_hoverId){
-                painter->setPen(QPen(QColor("#1b2b3a"),id==m_selectedId?2:1));
+                painter->setPen(QPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#1b2b3a"),id==m_selectedId?2:1));
                 painter->setBrush(Qt::NoBrush);
                 painter->drawPath(path);
             }
         }
     }
     if(m_viewMode==1&&!m_centerLabel.isEmpty()){
-        painter->setPen(QColor("#243246"));
+        painter->setPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#243246"));
         QFont font=painter->font();font.setPixelSize(11);font.setWeight(QFont::DemiBold);painter->setFont(font);
         QRectF hole(center.x()-36,center.y()-36,72,72);
         // A long path would spill out of the hole and over the rings, so the

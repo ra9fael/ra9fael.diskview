@@ -108,11 +108,13 @@ winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
         .withCopy(usage)
         .withAutocomplete(usage)
         .withPreview(usage + "\n\n"
-                     + tr(zh, "方块图与圆盘共用同一份扫描数据，单击选中；双击方块在左侧文件树里展开该文件夹，"
-                              "双击列表里的文件夹才进入；顶部面包屑和退格键返回上级。",
-                              "The treemap and the sunburst share one scan; click to select, "
-                              "double-click a tile to expand that folder in the list, and double-click a row to enter; "
-                              "the breadcrumb and Backspace go up."));
+                     + tr(zh, "方块图与圆盘共用同一份扫描数据。图表：滚轮缩放、拖动平移，双击文件夹进入该目录，"
+                              "双击圆心返回上级；文件树：单击选中，双击进入，小三角就地展开。"
+                              "顶部面包屑和退格键返回上级。",
+                              "The treemap and the sunburst share one scan. Chart: wheel zooms, drag pans, "
+                              "double-click a folder to enter it, double-click the centre hole to go up. "
+                              "Tree: click selects, double-click enters, the small triangle expands in place. "
+                              "The breadcrumb and Backspace go up."));
     items.push_back(std::move(help));
     return items;
 }
@@ -312,8 +314,12 @@ public:
 
     void appearanceChanged() override
     {
-        // The QML window has its own palette; nothing to push into it yet.
-        winshun::debug("ra9fael.diskview.qml: appearanceChanged");
+        // The window reads the host's look the way it reads its own settings:
+        // through the QmlHost, so the values land on the GUI thread.
+        const std::string current = this->theme().empty() ? "light" : this->theme();
+        QMetaObject::invokeMethod(qGuiApp, [current] {
+            if (g_host) g_host->setTheme(QString::fromStdString(current));
+        }, Qt::BlockingQueuedConnection);
     }
 
     void shuttingDown() override

@@ -196,8 +196,12 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                 Rect r {x, cy, t, hh};
                 Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
                 out.push_back(std::move(tile));
-                if (row[i]->dir && hh > 0 && t > 0)
-                    treemapTiles(*row[i], Rect {x + 1, cy + 1, std::max(0.0, t - 2), std::max(0.0, hh - 2)},
+                // Children sit 10 px inside their parent on every side, so the
+                // parent stays a visible frame around them at any depth — the
+                // way WizTree nests its blocks — instead of covering it.
+                const double pad = std::min({10.0, (t - 2) / 2, (hh - 2) / 2});
+                if (row[i]->dir && hh > 0 && t > 0 && 2 * pad + 8 < std::min(t, hh))
+                    treemapTiles(*row[i], Rect {x + 1 + pad, cy + 1 + pad, std::max(0.0, t - 2 - 2 * pad), std::max(0.0, hh - 2 - 2 * pad)},
                                  depth + 1, minArea, out, out.back().path, maxDepth);
                 cy += hh;
             }
@@ -211,8 +215,9 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                 Rect r {cx, y, ww, t};
                 Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
                 out.push_back(std::move(tile));
-                if (row[i]->dir && ww > 0 && t > 0)
-                    treemapTiles(*row[i], Rect {cx + 1, y + 1, std::max(0.0, ww - 2), std::max(0.0, t - 2)},
+                const double pad = std::min({10.0, (t - 2) / 2, (ww - 2) / 2});
+                if (row[i]->dir && ww > 0 && t > 0 && 2 * pad + 8 < std::min(ww, t))
+                    treemapTiles(*row[i], Rect {cx + 1 + pad, y + 1 + pad, std::max(0.0, ww - 2 - 2 * pad), std::max(0.0, t - 2 - 2 * pad)},
                                  depth + 1, minArea, out, out.back().path, maxDepth);
                 cx += ww;
             }

@@ -17,6 +17,7 @@ class ChartItem : public QQuickPaintedItem {
     Q_PROPERTY(QString centerLabel READ centerLabel WRITE setCenterLabel NOTIFY centerLabelChanged)
     Q_PROPERTY(int depth READ depth WRITE setDepth NOTIFY depthChanged)
     Q_PROPERTY(QString highlightExtension READ highlightExtension WRITE setHighlightExtension NOTIFY highlightChanged)
+    Q_PROPERTY(QString theme READ theme WRITE setTheme NOTIFY themeChanged)
     Q_PROPERTY(QString hoverId READ hoverId NOTIFY hoverChanged)
     Q_PROPERTY(QPointF hoverPosition READ hoverPosition NOTIFY hoverChanged)
 
@@ -43,6 +44,8 @@ public:
     // colour can be followed across the whole chart.
     QString highlightExtension() const { return m_highlightExtension; }
     void setHighlightExtension(const QString& extension);
+    QString theme() const { return m_theme; }
+    void setTheme(const QString& theme);
     QString hoverId() const { return m_hoverId; }
     QPointF hoverPosition() const { return m_hoverPosition; }
     // The name, path, size and kind of the node a region belongs to.
@@ -73,6 +76,8 @@ signals:
     void hoverChanged();
     void depthChanged();
     void highlightChanged();
+    // The host's light/dark choice; the chart's greys follow it.
+    void themeChanged();
     // A right click on a region, in the item's own coordinates.
     void contextRequested(const QString& id, qreal x, qreal y);
     void centerActivated();
@@ -103,6 +108,8 @@ private:
     // The fill of a tile or slice: folders are neutral, files take the colour
     // of their extension.
     QColor fillFor(const diskview::Node& node, bool* dimmed = nullptr) const;
+    // The same, as a vertical gradient over the tile's own rectangle.
+    QBrush fillBrush(const diskview::Node& node, const QRectF& rect, bool* dimmed = nullptr) const;
 
     QVariantMap m_treeData;
     QVector<HitRegion> m_regions;
@@ -113,6 +120,7 @@ private:
     std::vector<diskview::Slice> m_slices;
     int m_viewMode = 0;
     int m_depth = 1;
+    QString m_theme; // empty = light
     QString m_highlightExtension;
     QString m_selectedId;
     QString m_centerLabel;

@@ -95,6 +95,10 @@ bool QmlHost::load(QString* error)
     // parent, so the prompt belongs to the window the user is looking at.
     if (auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0))) {
         m_scanService->setOwnerWindow(window->winId());
+        // The same icon the native (GDI) edition shows: it embeds app.ico in
+        // its rc and picks it up through WM_SETICON. The resource is compiled
+        // into this binary, so both editions show one icon.
+        window->setIcon(QIcon(QStringLiteral(":/app.ico")));
     }
     return true;
 }
@@ -476,33 +480,26 @@ bool QmlHost::runSelfTest(QString* report)
             QMouseEvent done(QEvent::MouseButtonRelease, point, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
             QCoreApplication::sendEvent(chart, &done);
         };
-        // A double click on a folder tile opens that folder in the list; it
-        // does not leave the folder the window is showing, so the chart and
-        // the list keep describing the same place.
+        // A double click on a folder tile enters the folder, the way the
+        // native chart does; the tree's triangle is the in-place opener.
         const QPointF folder = chart->firstDirectoryCenter();
         const QString chartRoot = model->currentPath();
         if (!folder.isNull()) {
-            const int rowsBefore = model->rowCount();
             doubleClick(folder);
             QCoreApplication::processEvents();
-            const bool stayed = model->currentPath() == chartRoot;
-            const bool opened = model->rowCount() > rowsBefore;
-            if (stayed && opened) chartDetail << QStringLiteral("expand");
+            if (model->currentPath() != chartRoot) chartDetail << QStringLiteral("double");
         }
         // The centre of the sunburst returns to the parent, so the check goes
-        // into a folder first. It runs in the sunburst mode only; the treemap
-        // has no hole.
+        // into a folder and clicks the hole. It runs in the sunburst mode
+        // only; the treemap has no hole.
         if (m_options.viewMode == 1) {
-            for (int row = 0; row < model->rowCount(); ++row) {
-                const QModelIndex index = model->index(row, 0);
-                if (!model->data(index, DiskViewModel::DirectoryRole).toBool()) continue;
-                model->navigate(model->data(index, DiskViewModel::IdRole).toString());
-                if (model->currentPath() == rootPath) continue;
-                const QPointF center(chart->width() / 2, chart->height() / 2);
-                doubleClick(center);
-                if (model->currentPath() == rootPath) chartDetail << QStringLiteral("center");
-                break;
-            }
+            // The folder the chart's double click just entered is the parent
+            // the hole returns from.
+            const QPointF center(chart->width() / 2, chart->height() / 2);
+            QCoreApplication::processEvents();
+            doubleClick(center);
+            QCoreApplication::processEvents();
+            if (model->currentPath() == rootPath) chartDetail << QStringLiteral("center");
         }
         while (model->canGoBack()) model->goBack();
     }
@@ -543,7 +540,7 @@ bool QmlHost::runSelfTest(QString* report)
             break;
         }
     }
-    const bool chartOk = chartDetail.contains(QStringLiteral("expand"))
+    const bool chartOk = chartDetail.contains(QStringLiteral("double"))
                          && (m_options.viewMode != 1 || chartDetail.contains(QStringLiteral("center")));
     // A scan that could be held and then let go is part of what the scan mode
     // has to show.
@@ -585,6 +582,16 @@ bool QmlHost::runSelfTest(QString* report)
                       .arg(m_pauseVerified ? QStringLiteral("verified") : QStringLiteral("bad"));
     }
     return pass;
+}
+
+void QmlHost::setTheme(const QString& theme) const
+{
+    auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
+    if (!window) return;
+    window->setProperty("themeName", theme);
+    if (auto* chart = window->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
+        chart->setTheme(theme);
+    }
 }
 
 void QmlHost::copyToClipboard(const QString& text) const

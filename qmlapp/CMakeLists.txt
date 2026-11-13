@@ -24,6 +24,12 @@ qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
     FILES fixtures/disk-tree.json)
+# The window icon is the app.ico the native edition ships in its rc: one file,
+# so both editions show the same icon in the taskbar and the title bar.
+qt_add_resources(diskview-qml "diskview_qml_icon"
+    PREFIX "/"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../app.ico")
 target_link_libraries(diskview-qml PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
 # The scan helper needs the shell (to ask for authorization), the security
 # API (for the pipe's access control) and COM (for the session id).
@@ -92,6 +98,10 @@ if(DISKVIEW_BUILD_PLUGIN)
         PREFIX "/fixtures"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
         FILES fixtures/disk-tree.json)
+    qt_add_resources(diskview-qml-app "diskview_qml_icon"
+        PREFIX "/"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/.."
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/../app.ico")
     target_link_libraries(diskview-qml-app PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
         user32 shell32 advapi32 ole32 uuid)
     target_include_directories(diskview-qml-app PRIVATE

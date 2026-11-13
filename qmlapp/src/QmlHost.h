@@ -60,6 +60,9 @@ public:
     // The list panel has to sort, filter, rank and go back and forth again.
     bool runListChecks(class DiskViewModel* model, QString* detail);
     // The read-only actions of the context menu.
+    // Puts the host's look onto the open window: the chart reads the same
+    // theme the window does. Standalone runs keep the light look.
+    Q_INVOKABLE void setTheme(const QString& theme) const;
     Q_INVOKABLE void copyToClipboard(const QString& text) const;
     Q_INVOKABLE void revealInExplorer(const QString& path) const;
     // Builds a tree of that many nodes and times the whole chart pipeline.
