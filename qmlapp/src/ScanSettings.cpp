@@ -181,6 +181,15 @@ void ScanSettings::setChartDepth(int depth)
     emit changed();
 }
 
+void ScanSettings::setChartOnTop(bool onTop)
+{
+    if (onTop == m_chartOnTop) {
+        return;
+    }
+    m_chartOnTop = onTop;
+    emit changed();
+}
+
 void ScanSettings::addExcludedPath(const QString& path)
 {
     const QString trimmed = path.trimmed();
@@ -258,6 +267,7 @@ bool ScanSettings::load()
     m_fuzzyMatch = object.value(QStringLiteral("fuzzyMatch")).toBool(false);
     m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
     m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(2), 1, 5);
+    m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
     emit changed();
     return true;
 }
@@ -278,6 +288,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("fuzzyMatch"), m_fuzzyMatch);
     object.insert(QStringLiteral("wholeTree"), m_wholeTree);
     object.insert(QStringLiteral("chartDepth"), m_chartDepth);
+    object.insert(QStringLiteral("chartOnTop"), m_chartOnTop);
     QJsonArray excluded;
     for (const QString& path : m_excludedPaths) {
         excluded.append(path);

@@ -11,7 +11,9 @@ ApplicationWindow {
     minimumHeight: 620
     visible: true
     title: "Disk View · QML 技术样机"
-    color: "#f4f6f8"
+    // The whole window follows the host's light/dark choice; the chart reads
+    // the same switch so its greys and inks follow.
+    color: window.shade("#f4f6f8", "#1e2430")
 
     DiskViewModel { id: diskModel; objectName: "diskModel" }
     Component.onCompleted: {
@@ -22,6 +24,7 @@ ApplicationWindow {
         // ... and so does the chart: how many levels of blocks it draws.
         diskModel.chartDepth = scanSettings.chartDepth
         chart.depth = scanSettings.chartDepth
+        verticalSplit.applyLayoutOrder()
     }
 
     // Which table columns are on. The name column is not listed: it never
@@ -45,6 +48,17 @@ ApplicationWindow {
     }
     // The extension the legend picked; empty means "every colour".
     property string highlightExt: ""
+    // Which picture the chart draws: 0 treemap, 1 sunburst. The startup value
+    // is the host's default view; the toolbar switches it for this window.
+    property int chartKind: diskViewMode
+    // The two panels' vertical order: tables above by default.
+    property bool chartOnTop: false
+    // The host's look: "light" until WinShun says otherwise. One place to read
+    // the theme from; every colour in this file goes through these helpers so
+    // a dark host gets a dark window.
+    property string themeName: "light"
+    property bool dark: themeName === "dark"
+    function shade(light, darkValue) { return dark ? darkValue : light }
 
     Connections {
         target: scanService
@@ -115,8 +129,8 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 34
-            color: "#ffffff"
-            border.color: "#dce2e8"
+            color: window.shade("#ffffff", "#26303f")
+            border.color: window.shade("#dce2e8", "#333d4e")
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
                 Label { text: "Disk View"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#202b3c" }
@@ -142,8 +156,8 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 40
-            color: "#ffffff"
-            border.color: "#dce2e8"
+            color: window.shade("#ffffff", "#26303f")
+            border.color: window.shade("#dce2e8", "#333d4e")
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 8
                 TextField {
@@ -183,8 +197,8 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 36
-            color: "#ffffff"
-            border.color: "#dce2e8"
+            color: window.shade("#ffffff", "#26303f")
+            border.color: window.shade("#dce2e8", "#333d4e")
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 6
                 Button {
@@ -193,7 +207,7 @@ ApplicationWindow {
                     background: Rectangle {
                         radius: 3
                         color: diskModel.viewMode === 0 ? "#e3eefb" : "transparent"
-                        border.color: "#dce2e8"
+                        border.color: window.shade("#dce2e8", "#333d4e")
                     }
                 }
                 Button {
@@ -202,7 +216,7 @@ ApplicationWindow {
                     background: Rectangle {
                         radius: 3
                         color: diskModel.viewMode === 1 ? "#e3eefb" : "transparent"
-                        border.color: "#dce2e8"
+                        border.color: window.shade("#dce2e8", "#333d4e")
                     }
                 }
                 // The file view is a file finder: say where it looks and how
@@ -226,25 +240,6 @@ ApplicationWindow {
                     onActivated: { diskModel.fuzzyMatch = (index === 1); scanSettings.fuzzyMatch = diskModel.fuzzyMatch; scanSettings.save() }
                 }
                 Item { Layout.fillWidth: true }
-                // How deep the chart nests its blocks, the way WizTree lets
-                // the picture be as flat or as detailed as the user wants.
-                Label { text: "层级"; font.pixelSize: 11; color: "#56657b" }
-                ComboBox {
-                    id: depthBox
-                    implicitWidth: 86
-                    implicitHeight: 26
-                    font.pixelSize: 11
-                    model: ["1", "2", "3", "4", "5"]
-                    currentIndex: chart.depth - 1
-                    ToolTip.visible: hovered
-                    ToolTip.text: "方块里再画几层文件夹"
-                    onActivated: {
-                        chart.depth = index + 1
-                        diskModel.chartDepth = index + 1
-                        scanSettings.chartDepth = index + 1
-                        scanSettings.save()
-                    }
-                }
                 ToolButton {
                     text: "列"
                     implicitWidth: 34
@@ -297,13 +292,28 @@ ApplicationWindow {
             }
         }
 
-        // ---- tables above, the chart below ------------------------------
+        // ---- tables and the chart, in the order the user picked ----------
         SplitView {
             id: verticalSplit
             orientation: Qt.Vertical
             Layout.fillWidth: true
             Layout.fillHeight: true
-            handle: Rectangle { implicitHeight: 5; color: "#e6ebf2"; border.color: "#d3dbe5" }
+            handle: Rectangle { implicitHeight: 5; color: window.shade("#e6ebf2", "#2a3342"); border.color: window.shade("#d3dbe5", "#333d4e") }
+
+            // A SplitView's pane order is the order its children were added in.
+            // Both panes are real items with stable ids; attachChildren() puts
+            // them back in the chosen order, which is the whole layout switch.
+            function applyLayoutOrder() {
+                const order = window.chartOnTop ? [chartPane, topSplit] : [topSplit, chartPane]
+                for (const pane of order) {
+                    const keepHeight = pane.SplitView.preferredHeight
+                    const keepFill = pane.SplitView.fillHeight
+                    pane.parent = null
+                    verticalSplit.addItem(pane)
+                    pane.SplitView.preferredHeight = keepHeight
+                    pane.SplitView.fillHeight = keepFill
+                }
+            }
 
             // folder table | extension legend
             SplitView {
@@ -311,7 +321,7 @@ ApplicationWindow {
                 orientation: Qt.Horizontal
                 SplitView.preferredHeight: 320
                 SplitView.minimumHeight: 110
-                handle: Rectangle { implicitWidth: 5; color: "#e6ebf2"; border.color: "#d3dbe5" }
+                handle: Rectangle { implicitWidth: 5; color: window.shade("#e6ebf2", "#2a3342"); border.color: window.shade("#d3dbe5", "#333d4e") }
 
                 Item {
                     SplitView.fillWidth: true
@@ -322,8 +332,8 @@ ApplicationWindow {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
-                            color: "#f0f3f9"
-                            border.color: "#e5eaf0"
+                            color: window.shade("#f0f3f9", "#242b38")
+                            border.color: window.shade("#e5eaf0", "#333d4e")
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label {
@@ -403,13 +413,10 @@ ApplicationWindow {
                                 height: 24
                                 padding: 0
                                 highlighted: nodeId === diskModel.selectedId
-                                // A click on a folder row opens it in place; a
-                                // double click goes into it. The triangle is
-                                // still there, so nobody has to guess.
-                                onClicked: {
-                                    diskModel.select(nodeId)
-                                    if (directory && hasChildren) diskModel.toggleExpanded(nodeId)
-                                }
+                                // A click only selects; the triangle and the
+                                // double click are the two ways to open a
+                                // folder, so a single click never jumps.
+                                onClicked: diskModel.select(nodeId)
                                 onDoubleClicked: if (directory) diskModel.navigate(nodeId)
                                 TapHandler {
                                     acceptedButtons: Qt.RightButton
@@ -524,8 +531,8 @@ ApplicationWindow {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
-                            color: "#f0f3f9"
-                            border.color: "#e5eaf0"
+                            color: window.shade("#f0f3f9", "#242b38")
+                            border.color: window.shade("#e5eaf0", "#333d4e")
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label { Layout.preferredWidth: 18; text: "" }
@@ -595,16 +602,19 @@ ApplicationWindow {
                 }
             }
 
-            // breadcrumb between the tables and the chart
+            // the chart pane: its toolbar (picture, depth, layout) and the
+            // chart itself. The breadcrumb above it stays in this pane so the
+            // two panels always describe the same folder.
             ColumnLayout {
+                id: chartPane
                 SplitView.fillHeight: true
-                spacing: 0
+                spacing: 4
 
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32
-                    color: "#ffffff"
-                    border.color: "#dce2e8"
+                    color: window.shade("#ffffff", "#26303f")
+                    border.color: window.shade("#dce2e8", "#333d4e")
                     RowLayout {
                         anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12
                         spacing: 4
@@ -662,13 +672,74 @@ ApplicationWindow {
                     }
                 }
 
+                // The chart's own toolbar: which picture and how deep. These
+                // belong to the chart, not to the scan, so they live here.
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8; Layout.rightMargin: 8
+                    spacing: 6
+                    Button {
+                        text: "方块"
+                        onClicked: window.chartKind = 0
+                        background: Rectangle {
+                            radius: 3
+                            color: window.chartKind === 0 ? "#e3eefb" : "transparent"
+                            border.color: window.shade("#dce2e8", "#333d4e")
+                        }
+                    }
+                    Button {
+                        text: "圆盘"
+                        onClicked: window.chartKind = 1
+                        background: Rectangle {
+                            radius: 3
+                            color: window.chartKind === 1 ? "#e3eefb" : "transparent"
+                            border.color: window.shade("#dce2e8", "#333d4e")
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label { text: "层级"; font.pixelSize: 11; color: "#56657b" }
+                    ComboBox {
+                        id: depthBox
+                        implicitWidth: 76
+                        implicitHeight: 26
+                        font.pixelSize: 11
+                        model: ["1", "2", "3", "4", "5"]
+                        currentIndex: chart.depth - 1
+                        ToolTip.visible: hovered
+                        ToolTip.text: "方块里再画几层文件夹"
+                        onActivated: {
+                            chart.depth = index + 1
+                            diskModel.chartDepth = index + 1
+                            scanSettings.chartDepth = index + 1
+                            scanSettings.save()
+                        }
+                    }
+                    Label { text: "布局"; font.pixelSize: 11; color: "#56657b" }
+                    ComboBox {
+                        id: layoutBox
+                        implicitWidth: 96
+                        implicitHeight: 26
+                        font.pixelSize: 11
+                        model: ["表格在上", "图表在上"]
+                        currentIndex: window.chartOnTop ? 1 : 0
+                        ToolTip.visible: hovered
+                        ToolTip.text: "两个面板的上下位置"
+                        onActivated: {
+                            window.chartOnTop = (index === 1)
+                            scanSettings.chartOnTop = window.chartOnTop
+                            scanSettings.save()
+                            verticalSplit.applyLayoutOrder()
+                        }
+                    }
+                }
+
                 Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Rectangle {
                         anchors.fill: parent
-                        color: "#ffffff"
-                        border.color: "#dce2e8"
+                        color: window.shade("#ffffff", "#26303f")
+                        border.color: window.shade("#dce2e8", "#333d4e")
                         radius: 4
                         clip: true
                         ChartItem {
@@ -678,17 +749,17 @@ ApplicationWindow {
                             anchors.margins: 8
                             treeData: diskModel.chartTree
                             selectedId: diskModel.selectedId
-                            viewMode: diskViewMode
+                            viewMode: window.chartKind
                             centerLabel: diskModel.currentName
                             highlightExtension: window.highlightExt
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
                             onActivated: function(nodeId, directory) {
-                                // The chart is a map of the folder the window
-                                // is in: a double click opens that folder in
-                                // the list instead of leaving the folder, so
-                                // the two panels keep showing the same place.
-                                diskModel.select(nodeId)
-                                if (directory) diskModel.expandNode(nodeId)
+                                // The chart is a map: a double click enters the
+                                // folder, the same way the native one does. The
+                                // tree keeps the in-place triangle for opening
+                                // a folder without leaving the current one.
+                                if (directory) diskModel.navigate(nodeId)
+                                else diskModel.select(nodeId)
                             }
                             onContextRequested: function(nodeId, x, y) {
                                 if (!nodeId.length) return
@@ -726,11 +797,8 @@ ApplicationWindow {
                                 Label { width: parent.width; text: "单击固定详情 · 双击进入文件夹"; font.pixelSize: 10; color: "#8b98a9" }
                             }
                         }
-                        Label {
-                            anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12
-                            text: "滚轮缩放 · 拖动平移 · 双击文件夹在左侧展开 · 双击圆心返回上级"
-                            color: "#66758a"; font.pixelSize: 11
-                        }
+                        // The old hint label lives in the launcher's help
+                        // preview now; the chart area stays clean.
                     }
                 }
             }
@@ -738,7 +806,7 @@ ApplicationWindow {
 
         // ---- status bar --------------------------------------------------
         Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: 26; color: "#ffffff"; border.color: "#dce2e8"
+            Layout.fillWidth: true; Layout.preferredHeight: 26; color: window.shade("#ffffff", "#26303f"); border.color: window.shade("#dce2e8", "#333d4e")
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
                 Label {

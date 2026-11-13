@@ -30,6 +30,8 @@ class ScanSettings : public QObject {
     // native plugin offers the same switch; a deeper chart is what makes a
     // drive readable at a glance.
     Q_PROPERTY(int chartDepth READ chartDepth WRITE setChartDepth NOTIFY changed)
+    // Whether the chart panel sits above the tables (true) or below (false).
+    Q_PROPERTY(bool chartOnTop READ chartOnTop WRITE setChartOnTop NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -57,6 +59,8 @@ public:
     void setWholeTree(bool whole);
     int chartDepth() const { return m_chartDepth; }
     void setChartDepth(int depth);
+    bool chartOnTop() const { return m_chartOnTop; }
+    void setChartOnTop(bool onTop);
     QString filePath() const;
 
     Q_INVOKABLE bool load();
@@ -78,4 +82,5 @@ private:
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;
     int m_chartDepth = 2;
+    bool m_chartOnTop = false;
 };
