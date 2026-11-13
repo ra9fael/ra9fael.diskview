@@ -111,6 +111,30 @@ B3 原本的计划是「QSGGeometryNode 渲染路径 + 抗锯齿圆盘 + 大目�
 - **结果**：30 万节点导入 517 → **136 ms**（扁平），嵌套路径顺带从 688 → 492 ms（也去掉了 id 字符串）。导出/解析仍是 3–4 ms。
 - **快照仍会整树重建**：`loadFlat` 每次局部快照仍然全量重建模型。136 ms 在 2 秒的快照间隔下可以接受，但再大一个量级就该做增量更新了——这一步没做，记录在案。
 
+### 阶段 13：接入 WinShun 宿主（B4 前半）
+
+调研结论决定了做法：WinShun 的插件是**进程**（manifest 的 `runtime.program` + stdin/stdout 上的 JSON-RPC），不是导出函数的 DLL。同门的 `ra9fael.binarylab-qml` 用的是两段式：无 Qt 的启动器 + 跑在宿主 Qt 上的 DLL，为的是启动器能在严格沙箱里起来而不带任何运行时 DLL。这里照做。
+
+- **启动器** `qmlapp/stub/main.cpp`：读 `WS_APP_DIR`、校验 `Qt6Core.dll`、`SetDefaultDllDirectories`+`AddDllDirectory`，`LoadLibraryExW` 加载同目录的 `DiskViewQmlApp.dll`，调用导出的 `winshunDiskViewQmlMain`。静态 CRT，实测只依赖 `KERNEL32.dll`。
+- **DLL** `qmlapp/src/plugin_main.cpp`：`QGuiApplication` 在主线程、`Plugin::serve()` 在工作线程；`query` 返回磁盘行与 `disk.open`（与原生版同形），`action` 经 `BlockingQueuedConnection` 在 GUI 线程开窗，`shutdown` 关窗后退出。`initialized()` 把宿主的 `dataDir` 转成 `WS_DATA_DIR`，设置文件因此落在宿主的数据目录。
+- **窗口复用**：`QmlHost` 原样使用，只加了 `window()`/`scanner()`/`settings()` 三个访问器和 `Options::importPath`。
+- **清单** `qmlapp/plugin.json`：id `ra9fael.diskview.qml`（与原生版并存），程序 `diskview-qml.exe`。
+- **打包** `tools/package-qml.py` → `dist/ra9fael.diskview.qml-0.1.0.wsplugin`（97 MB，1383 个文件）。
+- **冒烟** `tools/verify/smoke-plugin-qml.py`：真实协议走完查询、打开、扫描、主题、关闭。
+
+过程中踩到并记录的四个坑：
+
+1. **`QGuiApplication` 构造前必须 `setLibraryPaths`**：不设的话它会阻塞地找 `platforms\qwindows.dll`，进程挂死、无任何输出。
+2. **宿主的 Qt 没有 `QtQuick.Controls`**：`qml/QtQuick/Controls/` 只有样式子目录，没有顶层 `qmldir`，模块在 `Qt6QuickControls2.dll` 的资源里。手写 qmldir 补不上（缺 `qtquickcontrols2plugin.dll`）。
+3. **因此随包带 Qt**：清单省略 `runtime.qt`/`qtVersion`（宿主表达「自带 Qt」的方式），包内附 SDK 的 Qt；`plugin_main` 若在同目录发现 `qml/QtQuick/Controls/qmldir` 就用自带的，否则回退宿主的。
+4. **`QSaveFile` 在此部署下写不进去**（"Access is denied"，普通目录也一样），设置改成 `QFile` 直写，放弃原子写。
+
+## 验证结果（阶段 13）
+- `smoke-plugin-qml.py` 对构建目录与**解压后的安装目录**各跑一遍，都通过——说明包是自足的，不依赖宿主 Qt 或 PATH。
+- 启动器 `dumpbin /dependents` 只有 `KERNEL32.dll`；DLL 依赖 `Qt6Core/Gui/Qml/Quick`。
+- `build-plugin` 下 `diskview-settings-tests`、`diskview-model-tests` 全部 PASS。
+- 删掉了所有临时探针，工作区干净。
+
 ## 验证结果（阶段 12）
 - `--bench-chart 300000`：`model flat=136ms nested=492ms export=3.3ms`，布局/绘制仍 <1 ms。
 - 模型单测新增扁平加载用例（顺序、路径拼接、计数、导航、文件视图）。
@@ -192,4 +216,4 @@ B3 原本的计划是「QSGGeometryNode 渲染路径 + 抗锯齿圆盘 + 大目�
 - 尚未接入 WinShun 协议、文件操作或 host plugin launcher；管理员快扫 helper 已接线，但 UAC 正常路径尚未由人手动跑过（需在固定 NTFS 卷的盘符根目录上触发）。
 - QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
-- B1、B2、图表交互、WizTree 式布局与 B3 的性能测量已完成并提交；下一步按 roadmap 是 B4（WinShun 协议、plugin.json 变体与双安装产物、回收站文件操作），以及把 `loadTree` 的导入成本降下来。
+- B1–B4 已完成：交互、布局、性能、宿主接入与独立打包。剩下的是文件操作（回收站/删除）与发版流程（B5），以及文件视图整树范围的压力验证。

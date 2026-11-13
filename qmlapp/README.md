@@ -14,10 +14,13 @@
 - 阶段 7：列表面板与导航已对齐原生版——按名称/大小排序、路径过滤、最大文件榜、面包屑、前进/后退/上一级、键盘导航、翻页。
 - 阶段 8：图表交互补齐——绘图深度（1 层/2 层）可切换、方块与扇区带微型标签、悬停浮层、单击选中/双击进入、圆盘中心孔返回上级、只读右键菜单。
 - 阶段 9：布局按 WizTree 式演示稿重排——上半文件夹树表 + 扩展名图例，下半方块图，面包屑夹在两者之间；方块按扩展名着色，多出「% 父级」「已分配」「项目/文件/文件夹」列。
+- 阶段 10：界面的五处反馈（筛选框裁切、单击展开、列配置、图例列、设置对话框越界）。
+- 阶段 11：B3 的性能测量与扁平数组传递（30 万节点导入 517 → 136 ms）。
+- 阶段 12：接入 WinShun 宿主——无 Qt 的启动器 + 宿主 Qt 上的 DLL、插件协议、独立清单与打包脚本。
 
 ## 安全边界
 
-- 不修改分支根部的 `plugin.json` 或原生 `diskview.exe`。
+- 不修改分支根部的 `plugin.json` 或原生 `diskview.exe`；QML 版的清单是 `qmlapp/plugin.json`，id 与原生版不同，两个插件并存安装、各读各的设置。
 - 不进行真实文件操作；快照数据只用于可视化。
 - 不启动新的插件或服务端。
 
@@ -34,6 +37,19 @@ cmake --build qmlapp/build
 - `DISKVIEW_BUILD_QML=OFF`（默认）时不查找 Qt，原生版照常构建。
 - `DISKVIEW_QT_PREFIX` 指向 Qt 6.12.0 MSVC SDK 根目录。
 - `qmlapp/tests/check-prototype.ps1` 覆盖 fixture 递归求和、chart geometry 单元测试、扫描设置单元测试、扫描行为单元测试、列表模型单元测试、部署独立运行包、treemap/sunburst 双模式截图、可见节点命中与 zoom/pan 逆变换、模型目录进入/返回、真实扫描、扫描被按住的状态、helper 分派。检查期间的扫描读的是一份只含 `{"scanMode": 2}` 的临时设置，扫的是临时目录，不会弹 UAC。
+
+## 接入 WinShun 宿主
+
+`-DDISKVIEW_BUILD_PLUGIN=ON` 时额外产出宿主用的两段式插件（与 WinShun 自带的 `winshun.capture`、`ra9fael.binarylab-qml` 同一套做法）：
+
+- `diskview-qml.exe`：无 Qt、静态 CRT 的启动器（`qmlapp/stub/main.cpp`），读 `WS_APP_DIR`、把宿主的文件夹加进 DLL 搜索路径，加载同目录的 `DiskViewQmlApp.dll`；
+- `DiskViewQmlApp.dll`：跑在 Qt 上（`qmlapp/src/plugin_main.cpp`），`QGuiApplication` 留在主线程，`winshun::Plugin::serve()` 在工作线程，`query`/`action`/`appearance`/`shutdown` 都接上了；窗口就是现有的 `QmlHost`。
+
+产物在 `build-plugin/plugin/`。`tools/package-qml.py` 打包成 `dist/ra9fael.diskview.qml-<版本>.wsplugin`，`tools/verify/smoke-plugin-qml.py` 用真实协议验证（查询、打开、扫描、主题、关闭）。
+
+**为什么随包带 Qt**：宿主的 Qt 只承诺 Core/Gui/Qml/Quick 与它自己那套扁平控件，`QtQuick/Controls` 没有顶层 `qmldir`（模块在 `Qt6QuickControls2.dll` 的资源里），而这个窗口用了 `QtQuick.Controls`。所以清单里**不写** `runtime.qt`/`qtVersion`（这是宿主表达「自带 Qt」的方式），包内附 SDK 的 Qt，`windeployqt --qmldir` 按实际 import 部署，再裁掉没用到的模块。代价是包约 97 MB（宿主上限 256 MB）。
+
+**已知取舍**：设置文件用 `QFile` 直写而不是 `QSaveFile`——后者在这种部署下写同目录临时文件再改名会被拒（"Access is denied"），为此放弃了原子写。超大批量设置的极端情况可能留下半截文件，重开即恢复默认。
 
 ## 独立运行包
 
