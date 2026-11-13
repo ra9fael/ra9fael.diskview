@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <cstdlib>
 
+// The reserved folders of every fixed volume, for the first run's exclusions.
+#include <windows.h>
+
 namespace {
 
 QString settingsFilePath()
@@ -25,6 +28,25 @@ QString settingsFilePath()
         dir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
     }
     return dir.filePath(QStringLiteral("diskview-qml.json"));
+}
+
+// The folders every Windows volume keeps for itself and that nobody wants in a
+// space report. Seeded on the first run, and only those: they hold no user data,
+// so leaving them out does not make the totals wrong.
+QStringList defaultExcludedPaths()
+{
+    QStringList paths;
+    const DWORD mask = ::GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if ((mask & (1u << i)) == 0) continue;
+        const wchar_t root[4] = {static_cast<wchar_t>(L'A' + i), L':', L'\\', L'\0'};
+        if (::GetDriveTypeW(root) != DRIVE_FIXED) continue;
+        const QString drive = QString::fromWCharArray(root, 3);
+        paths.append(drive + QStringLiteral("System Volume Information"));
+        paths.append(drive + QStringLiteral("$Recycle.Bin"));
+        paths.append(drive + QStringLiteral("Recovery"));
+    }
+    return paths;
 }
 
 // The worker counts the plugin offers. A value outside them is snapped to the
@@ -147,6 +169,18 @@ void ScanSettings::setWholeTree(bool whole)
     emit changed();
 }
 
+void ScanSettings::setChartDepth(int depth)
+{
+    // One level means the folders stay whole tiles, five is as deep as the
+    // chart reads well; anything else is snapped into that range.
+    const int clamped = std::clamp(depth, 1, 5);
+    if (clamped == m_chartDepth) {
+        return;
+    }
+    m_chartDepth = clamped;
+    emit changed();
+}
+
 void ScanSettings::addExcludedPath(const QString& path)
 {
     const QString trimmed = path.trimmed();
@@ -186,6 +220,10 @@ bool ScanSettings::load()
 {
     QFile file(settingsFilePath());
     if (!file.open(QIODevice::ReadOnly)) {
+        // First run: the volume's own reserved folders are excluded from the
+        // start, the way the report is meant to be read.
+        m_excludedPaths = defaultExcludedPaths();
+        emit changed();
         return false;
     }
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
@@ -219,6 +257,7 @@ bool ScanSettings::load()
     setHiddenColumns(hidden);
     m_fuzzyMatch = object.value(QStringLiteral("fuzzyMatch")).toBool(false);
     m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
+    m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(2), 1, 5);
     emit changed();
     return true;
 }
@@ -238,6 +277,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("hiddenColumns"), hidden);
     object.insert(QStringLiteral("fuzzyMatch"), m_fuzzyMatch);
     object.insert(QStringLiteral("wholeTree"), m_wholeTree);
+    object.insert(QStringLiteral("chartDepth"), m_chartDepth);
     QJsonArray excluded;
     for (const QString& path : m_excludedPaths) {
         excluded.append(path);

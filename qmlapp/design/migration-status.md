@@ -129,6 +129,26 @@ B3 原本的计划是「QSGGeometryNode 渲染路径 + 抗锯齿圆盘 + 大目�
 3. **只补宿主缺的三个文件**：宿主 Qt 的 DLL 很全，缺的只是 `qml/QtQuick/Controls` 顶层（`qmldir` + `qtquickcontrols2plugin.dll` + `plugins.qmltypes`，约 42 KB），模块本体在 `Qt6QuickControls2.dll` 里。先把整份 Qt 打进包（97 MB），再按差集改成只放这 3 个文件——包降到 1 MB，冒烟测试照旧通过。`plugin_main` 按目录里有没有 `Qt6Core.dll` 判断用哪套 Qt，导入路径是「包内 qml 优先，宿主 qml 兜底」。
 4. **`QSaveFile` 在此部署下写不进去**（"Access is denied"，普通目录也一样），设置改成 `QFile` 直写，放弃原子写。
 
+### 阶段 14：装进真实工作台后的五条反馈
+
+装机实测后用户报了五点：看不到管理员权限要求、打开时应先弹 UAC、排除路径没有默认值、配置要在宿主设置页可见、点几下就崩。逐条查证后用**崩溃转储**定案（`0xC0000409` ← `ucrtbase!abort` ← `Qt6Core!qBadAlloc`，即未捕获的 `std::bad_alloc`）：
+
+- **沙箱决定了提权不可能**：宿主用 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` 起插件，受限令牌下 UAC 连对话框都不会出现。所以「打开就申请权限」无法实现；保持快扫按需提权，只在受限进程里用 `TokenRestrictedSids` 探出来、直接退回普通遍历并把原因写到界面。清单不加 `elevated`（那是让宿主整体提权后托管插件，不是按需 UAC）。
+- **崩溃的真正原因是内存上限**：`memoryMB` 原为 1024，而 `C:\` 普通遍历峰值超过 6 GB。收口分两步：先是扫描线程整体 try/catch（失败显示「扫描中断」，不崩进程）、`flatten` 之后立刻释放扫描器的树、预览快照合并并在树超过 50 万节点后停发（`ScanOptions::previewNodeLimit`，原生版默认 0 不受影响）、模型不为每个节点存 `path`/`ext`（按父链现算，过滤用一条随深度伸缩的路径串）。接着用 `JOBOBJECT_LIMIT_PROCESS_MEMORY=2048` 的探针一测，提交峰值仍到 2136 MB、`C:\` 报 bad allocation：`flatten` 与模型各占一份名字和字段。于是名字只留一份（`FlatTree::names` 直接移交给模型，`Entry` 里放索引）、`flattenInto` 边读边清空扫描器节点的 `name` 与 `children`。`memoryMB` 声明为上限 2048；实测 `C:\`（约 4.73M 文件 / 867k 目录，启用完整自检）峰值工作集约 1405 MB、峰值提交约 1690 MB，在 2048 MB 作业上限下完整扫描 + 自检通过。
+- **默认排除**：首次运行（打不开设置文件时）排除每个固定盘的 `System Volume Information`、`$Recycle.Bin`、`Recovery`。
+- **设置归属**：`plugin.json` 声明 `scanMode`/`workers`/`media`/`preview` 四项，宿主设置页展示并持久化；`settingsChanged` 经 `BlockingQueuedConnection` 即时推给已打开的窗口，此时窗口内设置对话框对这四项只显示说明。排除路径没有对应的宿主设置类型，留在 `diskview-qml.json`。
+- **顺带修了自检的误报**：`list=filter` 原先要求「每一行路径都包含关键字」，而过滤本来就会保留命中项的祖先目录，于是大树上必然失败。改成「包含关键字，或位于通往命中项的路径上」。
+
+## 验证结果（阶段 14 与 QML 0.1.1）
+- `C:\` 普通遍历（4 工作线程，启用完整自检）：约 4.73M 文件 / 867k 目录，峰值工作集约 1405 MB、峰值提交约 1690 MB；在 `CreateJobObject` + `JOB_OBJECT_LIMIT_PROCESS_MEMORY=2048` 下完整扫描、自检 `PASS`，退出码 0。首次内存优化时提交峰值约 1975 MB；将模型改为直接接管列式数组，并用紧凑子节点索引后，降至约 1690 MB。
+- `check-prototype.ps1` 全绿：treemap/sunburst、真实小树、暂停扫描、helper 分派；自检包含 `list=sort,name,filter,files,expand,history,view` 与 `chart=expand`，双图均 `PASS`。
+- QML model/settings/scan/chart geometry 与原生测试全部通过；`git diff --check` 无空白错误。
+- `build-plugin` Release 构建通过；7 文件、约 1044 KB 的 `dist/ra9fael.diskview.qml-0.1.1.wsplugin` 已从解压副本通过 `smoke-plugin-qml.py`（query/open/scan/theme/shutdown），SHA256 为 `5c32630783348d5da9d439589de751ad500ee219a8b95d3111d3214295d96799`。
+- `ws plugin install ...0.1.1.wsplugin` 已将用户安装目录从 0.1.0 更新到 0.1.1；插件列表确认 enabled、version 0.1.1、manifest memoryMB 2048。正在运行的 WinShun 不在本次操作中重启，实际加载新 DLL 需下次启动宿主；UAC 前台也仍需在真实桌面触发授权验证。
+- 独立启动器测试要带 `WS_APP_DIR=C:\\Program Files\\WinShun`；省略该变量时 stub 按设计拒绝启动，与包本身无关。
+
+- 排查时踩到：在 Git Bash 里直接跑插件，Qt 找不到平台插件会弹一个**看不见的模态对话框**（栈上是 `USER32!DialogBox2`），表现为进程静默挂死；测试时显式给 `QT_QPA_PLATFORM_PLUGIN_PATH` 即可。
+
 ## 验证结果（阶段 13）
 - `smoke-plugin-qml.py` 对构建目录与**解压后的安装目录**各跑一遍，都通过——说明包是自足的，不依赖宿主 Qt 或 PATH。
 - 启动器 `dumpbin /dependents` 只有 `KERNEL32.dll`；DLL 依赖 `Qt6Core/Gui/Qml/Quick`。
@@ -217,3 +237,4 @@ B3 原本的计划是「QSGGeometryNode 渲染路径 + 抗锯齿圆盘 + 大目�
 - QML 分支与原生版的双目标安装产物、plugin.json 变体发布尚未开始（用户已决定两个插件并存，`plugin.json` 出变体）。
 - QPainter sunburst adapter 已完成功能/可见性检查；最终 Scene Graph 性能、大规模目录压力、实际 QML 鼠标双击合成事件测试仍未验收。原生 0.3.0 保持正式版及回退基线。
 - B1–B4 已完成：交互、布局、性能、宿主接入与独立打包。剩下的是文件操作（回收站/删除）与发版流程（B5），以及文件视图整树范围的压力验证。
+- `0.1.1` 更新已安装到用户插件目录并通过解压包协议冒烟；磁盘上版本为 `0.1.1`、`memoryMB=2048`。运行中的 WinShun 未重启，实际加载新 DLL 需下次启动；UAC 前台表现需真实桌面触发授权验证。

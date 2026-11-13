@@ -117,6 +117,11 @@ struct ScanOptions {
     const std::atomic<bool>* paused = nullptr;
     std::vector<std::wstring> excludedPaths;
     unsigned previewIntervalMs = 1500;
+    // A preview is a full copy of the tree read so far. Past this many nodes
+    // the copies cost more than the preview is worth, and under a host that
+    // caps the process memory they are what pushes it over. 0 keeps previews
+    // whatever the size.
+    unsigned previewNodeLimit = 0;
 };
 
 // Return false to cancel.

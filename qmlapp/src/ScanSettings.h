@@ -26,6 +26,10 @@ class ScanSettings : public QObject {
     // through the whole scan instead of the folder that is open.
     Q_PROPERTY(bool fuzzyMatch READ fuzzyMatch WRITE setFuzzyMatch NOTIFY changed)
     Q_PROPERTY(bool wholeTree READ wholeTree WRITE setWholeTree NOTIFY changed)
+    // How many levels the chart draws, 1 (folders as whole tiles) to 5. The
+    // native plugin offers the same switch; a deeper chart is what makes a
+    // drive readable at a glance.
+    Q_PROPERTY(int chartDepth READ chartDepth WRITE setChartDepth NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -51,6 +55,8 @@ public:
     void setFuzzyMatch(bool fuzzy);
     bool wholeTree() const { return m_wholeTree; }
     void setWholeTree(bool whole);
+    int chartDepth() const { return m_chartDepth; }
+    void setChartDepth(int depth);
     QString filePath() const;
 
     Q_INVOKABLE bool load();
@@ -71,4 +77,5 @@ private:
     QStringList m_hiddenColumns;
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;
+    int m_chartDepth = 2;
 };

@@ -108,8 +108,23 @@ inline Outcome scan(HWND owner,const std::wstring& path,const ProgressFn& progre
     if(!immediate&&::GetLastError()!=ERROR_IO_PENDING){reason=L"Cannot connect scan session";return Outcome::Fallback;}
     wchar_t exe[32768]{};::GetModuleFileNameW(nullptr,exe,32768);
     const std::wstring args=L"--scan-helper "+path.substr(0,2)+L" "+pipeName+L" "+std::to_wstring(::GetCurrentProcessId());
+    // The consent prompt is another process' window. It only comes up over
+    // this one if this one is in the foreground and the system is allowed to
+    // hand the foreground on, which is exactly what AllowSetForegroundWindow
+    // grants; without it the prompt can be raised behind the window the user
+    // is looking at.
+    if(owner) {
+        ::SetForegroundWindow(owner);
+        ::SetWindowPos(owner,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+        ::AllowSetForegroundWindow(ASFW_ANY);
+    }
     SHELLEXECUTEINFOW info{};info.cbSize=sizeof info;info.fMask=SEE_MASK_NOCLOSEPROCESS|SEE_MASK_NOASYNC|SEE_MASK_FLAG_NO_UI;info.hwnd=owner;info.lpVerb=L"runas";info.lpFile=exe;info.lpParameters=args.c_str();info.nShow=SW_HIDE;
-    if(!::ShellExecuteExW(&info)){const auto error=::GetLastError();::CancelIoEx(pipe.h,&connection);DWORD ignored=0;::GetOverlappedResult(pipe.h,&connection,&ignored,TRUE);reason=error==ERROR_CANCELLED?L"Authorization declined":L"Scan helper could not start ("+std::to_wstring(error)+L")";return Outcome::Fallback;}
+    const BOOL launched=::ShellExecuteExW(&info);
+    const DWORD launchError = launched ? 0u : ::GetLastError();
+    // The prompt is gone: the window the user was in takes the foreground
+    // back, instead of leaving it to whichever window the shell picked.
+    if(owner) ::SetForegroundWindow(owner);
+    if(!launched){::CancelIoEx(pipe.h,&connection);DWORD ignored=0;::GetOverlappedResult(pipe.h,&connection,&ignored,TRUE);reason=launchError==ERROR_CANCELLED?L"Authorization declined":L"Scan helper could not start ("+std::to_wstring(launchError)+L")";return Outcome::Fallback;}
     Handle child(info.hProcess);
     const auto start=::GetTickCount64();bool linked=immediate!=FALSE;
     while(!linked&&!cancel&&::GetTickCount64()-start<15000) {

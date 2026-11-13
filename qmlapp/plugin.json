@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.diskview.qml",
   "name": {"zh": "磁盘透视 · QML", "en": "Disk View · QML"},
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "QML 版磁盘占用可视化：方块图与圆盘图、文件夹树表与扩展名图例、真实扫描与暂停/继续。与原生版并存安装，各读各的设置。",
   "author": "ra9fael",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "sandbox": "normal",
     "start": "lazy",
     "timeoutMs": 3000,
-    "memoryMB": 1024,
+    "memoryMB": 2048,
     "idleExitSec": 0,
     "encoding": "utf-8"
   },
@@ -29,6 +29,39 @@
       "hint": {"zh": "打开窗口时先用哪种画法；窗口里随时可切", "en": "Which layout to open with; switchable in the window"},
       "default": "treemap",
       "options": ["treemap", "sunburst"]
+    },
+    {
+      "key": "scanMode",
+      "type": "choice",
+      "title": {"zh": "扫描方式", "en": "Scan mode"},
+      "hint": {"zh": "自动：能用 MFT 快扫就用，不能就普通遍历。快扫需要管理员权限，WinShun 未以管理员运行时自动跳过。",
+               "en": "Automatic uses the NTFS fast scan when it can; the fast scan needs administrator rights and is skipped when WinShun is not elevated."},
+      "default": "auto",
+      "options": ["auto", "fast", "ordinary"]
+    },
+    {
+      "key": "workers",
+      "type": "choice",
+      "title": {"zh": "普通扫描并发上限", "en": "Ordinary scan workers"},
+      "hint": {"zh": "自动时由扫描器按介质决定；并发更高不保证更快", "en": "Automatic lets the scanner decide; more workers are not promised to be faster"},
+      "default": "auto",
+      "options": ["auto", "1", "2", "4", "8"]
+    },
+    {
+      "key": "media",
+      "type": "choice",
+      "title": {"zh": "介质策略", "en": "Media"},
+      "hint": {"zh": "告诉扫描器盘是什么类型，影响并发与预读", "en": "Lets the scanner tune concurrency and read-ahead"},
+      "default": "auto",
+      "options": ["auto", "ssd", "hdd", "network"]
+    },
+    {
+      "key": "preview",
+      "type": "choice",
+      "title": {"zh": "预览发布", "en": "Preview rate"},
+      "hint": {"zh": "扫描过程中界面刷新的间隔", "en": "How often the window refreshes during a scan"},
+      "default": "balanced",
+      "options": ["balanced", "less"]
     }
   ],
   "commands": [

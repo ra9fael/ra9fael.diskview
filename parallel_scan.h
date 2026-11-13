@@ -149,7 +149,8 @@ inline void scanPath(const std::wstring& path,const ProgressFn& progress,const s
             callbackCancelled=!progress(pg);nextProgress=now+100;
         }
         now=::GetTickCount64();
-        if(snapshot&&now>=nextPreview&&!ready.empty()&&!stopped()&&!callbackCancelled) {
+        if(snapshot&&now>=nextPreview&&!ready.empty()&&!stopped()&&!callbackCancelled
+           &&!(options.previewNodeLimit&&shared.files+shared.dirs>options.previewNodeLimit)) {
             const auto tick=::GetTickCount64();auto copy=std::make_shared<ScanResult>(*result);
             summarize(copy->root,true,true);copy->files=copy->root.files;copy->dirs=copy->root.dirs;rank(*copy);copy->elapsedMs=now-start;
             snapshot(std::move(copy));const auto cost=::GetTickCount64()-tick;result->snapshotMs+=cost;

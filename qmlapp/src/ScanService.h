@@ -114,6 +114,8 @@ signals:
 private:
     void setState(const QString& state);
     bool beginScan(const QString& path, bool startPaused);
+    // A failure that is not the scanner's own: reported as the failed state.
+    void reportScanFailure(const QString& message);
 
     QString m_state = QStringLiteral("idle");
     QString m_statusText;
@@ -141,5 +143,9 @@ private:
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_pause{false};
+    // One preview at a time: a snapshot that is still on its way to the window
+    // makes the next one pointless, and keeping them all queued copies the
+    // whole tree per snapshot. On a multi-million-node scan that is gigabytes.
+    std::atomic<bool> m_snapshotPending{false};
     std::thread m_thread;
 };
