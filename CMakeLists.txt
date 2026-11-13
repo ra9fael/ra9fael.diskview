@@ -60,6 +60,9 @@ endif()
 # The QML edition. Off by default: the native plugin builds and ships without
 # Qt, and the QML targets need the 6.12 SDK.
 option(DISKVIEW_BUILD_QML "Build the QML edition" OFF)
+# The WinShun plugin variant of the same edition: a starter without Qt plus a
+# DLL built on the host's Qt. Needs DISKVIEW_BUILD_QML as well.
+option(DISKVIEW_BUILD_PLUGIN "Build the WinShun plugin variant of the QML edition" OFF)
 set(DISKVIEW_QT_PREFIX "" CACHE PATH "Qt 6 SDK root, used when DISKVIEW_BUILD_QML is ON")
 if(DISKVIEW_BUILD_QML)
     if(DISKVIEW_QT_PREFIX)

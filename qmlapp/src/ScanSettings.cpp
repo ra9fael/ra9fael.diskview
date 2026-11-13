@@ -6,7 +6,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSaveFile>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -247,10 +246,12 @@ bool ScanSettings::save()
 
     const QString path = settingsFilePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
-    QSaveFile file(path);
+    // A plain file, not QSaveFile: the write-to-a-sibling-temp-and-rename
+    // gets "Access is denied" from the plugin process even in an ordinary
+    // folder, so the atomic swap is given up for a small settings file.
+    QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return false;
     }
-    file.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
-    return file.commit();
+    return file.write(QJsonDocument(object).toJson(QJsonDocument::Indented)) >= 0;
 }

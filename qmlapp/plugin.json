@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LingCore/WinShun-plugins/main/schema/plugin.schema.json",
+  "manifest": 1,
+  "id": "ra9fael.diskview.qml",
+  "name": {"zh": "磁盘透视 · QML", "en": "Disk View · QML"},
+  "version": "0.1.0",
+  "description": "QML 版磁盘占用可视化：方块图与圆盘图、文件夹树表与扩展名图例、真实扫描与暂停/继续。与原生版并存安装，各读各的设置。",
+  "author": "ra9fael",
+  "license": "MIT",
+  "icon": "app.ico",
+  "permissions": ["ui", "files:read", "clipboard:write", "processes"],
+  "runtime": {
+    "mode": "resident",
+    "program": "diskview-qml.exe",
+    "sandbox": "normal",
+    "start": "lazy",
+    "timeoutMs": 3000,
+    "memoryMB": 1024,
+    "idleExitSec": 0,
+    "encoding": "utf-8"
+  },
+  "settings": [
+    {
+      "key": "defaultView",
+      "type": "choice",
+      "title": {"zh": "默认视图", "en": "Default view"},
+      "hint": {"zh": "打开窗口时先用哪种画法；窗口里随时可切", "en": "Which layout to open with; switchable in the window"},
+      "default": "treemap",
+      "options": ["treemap", "sunburst"]
+    }
+  ],
+  "commands": [
+    {
+      "id": "disk",
+      "keyword": "disk",
+      "title": {"zh": "磁盘占用分析 · QML", "en": "Disk space analyzer · QML"},
+      "hint": {"zh": "Enter 打开窗口 · 可带路径，如 disk D:\\工作",
+               "en": "Enter opens the window · optional path, e.g. disk D:\\work"},
+      "actions": [
+        {"id": "open", "title": {"zh": "打开磁盘透视窗口", "en": "Open disk view"}, "key": "Enter"}
+      ]
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # Build output is never committed or packaged into .wsplugin.
 build/
+build-plugin/
+qmlapp/build-plugin/
 CMakeFiles/
 *.obj
 *.pdb

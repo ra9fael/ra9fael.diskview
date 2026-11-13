@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QString>
 #include <QStringList>
 
@@ -28,11 +29,19 @@ public:
         bool pauseOnStart = false;
         // How many nodes the chart benchmark builds; 0 means no benchmark.
         int benchNodes = 0;
+        // Where the QtQuick modules live when the app runs on a host's Qt
+        // instead of its own: the plugin build sets this to WinShun's qml
+        // folder. Empty leaves the engine to its defaults.
+        QString importPath;
     };
 
     explicit QmlHost(Options options, QObject* parent = nullptr);
 
     bool load(QString* error);
+    // The window the QML module created, for a host that has to manage it.
+    QQuickWindow* window() const;
+    ScanService* scanner() const { return m_scanService; }
+    ScanSettings* settings() const { return m_scanSettings; }
     bool startScan(const QString& path, QString* error);
     bool runSelfTest(QString* report);
     bool saveScreenshot(const QString& path);

@@ -29,6 +29,11 @@ QmlHost::QmlHost(Options options, QObject* parent) : QObject(parent), m_options(
 
 bool QmlHost::load(QString* error)
 {
+    // The host's own QtQuick modules, when the app is a plugin on WinShun's Qt
+    // rather than on its own deployment.
+    if (!m_options.importPath.isEmpty()) {
+        m_engine.addImportPath(m_options.importPath);
+    }
     m_engine.rootContext()->setContextProperty("diskViewMode", m_options.viewMode);
     m_engine.rootContext()->setContextProperty("fixtureSource",
                                                m_options.fixture.isEmpty() ? QString::fromLatin1(kBuiltInFixture) : m_options.fixture);
@@ -83,6 +88,12 @@ bool QmlHost::load(QString* error)
         m_scanService->setOwnerWindow(window->winId());
     }
     return true;
+}
+
+QQuickWindow* QmlHost::window() const
+{
+    if (m_engine.rootObjects().isEmpty()) return nullptr;
+    return qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
 }
 
 bool QmlHost::startScan(const QString& path, QString* error)

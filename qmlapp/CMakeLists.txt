@@ -50,6 +50,72 @@ foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set_target_properties(diskview-qml PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/bin")
 endforeach()
 
+# ---- the WinShun plugin build ------------------------------------------------
+#
+# WinShun runs the program named in plugin.json and talks JSON-RPC over its
+# stdin/stdout. The split is the one WinShun's own winshun.capture and
+# ra9fael.binarylab-qml use: a starter without Qt (static CRT, no runtime DLL
+# for the strict sandbox to trip over) loads a DLL built on the host's Qt.
+#
+# It is behind its own switch so the standalone launcher above keeps building
+# on a machine without a WinShun checkout.
+option(DISKVIEW_BUILD_PLUGIN "Build the WinShun plugin variant of the QML edition" OFF)
+if(DISKVIEW_BUILD_PLUGIN)
+    # The manifest has to name a program, so the stub keeps the edition's name.
+    add_executable(diskview-qml-plugin stub/main.cpp)
+    set_target_properties(diskview-qml-plugin PROPERTIES OUTPUT_NAME "diskview-qml")
+    target_compile_definitions(diskview-qml-plugin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    set_target_properties(diskview-qml-plugin PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin")
+    foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(diskview-qml-plugin PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/plugin")
+    endforeach()
+    if(MSVC)
+        target_compile_options(diskview-qml-plugin PRIVATE /utf-8 /W4 /permissive-)
+        # Static CRT: the strict sandbox has to be able to start the starter
+        # before any Qt is loaded.
+        set_target_properties(diskview-qml-plugin PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+
+    qt_add_library(diskview-qml-app SHARED
+        src/plugin_main.cpp
+        src/QmlHost.cpp src/QmlHost.h
+        src/ScanService.cpp src/ScanService.h
+        src/ScanSettings.cpp src/ScanSettings.h
+        src/ChartItem.cpp src/ChartItem.h
+        src/DiskViewModel.cpp src/DiskViewModel.h
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
+    qt_add_qml_module(diskview-qml-app
+        URI DiskViewPrototype
+        VERSION 1.0
+        QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml)
+    qt_add_resources(diskview-qml-app "diskview_qml_fixture"
+        PREFIX "/fixtures"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        FILES fixtures/disk-tree.json)
+    target_link_libraries(diskview-qml-app PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
+        user32 shell32 advapi32 ole32 uuid)
+    target_include_directories(diskview-qml-app PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    target_compile_definitions(diskview-qml-app PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    # The plugin protocol header lives at the branch root.
+    target_include_directories(diskview-qml-app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    if(MSVC)
+        target_compile_options(diskview-qml-app PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus)
+        set_target_properties(diskview-qml-app PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
+    # On Windows the DLL is a runtime artifact, not a library one: this is the
+    # folder the stub loads it from.
+    set_target_properties(diskview-qml-app PROPERTIES
+        OUTPUT_NAME "DiskViewQmlApp"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin")
+    foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(diskview-qml-app PROPERTIES
+            ARCHIVE_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/plugin"
+            RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/plugin")
+    endforeach()
+endif()
+
 add_executable(diskview-chart-geometry-tests tests/chart-geometry-tests.cpp)
 target_include_directories(diskview-chart-geometry-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set_target_properties(diskview-chart-geometry-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
