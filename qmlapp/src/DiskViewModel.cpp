@@ -97,6 +97,8 @@ void DiskViewModel::resetStorage()
     m_expanded.clear();
     m_selectedId.clear();
     m_filter.clear();
+    m_extensionFilter.clear();
+    m_extensionFilterOn = false;
     m_current = -1;
     m_chartRoot = -1;
     m_historyPos = -1;
@@ -561,6 +563,13 @@ void DiskViewModel::rebuildRows()
                 return !fuzzyContains(nameOf(i), m_filter);
             }), files.end());
         }
+        // The legend's pick narrows the rows to its own extension; "(无)"
+        // keeps the files that have none.
+        if (m_extensionFilterOn) {
+            files.erase(std::remove_if(files.begin(), files.end(), [this](int i) {
+                return extOf(i) != m_extensionFilter;
+            }), files.end());
+        }
         sortEntries(files);
         m_visible = files;
         return;
@@ -588,11 +597,18 @@ void DiskViewModel::resetAt(int index)
     for (int a = index; a >= 0 && a != m_current; a = parentOf(a)) {
         if (directoryOf(a)) m_expanded.insert(a);
     }
-    // Navigating clears the filter, the way the native panel does.
+    // Navigating clears the filter, the way the native panel does — and the
+    // extension pick with it, since the folder the chart was on is left
+    // behind. The fields are cleared directly: the row rebuild happens in
+    // this function's own reset, so the filter's helper must not nest one.
+    const bool hadExtensionFilter = m_extensionFilterOn;
     m_filter.clear();
+    m_extensionFilter.clear();
+    m_extensionFilterOn = false;
     m_selectedId = QString::number(index + 1);
     rebuildRows();
     endResetModel();
+    if (hadExtensionFilter) emit extensionFilterChanged();
     emit currentPathChanged();
     emit selectedChanged();
     emit listChanged();
@@ -635,6 +651,48 @@ void DiskViewModel::select(const QString& id)
     if (m_selectedId == id) return;
     m_selectedId = id;
     emit selectedChanged();
+}
+
+void DiskViewModel::enterNode(const QString& id)
+{
+    const int index = indexForId(id);
+    if (index < 0) return;
+    if (directoryOf(index)) navigate(id);
+    else select(id);
+}
+
+void DiskViewModel::resetChart()
+{
+    if (m_current < 0 || m_chartRoot == m_current) return;
+    // The chart walks back to the folder the tree is rooted at; the outline
+    // keeps its shape. The chart's own zoom and pan are the view's business
+    // and the QML side resets them with resetView().
+    m_chartRoot = m_current;
+    emit currentPathChanged();
+    emit chartChanged();
+}
+
+void DiskViewModel::selectExtension(const QString& extension)
+{
+    if (m_extensionFilterOn && m_extensionFilter == extension) {
+        clearExtensionFilter();
+        return;
+    }
+    m_extensionFilter = extension;
+    m_extensionFilterOn = true;
+    // The file view's rows are the ones the filter changes; the tree keeps
+    // its outline. A reset is how this model reshapes its rows.
+    applyRowChange();
+    emit extensionFilterChanged();
+}
+
+void DiskViewModel::clearExtensionFilter()
+{
+    if (!m_extensionFilterOn) return;
+    m_extensionFilter.clear();
+    m_extensionFilterOn = false;
+    applyRowChange();
+    emit extensionFilterChanged();
 }
 
 void DiskViewModel::moveSelection(int delta)

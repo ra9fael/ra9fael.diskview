@@ -211,6 +211,58 @@ void testExtensions()
     check(first.value("label").toString().length() > 0, "every extension has a name");
 }
 
+// One pick drives three panels: the file list keeps the matching rows, the
+// flag separates the "(无)" pick from "off", and the same pick again clears.
+void testExtensionFilter()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    check(!model.hasExtensionFilter(), "no extension is picked to start with");
+    model.setViewMode(DiskViewModel::FileView);
+    check(model.itemCount() == 4, "the file view lists every file");
+    model.selectExtension(QStringLiteral(".bin"));
+    check(model.hasExtensionFilter(), "the pick turns the filter on");
+    check(model.extensionFilter() == QStringLiteral(".bin"), "the pick is the extension");
+    check(model.itemCount() == 2, "only the .bin files survive the filter");
+    model.selectExtension(QStringLiteral(".bin"));
+    check(!model.hasExtensionFilter(), "the same pick again clears the filter");
+    check(model.itemCount() == 4, "every file is back");
+    model.selectExtension(QStringLiteral(".txt"));
+    check(model.itemCount() == 1, "the .txt pick keeps its one file");
+    model.clearExtensionFilter();
+    check(!model.hasExtensionFilter() && model.itemCount() == 4, "clearing brings every file back");
+    // The tree view keeps its outline: an extension pick must not reshape it.
+    model.selectExtension(QStringLiteral(".bin"));
+    model.setViewMode(DiskViewModel::TreeView);
+    check(namesOf(model) == QStringList({"zulu", "alpha", "mike.bin"}),
+          "the tree ignores the extension pick");
+    model.clearExtensionFilter();
+}
+
+// The chart and the tree are one navigation: entering a folder from the chart
+// opens the tree down to it, and resetChart walks the chart back to the tree's
+// own root without touching the outline.
+void testEnterAndResetChart()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    // The ids are one past the index: 1 is the drive, 2 zulu, 3 big.bin,
+    // 4 tiny.txt.
+    model.select(QStringLiteral("4")); // tiny.txt
+    check(model.selectedId() == QStringLiteral("4"), "the file is selected");
+    model.enterNode(QStringLiteral("4"));
+    check(model.selectedId() == QStringLiteral("4") && model.currentPath() == QStringLiteral("D:\\"),
+          "entering a file selects it without moving the chart");
+    model.enterNode(QStringLiteral("2")); // zulu
+    check(model.currentPath() == QStringLiteral("D:\\zulu"), "entering a folder moves the chart to it");
+    check(model.selectedId() == QStringLiteral("2"), "the entered folder is the selection");
+    // The tree keeps its own root: the outline still starts at the drive.
+    check(namesOf(model).contains(QStringLiteral("alpha")), "the outline still shows the drive's folders");
+    model.resetChart();
+    check(model.currentPath() == QStringLiteral("D:\\"), "resetting walks the chart back to the tree root");
+    check(namesOf(model).contains(QStringLiteral("alpha")), "resetting leaves the outline alone");
+}
+
 void testMetadataColumns()
 {
     // 2026-11-13 01:51 UTC as a FILETIME; the column prints it in local time,
@@ -331,6 +383,8 @@ int main()
     testFlatLoad();
     testHistory();
     testFormatting();
+    testExtensionFilter();
+    testEnterAndResetChart();
     if (g_failures == 0) {
         std::cout << "PASS\n";
         return 0;

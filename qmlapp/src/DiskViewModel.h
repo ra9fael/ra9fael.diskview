@@ -29,6 +29,12 @@ class DiskViewModel : public QAbstractListModel {
     // The extension of the selected file, so the legend can mark the row that
     // belongs to what the chart is showing.
     Q_PROPERTY(QString selectedExtension READ selectedExtension NOTIFY selectedChanged)
+    // The extension the legend picked, or empty when every colour shows. One
+    // state for three panels: the legend marks the row, the chart dims every
+    // other extension and the file list keeps to the matching files. The flag
+    // is what separates "off" from the "(无)" row, whose extension is empty.
+    Q_PROPERTY(QString extensionFilter READ extensionFilter NOTIFY extensionFilterChanged)
+    Q_PROPERTY(bool hasExtensionFilter READ hasExtensionFilter NOTIFY extensionFilterChanged)
     Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectedChanged)
     Q_PROPERTY(QVariantMap chartTree READ chartTree NOTIFY chartChanged)
     // How many levels below the current folder the chart is showing; it shares
@@ -80,6 +86,8 @@ public:
     QString totalText() const;
     QString selectedId() const { return m_selectedId; }
     QString selectedExtension() const;
+    QString extensionFilter() const { return m_extensionFilter; }
+    bool hasExtensionFilter() const { return m_extensionFilterOn; }
     int selectedRow() const;
     QVariantMap chartTree() const;
     int chartDepth() const { return m_chartDepth; }
@@ -109,6 +117,18 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE void navigate(const QString& id);
+    // One entry point for "go into this folder or open this file", shared by
+    // the chart's double click and the tree's navigation, so the two cannot
+    // drift apart: a folder becomes the chart's folder and the tree opens
+    // down to it, a file is simply selected.
+    Q_INVOKABLE void enterNode(const QString& id);
+    // The chart returns to the folder the tree is rooted at and the view
+    // resets to 1:1. The outline the user built is untouched.
+    Q_INVOKABLE void resetChart();
+    // The legend's pick: the same extension again clears it, "(无)" filters to
+    // files without an extension.
+    Q_INVOKABLE void selectExtension(const QString& extension);
+    Q_INVOKABLE void clearExtensionFilter();
     Q_INVOKABLE void goUp();
     Q_INVOKABLE void goBack();
     Q_INVOKABLE void goForward();
@@ -131,6 +151,7 @@ public:
 signals:
     void currentPathChanged();
     void selectedChanged();
+    void extensionFilterChanged();
     void partialChanged();
     void listChanged();
     void loadErrorChanged();
@@ -200,6 +221,11 @@ private:
     int m_chartRoot = -1;
     int m_historyPos = -1;
     QString m_selectedId;
+    // The extension the legend picked: the chart dims the rest and the file
+    // list keeps to it. The flag separates "off" from the "(无)" pick, whose
+    // extension is empty.
+    QString m_extensionFilter;
+    bool m_extensionFilterOn = false;
     QString m_filter;
     QString m_loadError;
     int m_sortKey = SortBySize;

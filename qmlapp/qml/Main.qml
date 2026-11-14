@@ -47,8 +47,13 @@ ApplicationWindow {
         if (all.length <= 6) return all
         return [all[0], { name: "…", id: "", current: false }].concat(all.slice(all.length - 4))
     }
-    // The extension the legend picked; empty means "every colour".
-    property string highlightExt: ""
+    // The extension the legend picked lives in the model now, so the file
+    // list can filter on it too; the chart maps the "(无)" pick to its own
+    // sentinel.
+    function chartHighlight() {
+        if (!diskModel.hasExtensionFilter) return ""
+        return diskModel.extensionFilter.length ? diskModel.extensionFilter : "(none)"
+    }
     // Which picture the chart draws: 0 treemap, 1 sunburst. The startup value
     // is the host's default view; the toolbar switches it for this window.
     property int chartKind: diskViewMode
@@ -86,7 +91,6 @@ ApplicationWindow {
             // follow it.
             if (filterField.text !== diskModel.filter) filterField.text = diskModel.filter
         }
-        function onCurrentPathChanged() { window.highlightExt = "" }
     }
 
     ScanSettingsDialog { id: settingsDialog; objectName: "scanSettingsDialog" }
@@ -197,6 +201,18 @@ ApplicationWindow {
                     onClicked: issuesDialog.open()
                 }
                 Button { text: "扫描设置"; Layout.minimumWidth: 76; onClicked: settingsDialog.open() }
+                // Whether the fast scan can run at all: this process carries an
+                // administrator token only when an elevated Win顺 started it.
+                Label {
+                    visible: scanSettings.scanMode !== 2
+                    text: scanService.elevated ? "快扫可用（管理员）" : "快扫不可用（Win顺 未以管理员运行）"
+                    font.pixelSize: 11
+                    color: scanService.elevated ? "#2c7a3f" : window.shade("#8a5a20", "#c9a15c")
+                    ToolTip.visible: hovered
+                    ToolTip.text: scanService.elevated
+                                  ? "本进程持有管理员令牌，快扫直接读取 MFT，不再弹出 UAC"
+                                  : "以管理员身份运行 Win顺，并在插件权限里允许 elevated 后，快扫才会启用"
+                }
             }
         }
 
@@ -599,15 +615,13 @@ ApplicationWindow {
                                 width: ListView.view.width
                                 height: 22
                                 padding: 0
-                                // Two links in one: the row the legend picked, and
-                                // the extension of whatever the chart has
-                                // selected, so the two panels point at each other.
-                                highlighted: (window.highlightExt.length > 0 && window.highlightExt === modelData.ext)
+                                // Two links in one: the row the legend picked
+                                // (which also filters the file list), and the
+                                // extension of whatever the chart has
+                                // selected, so the panels point at each other.
+                                highlighted: (diskModel.hasExtensionFilter && diskModel.extensionFilter === modelData.ext)
                                              || (diskModel.selectedExtension.length > 0 && diskModel.selectedExtension === modelData.ext)
-                                onClicked: {
-                                    const ext = modelData.ext
-                                    window.highlightExt = window.highlightExt === ext ? "" : ext
-                                }
+                                onClicked: diskModel.selectExtension(modelData.ext)
                                 contentItem: RowLayout {
                                     spacing: 0
                                     Item { Layout.preferredWidth: 18; Layout.fillHeight: true
@@ -745,6 +759,21 @@ ApplicationWindow {
                             border.color: window.shade("#dce2e8", "#333d4e")
                         }
                     }
+                    // Back to the folder the tree is rooted at and to 1:1: one
+                    // button for both, since a chart that has wandered off is
+                    // what brings the user here.
+                    ToolButton {
+                        text: "复位"
+                        implicitWidth: 44
+                        implicitHeight: 26
+                        font.pixelSize: 11
+                        ToolTip.visible: hovered
+                        ToolTip.text: "回到当前目录并还原缩放"
+                        onClicked: {
+                            diskModel.resetChart()
+                            chart.resetView()
+                        }
+                    }
                     Item { Layout.fillWidth: true }
                     Label { text: "层级"; font.pixelSize: 11; color: "#56657b" }
                     ComboBox {
@@ -824,15 +853,14 @@ ApplicationWindow {
                             selectedId: diskModel.selectedId
                             viewMode: window.chartKind
                             centerLabel: diskModel.currentName
-                            highlightExtension: window.highlightExt
+                            highlightExtension: window.chartHighlight()
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
                             onActivated: function(nodeId, directory) {
                                 // The chart is a map: a double click enters the
                                 // folder, the same way the native one does. The
                                 // tree keeps the in-place triangle for opening
                                 // a folder without leaving the current one.
-                                if (directory) diskModel.navigate(nodeId)
-                                else diskModel.select(nodeId)
+                                diskModel.enterNode(nodeId)
                             }
                             onContextRequested: function(nodeId, x, y) {
                                 if (!nodeId.length) return

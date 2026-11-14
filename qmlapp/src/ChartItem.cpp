@@ -85,6 +85,18 @@ void ChartItem::setPan(const QPointF& pan)
     emit panChanged();
     rebuildGeometry();
 }
+void ChartItem::resetView()
+{
+    // The transform is all this resets: the hover is dropped (the pointer is
+    // usually elsewhere by the time the button is pressed) and the selection
+    // stays, since it belongs to the model. The folder is the model's
+    // business, not the chart's.
+    m_hoverId.clear();
+    emit hoverChanged();
+    setZoom(1.0);
+    setPan(QPointF(0, 0));
+    update();
+}
 void ChartItem::setCenterLabel(const QString& label)
 {
     if(m_centerLabel==label)return;
@@ -119,12 +131,32 @@ void ChartItem::setTheme(const QString& theme)
 
 QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
 {
-    const bool hidden=!m_highlightExtension.isEmpty()&&!node.dir
-        &&diskviewqml::extensionOf(QString::fromStdWString(node.name))!=m_highlightExtension;
-    if(dimmed)*dimmed=hidden;
+    // "(none)" is the legend's "(无)" pick: files without an extension stay
+    // lit, everything else dims.
+    const bool nonePick = m_highlightExtension == QStringLiteral("(none)");
+    const QString extension = diskviewqml::extensionOf(QString::fromStdWString(node.name));
+    const bool hidden = !m_highlightExtension.isEmpty() && !node.dir
+        && (nonePick ? !extension.isEmpty() : extension != m_highlightExtension);
+    if (dimmed)*dimmed=hidden;
     if(hidden)return kDimmedFill;
     if(node.dir)return m_theme=="dark"?QColor("#4a5568"):QColor("#8f9aa8");
-    return diskviewqml::extensionColor(diskviewqml::extensionOf(QString::fromStdWString(node.name)));
+    return diskviewqml::extensionColor(extension);
+}
+
+// The quiet outline every tile and slice carries: a hairline in the window's
+// border grey, so shapes separate from their neighbours and from the strips
+// without any selection.
+QColor ChartItem::strokeColor() const
+{
+    return m_theme=="dark"?QColor(255,255,255,46):QColor(24,38,56,56);
+}
+
+// The stronger stroke of a hover or a selection, in the accent blue both
+// themes share with the window's own controls.
+QColor ChartItem::accentColor(bool selected) const
+{
+    const QColor base=m_theme=="dark"?QColor("#6aaef7"):QColor("#2f7cd6");
+    return selected?base:base.lighter(118);
 }
 
 // The tile's own gradient: a vertical fade from a lighter top to the base
@@ -380,7 +412,19 @@ void ChartItem::paint(QPainter* painter)
                 fill=QBrush(g);
             }
             painter->fillRect(rect,fill);
-            if(id==m_selectedId||id==m_hoverId){painter->setPen(QPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#1b2b3a"),id==m_selectedId?2:1));painter->setBrush(Qt::NoBrush);painter->drawRect(rect.adjusted(1,1,-1,-1));}
+            // Every tile gets a quiet outline of its own: the nesting and the
+            // neighbouring files stay readable without a selection. The
+            // selection and the hover draw their stronger stroke over it, in
+            // the accent colour, so the two states cannot be confused.
+            if(id==m_selectedId||id==m_hoverId){
+                painter->setPen(QPen(accentColor(id==m_selectedId),id==m_selectedId?2:1));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawRect(rect.adjusted(1,1,-1,-1));
+            }else{
+                painter->setPen(QPen(strokeColor(),1));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawRect(rect.adjusted(0.5,0.5,-0.5,-0.5));
+            }
         }
         // Every folder gets a title strip along its top edge, painted after the
         // children so it is never covered: that is what makes a nesting of
@@ -413,7 +457,11 @@ void ChartItem::paint(QPainter* painter)
             path.closeSubpath();
             painter->fillPath(path,fillFor(*slice.node));
             if(id==m_selectedId||id==m_hoverId){
-                painter->setPen(QPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#1b2b3a"),id==m_selectedId?2:1));
+                painter->setPen(QPen(accentColor(id==m_selectedId),id==m_selectedId?2:1));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawPath(path);
+            }else{
+                painter->setPen(QPen(strokeColor(),1));
                 painter->setBrush(Qt::NoBrush);
                 painter->drawPath(path);
             }

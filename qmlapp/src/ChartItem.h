@@ -50,6 +50,9 @@ public:
     QPointF hoverPosition() const { return m_hoverPosition; }
     // The name, path, size and kind of the node a region belongs to.
     Q_INVOKABLE QVariantMap hoveredInfo(const QString& id) const;
+    // Back to 1:1 and centred: the zoom and the pan are gone, the folder the
+    // chart is on stays (resetChart in the model is the one that leaves it).
+    Q_INVOKABLE void resetView();
     // Where to aim a synthetic double click to enter a folder.
     Q_INVOKABLE QPointF firstDirectoryCenter() const;
     Q_INVOKABLE QString hitTestAt(qreal x,qreal y) const { return hitTest(QPointF(x,y)); }
@@ -110,6 +113,10 @@ private:
     QColor fillFor(const diskview::Node& node, bool* dimmed = nullptr) const;
     // The same, as a vertical gradient over the tile's own rectangle.
     QBrush fillBrush(const diskview::Node& node, const QRectF& rect, bool* dimmed = nullptr) const;
+    // The quiet outline every shape carries, and the stronger accent stroke
+    // of a hover or a selection.
+    QColor strokeColor() const;
+    QColor accentColor(bool selected) const;
 
     QVariantMap m_treeData;
     QVector<HitRegion> m_regions;
