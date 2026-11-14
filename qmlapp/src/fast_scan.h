@@ -89,7 +89,9 @@ inline void appendBatch(mft::Batch& batch, Nodes& nodes,
         nodes.logical.push_back(entry.known ? entry.bytes : 0);
         nodes.modified.push_back(stamp);
         nodes.attributes.push_back(static_cast<quint16>(entry.attributes & 0xFFFFu));
-        nodes.flags.push_back(static_cast<quint8>((entry.directory ? 1 : 0) | (stamp ? 2 : 0)));
+        // bit 0 directory, bit 1 has a stamp, bit 2 the size is known.
+        nodes.flags.push_back(static_cast<quint8>((entry.directory ? 1 : 0) | (stamp ? 2 : 0)
+                                                  | (entry.known ? 4 : 0)));
         for (const wchar_t ch : entry.name) nodes.chars.push_back(QChar(static_cast<char16_t>(ch)));
         nodes.nameEnd.push_back(static_cast<quint32>(nodes.chars.size()));
     }
@@ -176,6 +178,22 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
     detail::RecordLookup lookup;
     lookup.build(nodes, highest);
 
+    // Resolve extension-record sizes once, then drop the base table: the DFS
+    // no longer needs it, and it is a 16-byte pair per record.
+    for (int i = 0; i < count; ++i) {
+        const auto flags = nodes.flags[static_cast<std::size_t>(i)];
+        if ((flags & 1) || (flags & 4)) continue;
+        bool found = false;
+        const auto size = baseSizeOf(nodes.record[static_cast<std::size_t>(i)], &found);
+        if (found) {
+            nodes.logical[static_cast<std::size_t>(i)] = size;
+            nodes.flags[static_cast<std::size_t>(i)] = static_cast<quint8>(flags | 4);
+        } else {
+            ++unknownSizes;
+        }
+    }
+    std::vector<std::pair<quint32, quint64>>().swap(nodes.baseSizes);
+
     const int rootNode = count;
     std::vector<std::int32_t> parentOf(static_cast<std::size_t>(count), rootNode);
     orphanTotal = 0;
@@ -244,13 +262,8 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
             for (const QChar ch : name) full.push_back(static_cast<wchar_t>(ch.unicode()));
             if (detail::excludedPath(full, options)) { ++excludedTotal; continue; }
         }
-        std::uint64_t logical = nodes.logical[static_cast<std::size_t>(child)];
-        if (logical == 0 && !dir) {
-            bool found = false;
-            const auto fromBase = baseSizeOf(nodes.record[static_cast<std::size_t>(child)], &found);
-            if (found) logical = fromBase;
-            else ++unknownSizes;
-        }
+        // Sizes were resolved before the walk; the base table is already gone.
+        const std::uint64_t logical = nodes.logical[static_cast<std::size_t>(child)];
         const std::uint64_t alloc = dir ? 0 : diskview::detail::clusterRound(logical, cluster);
         out.names.appendChars(name.data(), name.size());
         out.parents.append(frame.newIndex);
@@ -313,8 +326,45 @@ inline Outcome scanToFlat(const std::wstring& path, const ProgressFn& progress,
     ws::ntfs::MftReader reader(path.substr(0, 2));
     if (!reader.valid()) { reason = reader.error(); return Outcome::Fallback; }
 
+    // Pass 1 counts names, characters and base-size carriers without storing
+    // anything. Growing the name buffer and the columns geometrically made the
+    // last reallocation hold the old and the new block at once, which is what
+    // pushed a full system volume over the job's memory limit. A second read is
+    // the price; the caller allowed speed to be traded for memory.
+    std::uint64_t nameCount = 0, charCount = 0, baseCount = 0;
+    {
+        ws::ntfs::MftReader counting(path.substr(0, 2));
+        if (!counting.valid()) { reason = counting.error(); return Outcome::Fallback; }
+        std::wstring countError;
+        const bool counted = mft::read(counting, counting.geometry().clusterSize, [&](mft::Batch& batch) {
+            while (options.paused && *options.paused && !cancel)
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            if (cancel) return false;
+            for (const auto& entry : batch.entries) {
+                if (entry.name.empty()) { if (entry.known) ++baseCount; }
+                else { ++nameCount; charCount += entry.name.size(); }
+            }
+            ScanProgress pg;
+            pg.fast = true;
+            pg.recordsDone = batch.done;
+            pg.recordsTotal = batch.total;
+            if (progress && !progress(pg)) return false;
+            return true;
+        }, countError);
+        if (cancel) return Outcome::Cancelled;
+        if (!counted) { reason = countError.empty() ? L"MFT scan failed" : countError; return Outcome::Fallback; }
+    }
+
     Nodes nodes;
-    nodes.chars.reserve(1 << 20);
+    nodes.record.reserve(static_cast<std::size_t>(nameCount));
+    nodes.parent.reserve(static_cast<std::size_t>(nameCount));
+    nodes.logical.reserve(static_cast<std::size_t>(nameCount));
+    nodes.modified.reserve(static_cast<std::size_t>(nameCount));
+    nodes.attributes.reserve(static_cast<std::size_t>(nameCount));
+    nodes.flags.reserve(static_cast<std::size_t>(nameCount));
+    nodes.nameEnd.reserve(static_cast<std::size_t>(nameCount));
+    nodes.chars.reserve(static_cast<std::size_t>(charCount));
+    nodes.baseSizes.reserve(static_cast<std::size_t>(baseCount));
     std::uint32_t cluster = reader.geometry().clusterSize;
     std::uint64_t seenFiles = 0, seenBytes = 0;
     std::wstring error;
