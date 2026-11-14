@@ -24,6 +24,7 @@ ApplicationWindow {
         // ... and so does the chart: how many levels of blocks it draws.
         diskModel.chartDepth = scanSettings.chartDepth
         chart.depth = scanSettings.chartDepth
+        window.chartLayout = scanSettings.chartLayout
         verticalSplit.applyLayoutOrder()
     }
 
@@ -51,8 +52,14 @@ ApplicationWindow {
     // Which picture the chart draws: 0 treemap, 1 sunburst. The startup value
     // is the host's default view; the toolbar switches it for this window.
     property int chartKind: diskViewMode
-    // The two panels' vertical order: tables above by default.
-    property bool chartOnTop: false
+    // The two panels' arrangement: "tablesTop" (default), "tablesBottom",
+    // "tablesLeft" or "tablesRight". The tables keep their tree|legend split,
+    // turned to match (side by side above/below, stacked left/right).
+    property string chartLayout: "tablesTop"
+    // "" or the pane that fills the window ("tables" / "chart").
+    property string maximizedPane: ""
+    function layoutVertical() { return chartLayout === "tablesTop" || chartLayout === "tablesBottom" }
+    function layoutTablesFirst() { return chartLayout === "tablesTop" || chartLayout === "tablesLeft" }
     // The host's look: "light" until WinShun says otherwise. One place to read
     // the theme from; every colour in this file goes through these helpers so
     // a dark host gets a dark window.
@@ -301,18 +308,51 @@ ApplicationWindow {
             handle: Rectangle { implicitHeight: 5; color: window.shade("#e6ebf2", "#2a3342"); border.color: window.shade("#d3dbe5", "#333d4e") }
 
             // A SplitView's pane order is the order its children were added in.
-            // Both panes are real items with stable ids; attachChildren() puts
-            // them back in the chosen order, which is the whole layout switch.
+            // Both panes are real items with stable ids; applyLayoutOrder() puts
+            // them back in the chosen order and orientation, which is the whole
+            // layout switch.
             function applyLayoutOrder() {
-                const order = window.chartOnTop ? [chartPane, topSplit] : [topSplit, chartPane]
-                for (const pane of order) {
-                    const keepHeight = pane.SplitView.preferredHeight
-                    const keepFill = pane.SplitView.fillHeight
+                const vertical = window.layoutVertical()
+                // The tables' own split turns with the outer one: side by side
+                // when the panels are stacked, one above the other when they
+                // sit next to each other.
+                const first = window.layoutTablesFirst() ? topSplit : chartPane
+                const second = window.layoutTablesFirst() ? chartPane : topSplit
+                topSplit.orientation = vertical ? Qt.Horizontal : Qt.Vertical
+                verticalSplit.orientation = vertical ? Qt.Vertical : Qt.Horizontal
+                for (const pane of [first, second]) {
                     pane.parent = null
                     verticalSplit.addItem(pane)
-                    pane.SplitView.preferredHeight = keepHeight
-                    pane.SplitView.fillHeight = keepFill
                 }
+                // A pane in a vertical split needs a height budget, in a
+                // horizontal one a width budget; anything else collapses it.
+                if (vertical) {
+                    // tables above/below the chart: tree | legend side by side
+                    topSplit.SplitView.preferredHeight = 320
+                    topSplit.SplitView.preferredWidth = -1
+                    treePane.SplitView.fillWidth = true
+                    treePane.SplitView.preferredWidth = -1
+                    treePane.SplitView.minimumWidth = 430
+                    treePane.SplitView.minimumHeight = -1
+                    legendPane.SplitView.fillWidth = false
+                    legendPane.SplitView.preferredWidth = 360
+                    legendPane.SplitView.minimumWidth = 240
+                    legendPane.SplitView.minimumHeight = -1
+                } else {
+                    // tables beside the chart: tree above the legend
+                    topSplit.SplitView.preferredWidth = 470
+                    topSplit.SplitView.preferredHeight = -1
+                    treePane.SplitView.fillWidth = false
+                    treePane.SplitView.preferredHeight = 260
+                    treePane.SplitView.minimumHeight = 90
+                    treePane.SplitView.minimumWidth = -1
+                    legendPane.SplitView.fillWidth = false
+                    legendPane.SplitView.preferredHeight = 240
+                    legendPane.SplitView.minimumHeight = 70
+                    legendPane.SplitView.minimumWidth = -1
+                }
+                topSplit.visible = window.maximizedPane !== "chart"
+                chartPane.visible = window.maximizedPane !== "tables"
             }
 
             // folder table | extension legend
@@ -324,6 +364,7 @@ ApplicationWindow {
                 handle: Rectangle { implicitWidth: 5; color: window.shade("#e6ebf2", "#2a3342"); border.color: window.shade("#d3dbe5", "#333d4e") }
 
                 Item {
+                    id: treePane
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 430
                     ColumnLayout {
@@ -417,7 +458,10 @@ ApplicationWindow {
                                 // double click are the two ways to open a
                                 // folder, so a single click never jumps.
                                 onClicked: diskModel.select(nodeId)
-                                onDoubleClicked: if (directory) diskModel.navigate(nodeId)
+                                // The list is an outline: a double click opens
+                                // the folder in place. Drilling happens in the
+                                // chart, which then opens the list down to it.
+                                onDoubleClicked: if (directory && hasChildren) diskModel.toggleExpanded(nodeId)
                                 TapHandler {
                                     acceptedButtons: Qt.RightButton
                                     onSingleTapped: function(eventPoint) {
@@ -523,7 +567,8 @@ ApplicationWindow {
                 }
 
                 Item {
-                    SplitView.preferredWidth: 360
+                    id: legendPane
+                    SplitView.fillWidth: true
                     SplitView.minimumWidth: 250
                     ColumnLayout {
                         anchors.fill: parent
@@ -554,7 +599,11 @@ ApplicationWindow {
                                 width: ListView.view.width
                                 height: 22
                                 padding: 0
-                                highlighted: window.highlightExt.length > 0 && window.highlightExt === modelData.ext
+                                // Two links in one: the row the legend picked, and
+                                // the extension of whatever the chart has
+                                // selected, so the two panels point at each other.
+                                highlighted: (window.highlightExt.length > 0 && window.highlightExt === modelData.ext)
+                                             || (diskModel.selectedExtension.length > 0 && diskModel.selectedExtension === modelData.ext)
                                 onClicked: {
                                     const ext = modelData.ext
                                     window.highlightExt = window.highlightExt === ext ? "" : ext
@@ -717,17 +766,41 @@ ApplicationWindow {
                     Label { text: "布局"; font.pixelSize: 11; color: "#56657b" }
                     ComboBox {
                         id: layoutBox
-                        implicitWidth: 96
+                        implicitWidth: 104
                         implicitHeight: 26
                         font.pixelSize: 11
-                        model: ["表格在上", "图表在上"]
-                        currentIndex: window.chartOnTop ? 1 : 0
+                        model: ["表格在上", "图表在上", "表格在左", "图表在左"]
+                        currentIndex: Math.max(0, ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight"].indexOf(window.chartLayout))
                         ToolTip.visible: hovered
-                        ToolTip.text: "两个面板的上下位置"
+                        ToolTip.text: "表格与图表怎么排"
                         onActivated: {
-                            window.chartOnTop = (index === 1)
-                            scanSettings.chartOnTop = window.chartOnTop
+                            const names = ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight"]
+                            window.chartLayout = names[index]
+                            scanSettings.chartLayout = window.chartLayout
                             scanSettings.save()
+                            window.maximizedPane = ""
+                            verticalSplit.applyLayoutOrder()
+                        }
+                    }
+                    ToolButton {
+                        text: window.maximizedPane === "tables" ? "还原" : "表格全屏"
+                        implicitHeight: 26
+                        font.pixelSize: 11
+                        ToolTip.visible: hovered
+                        ToolTip.text: "只显示表格，再点一次还原"
+                        onClicked: {
+                            window.maximizedPane = window.maximizedPane === "tables" ? "" : "tables"
+                            verticalSplit.applyLayoutOrder()
+                        }
+                    }
+                    ToolButton {
+                        text: window.maximizedPane === "chart" ? "还原" : "图表全屏"
+                        implicitHeight: 26
+                        font.pixelSize: 11
+                        ToolTip.visible: hovered
+                        ToolTip.text: "只显示图表，再点一次还原"
+                        onClicked: {
+                            window.maximizedPane = window.maximizedPane === "chart" ? "" : "chart"
                             verticalSplit.applyLayoutOrder()
                         }
                     }

@@ -382,6 +382,19 @@ void ChartItem::paint(QPainter* painter)
             painter->fillRect(rect,fill);
             if(id==m_selectedId||id==m_hoverId){painter->setPen(QPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#1b2b3a"),id==m_selectedId?2:1));painter->setBrush(Qt::NoBrush);painter->drawRect(rect.adjusted(1,1,-1,-1));}
         }
+        // Every folder gets a title strip along its top edge, painted after the
+        // children so it is never covered: that is what makes a nesting of
+        // blocks readable instead of a flat pile of colours.
+        for(const auto& tile:m_tiles){
+            if(!tile.node->dir)continue;
+            const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
+            if(rect.width()<24||rect.height()<18)continue;
+            const qreal band=std::min<qreal>(10.0,rect.height()*0.45);
+            const QRectF strip(rect.left(),rect.top(),rect.width(),band);
+            painter->fillRect(strip,QColor(0,0,0,m_theme=="dark"?165:120));
+            painter->setPen(QPen(QColor(255,255,255,42),1));
+            painter->drawLine(strip.bottomLeft(),strip.bottomRight());
+        }
     }else{
         for(const auto& slice:m_slices){
             const QString id=m_pathIds.value(slice.path); if(id.isEmpty())continue;
@@ -432,10 +445,26 @@ void ChartItem::paint(QPainter* painter)
             const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
-            if(screen.width()<48||screen.height()<14)continue;
             bool dimmed=false;
             const QColor fill=fillFor(*tile.node,&dimmed);
             QColor ink=diskviewqml::textOnColor(fill);
+            if(tile.node->dir){
+                // A folder's name sits in its title strip, in white on the dark
+                // band, so the label never competes with the blocks inside it.
+                if(screen.width()<40||screen.height()<12)continue;
+                const QRectF strip(screen.left()+3,screen.top(),screen.width()-6,
+                                   std::min<qreal>(10.0*m_zoom,screen.height()*0.45));
+                QColor bandInk("#eef3f8");
+                if(dimmed)bandInk.setAlphaF(0.55);
+                painter->setPen(bandInk);
+                const QString name=QString::fromStdWString(tile.node->name);
+                const QString size=QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
+                const QString label=name+"  "+size;
+                painter->drawText(strip,Qt::AlignLeft|Qt::AlignVCenter,
+                                  metrics.elidedText(label,Qt::ElideRight,strip.width()));
+                continue;
+            }
+            if(screen.width()<48||screen.height()<14)continue;
             if(dimmed)ink.setAlphaF(0.45);
             painter->setPen(ink);
             const QRectF inner=screen.adjusted(5,2,-4,-2);
