@@ -275,8 +275,11 @@ void testFlatLoad()
     check(model.nodeItems() == 6, "the item counts come from the payload");
     model.navigate(QStringLiteral("2"));
     check(model.currentPath().endsWith(QStringLiteral("zulu")), "navigation works on a flat tree");
-    check(model.data(model.index(0, 0), DiskViewModel::PathRole).toString()
+    // The chart drills, the list opens: the folder becomes a row's children,
+    // the list keeps its own root.
+    check(model.data(model.index(1, 0), DiskViewModel::PathRole).toString()
               == QStringLiteral("D:\\zulu\\big.bin"), "the child paths are built");
+    check(model.rowCount() == 5, "the list opened the folder instead of moving its root");
     model.setViewMode(DiskViewModel::FileView);
     check(model.rowCount() == 2, "the file view reads the flat tree too");
 }

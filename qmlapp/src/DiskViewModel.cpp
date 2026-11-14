@@ -98,6 +98,7 @@ void DiskViewModel::resetStorage()
     m_selectedId.clear();
     m_filter.clear();
     m_current = -1;
+    m_chartRoot = -1;
     m_historyPos = -1;
 }
 
@@ -152,6 +153,7 @@ bool DiskViewModel::loadFlat(FlatTree tree, bool partial)
         m_tree = std::move(tree);
         buildChildren();
         m_current = count > 0 ? 0 : -1;
+        m_chartRoot = m_current;
         pushHistory(m_current);
         rebuildRows();
         loaded = true;
@@ -187,6 +189,7 @@ bool DiskViewModel::loadTree(const QVariantMap& tree, bool partial)
         buildChildren();
         countItems();
         m_current = nodeCount() > 0 ? 0 : -1;
+        m_chartRoot = m_current;
         pushHistory(m_current);
         rebuildRows();
         loaded = true;
@@ -285,8 +288,8 @@ void DiskViewModel::countItems()
 
 int DiskViewModel::nodeItems() const
 {
-    if (m_current < 0) return 0;
-    return static_cast<int>(m_tree.fileCounts.at(m_current) + m_tree.dirCounts.at(m_current));
+    if (m_chartRoot < 0) return 0;
+    return static_cast<int>(m_tree.fileCounts.at(m_chartRoot) + m_tree.dirCounts.at(m_chartRoot));
 }
 
 QString DiskViewModel::formatSize(qint64 bytes) const
@@ -308,19 +311,24 @@ QString DiskViewModel::formatCount(qint64 count) const
     return digits;
 }
 
-QString DiskViewModel::currentName() const { return m_current >= 0 ? nameOf(m_current) : QString(); }
-QString DiskViewModel::currentPath() const { return pathOf(m_current); }
-QString DiskViewModel::totalText() const { return m_current >= 0 ? formatSize(static_cast<qint64>(sizeOf(m_current))) : QString(); }
+QString DiskViewModel::currentName() const { return m_chartRoot >= 0 ? nameOf(m_chartRoot) : QString(); }
+QString DiskViewModel::currentPath() const { return pathOf(m_chartRoot); }
+QString DiskViewModel::totalText() const { return m_chartRoot >= 0 ? formatSize(static_cast<qint64>(sizeOf(m_chartRoot))) : QString(); }
+QString DiskViewModel::selectedExtension() const
+{
+    const int index = indexForId(m_selectedId);
+    return index >= 0 ? extOf(index) : QString();
+}
 QString DiskViewModel::breadcrumbText() const { return currentPath().replace('\\', "  /  "); }
 
 QVariantList DiskViewModel::breadcrumb() const
 {
     QVariantList crumbs;
-    if (m_current < 0) return crumbs;
+    if (m_chartRoot < 0) return crumbs;
     QVector<int> chain;
-    for (int index = m_current; index >= 0; index = parentOf(index)) chain.push_back(index);
+    for (int index = m_chartRoot; index >= 0; index = parentOf(index)) chain.push_back(index);
     for (int i = chain.size() - 1; i >= 0; --i) {
-        crumbs.push_back(QVariantMap{{"name", nameOf(chain[i])}, {"id", QString::number(chain[i] + 1)}, {"current", chain[i] == m_current}});
+        crumbs.push_back(QVariantMap{{"name", nameOf(chain[i])}, {"id", QString::number(chain[i] + 1)}, {"current", chain[i] == m_chartRoot}});
     }
     return crumbs;
 }
@@ -542,10 +550,10 @@ void DiskViewModel::rebuildRows()
             // The walk carries the full path down instead of deriving it per
             // file; it starts from the row above the view root so the filter
             // still sees where the current folder sits.
-            QString path = pathOf(parentOf(m_current));
-            collectFilesFiltered(m_current, path, files);
+            QString path = pathOf(parentOf(m_chartRoot));
+            collectFilesFiltered(m_chartRoot, path, files);
         } else {
-            collectFiles(m_wholeTree ? 0 : m_current, files);
+            collectFiles(m_wholeTree ? 0 : m_chartRoot, files);
         }
         if (!m_filter.isEmpty() && m_fuzzyMatch) {
             // The whole-tree search only makes sense on the name.
@@ -574,10 +582,15 @@ void DiskViewModel::resetAt(int index)
 {
     if (index < 0 || index >= nodeCount()) return;
     beginResetModel();
-    m_current = index;
+    // The chart is what moves; the list only opens down to it, so the outline
+    // the user built stays where it is.
+    m_chartRoot = index;
+    for (int a = index; a >= 0 && a != m_current; a = parentOf(a)) {
+        if (directoryOf(a)) m_expanded.insert(a);
+    }
     // Navigating clears the filter, the way the native panel does.
     m_filter.clear();
-    m_selectedId.clear();
+    m_selectedId = QString::number(index + 1);
     rebuildRows();
     endResetModel();
     emit currentPathChanged();
@@ -593,8 +606,8 @@ void DiskViewModel::navigate(const QString& id)
 
 void DiskViewModel::goUp()
 {
-    if (m_current <= 0) return;
-    const int leaving = m_current;
+    if (m_chartRoot <= 0) return;
+    const int leaving = m_chartRoot;
     const int parent = parentOf(leaving);
     if (parent < 0) return;
     pushHistory(parent);
@@ -718,20 +731,20 @@ bool DiskViewModel::expandNode(const QString& id)
     // entering the folder is the closest thing to what was asked for.
     bool inside = false;
     for (int a = index; a >= 0; a = parentOf(a)) {
-        if (a == m_current) { inside = true; break; }
+        if (a == m_chartRoot) { inside = true; break; }
     }
     // The chart only exports the largest few children at each level. A
     // directory deeper in the tree may not be materialized, or may belong to
     // a branch the chart omitted; don't silently substitute a navigation.
     if (!inside) return false;
     QVector<int> route;
-    for (int a = index; a != m_current; a = parentOf(a)) {
+    for (int a = index; a != m_chartRoot; a = parentOf(a)) {
         if (a < 0) return false;
         route.push_back(a);
     }
     if (route.size() > m_chartDepth) return false;
     std::reverse(route.begin(), route.end());
-    int parent = m_current;
+    int parent = m_chartRoot;
     for (int child : route) {
         QVector<int> visible = childrenOf(parent);
         constexpr int kChartChildren = 256;
@@ -747,7 +760,7 @@ bool DiskViewModel::expandNode(const QString& id)
     // included, so its contents show up as rows right below it.
     for (int a = index; a >= 0; a = parentOf(a)) {
         if (directoryOf(a)) m_expanded.insert(a);
-        if (a == m_current) break;
+        if (a == m_chartRoot) break;
     }
     if (m_viewMode != TreeView) m_viewMode = TreeView;
     m_selectedId = QString::number(index + 1);
@@ -779,9 +792,9 @@ QVariantList DiskViewModel::extensions() const
 {
     struct Agg { quint64 size = 0, alloc = 0; int files = 0; };
     QHash<QString, Agg> totals;
-    if (m_current >= 0) {
+    if (m_chartRoot >= 0) {
         QVector<int> files;
-        collectFiles(m_current, files);
+        collectFiles(m_chartRoot, files);
         for (int index : files) {
             Agg& agg = totals[extOf(index)];
             agg.size += sizeOf(index);
@@ -795,7 +808,7 @@ QVariantList DiskViewModel::extensions() const
     std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
         return a.second.size > b.second.size;
     });
-    const double total = m_current >= 0 ? static_cast<double>(std::max<quint64>(1, sizeOf(m_current))) : 1;
+    const double total = m_chartRoot >= 0 ? static_cast<double>(std::max<quint64>(1, sizeOf(m_chartRoot))) : 1;
     QVariantList rows;
     for (const auto& row : sorted) {
         rows.push_back(QVariantMap{
@@ -814,7 +827,7 @@ QVariantList DiskViewModel::extensions() const
 
 QVariantMap DiskViewModel::chartTree() const
 {
-    if (m_current < 0) return {};
+    if (m_chartRoot < 0) return {};
     // The chart draws as many levels below the current folder as the window
     // asked for. Only the largest children of a folder get a tile anyway, and
     // the export is capped in total, so a folder with hundreds of big
@@ -845,6 +858,6 @@ QVariantMap DiskViewModel::chartTree() const
     };
     QElapsedTimer timer;
     timer.start();
-    QVariantMap map = exportNode(exportNode, m_current, 0);
+    QVariantMap map = exportNode(exportNode, m_chartRoot, 0);
     return map;
 }

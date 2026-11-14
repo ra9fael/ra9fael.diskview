@@ -26,6 +26,9 @@ class DiskViewModel : public QAbstractListModel {
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentPathChanged)
     Q_PROPERTY(QString totalText READ totalText NOTIFY currentPathChanged)
     Q_PROPERTY(QString selectedId READ selectedId NOTIFY selectedChanged)
+    // The extension of the selected file, so the legend can mark the row that
+    // belongs to what the chart is showing.
+    Q_PROPERTY(QString selectedExtension READ selectedExtension NOTIFY selectedChanged)
     Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectedChanged)
     Q_PROPERTY(QVariantMap chartTree READ chartTree NOTIFY chartChanged)
     // How many levels below the current folder the chart is showing; it shares
@@ -76,6 +79,7 @@ public:
     QString currentName() const;
     QString totalText() const;
     QString selectedId() const { return m_selectedId; }
+    QString selectedExtension() const;
     int selectedRow() const;
     QVariantMap chartTree() const;
     int chartDepth() const { return m_chartDepth; }
@@ -98,7 +102,7 @@ public:
     void setWholeTree(bool enabled);
     bool canGoBack() const { return m_historyPos > 0; }
     bool canGoForward() const { return m_historyPos >= 0 && m_historyPos + 1 < m_history.size(); }
-    bool canGoUp() const { return m_current > 0; }
+    bool canGoUp() const { return m_chartRoot > 0; }
 
     int rowCount(const QModelIndex& parent = {}) const override;
     QVariant data(const QModelIndex& index, int role) const override;
@@ -188,7 +192,12 @@ private:
     QVector<int> m_visible;
     QVector<int> m_history;
     QSet<int> m_expanded;
+    // The tree is an outline and the chart is the drill-down view, so they keep
+    // separate roots: m_current is the folder the list is rooted at, m_chartRoot
+    // is what the chart (and the breadcrumb) is showing. Drilling into the chart
+    // therefore opens the tree down to that folder instead of moving it.
     int m_current = -1;
+    int m_chartRoot = -1;
     int m_historyPos = -1;
     QString m_selectedId;
     QString m_filter;
