@@ -32,6 +32,10 @@ class ScanSettings : public QObject {
     Q_PROPERTY(int chartDepth READ chartDepth WRITE setChartDepth NOTIFY changed)
     // Whether the chart panel sits above the tables (true) or below (false).
     Q_PROPERTY(bool chartOnTop READ chartOnTop WRITE setChartOnTop NOTIFY changed)
+    // Which side the tables take: "tablesTop" (default), "tablesBottom",
+    // "tablesLeft" or "tablesRight". Replaces the boolean above, which is kept
+    // only so an older settings file still reads.
+    Q_PROPERTY(QString chartLayout READ chartLayout WRITE setChartLayout NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -61,6 +65,8 @@ public:
     void setChartDepth(int depth);
     bool chartOnTop() const { return m_chartOnTop; }
     void setChartOnTop(bool onTop);
+    QString chartLayout() const { return m_chartLayout; }
+    void setChartLayout(const QString& layout);
     QString filePath() const;
 
     Q_INVOKABLE bool load();
@@ -83,4 +89,5 @@ private:
     bool m_wholeTree = false;
     int m_chartDepth = 2;
     bool m_chartOnTop = false;
+    QString m_chartLayout = QStringLiteral("tablesTop");
 };

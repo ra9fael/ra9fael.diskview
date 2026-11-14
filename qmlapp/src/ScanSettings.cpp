@@ -190,6 +190,21 @@ void ScanSettings::setChartOnTop(bool onTop)
     emit changed();
 }
 
+void ScanSettings::setChartLayout(const QString& layout)
+{
+    static const QStringList known = {QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"),
+                                      QStringLiteral("tablesLeft"), QStringLiteral("tablesRight")};
+    // Anything unknown falls back to the default instead of leaving the window
+    // in a layout it cannot draw.
+    const QString kept = known.contains(layout) ? layout : QStringLiteral("tablesTop");
+    if (kept == m_chartLayout) {
+        return;
+    }
+    m_chartLayout = kept;
+    m_chartOnTop = (kept == QLatin1String("tablesBottom"));
+    emit changed();
+}
+
 void ScanSettings::addExcludedPath(const QString& path)
 {
     const QString trimmed = path.trimmed();
@@ -268,6 +283,9 @@ bool ScanSettings::load()
     m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
     m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(2), 1, 5);
     m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
+    const QString layout = object.value(QStringLiteral("chartLayout")).toString();
+    m_chartLayout = layout.isEmpty() ? (m_chartOnTop ? QStringLiteral("tablesBottom") : QStringLiteral("tablesTop"))
+                                 : (QStringList{QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"), QStringLiteral("tablesLeft"), QStringLiteral("tablesRight")}.contains(layout) ? layout : QStringLiteral("tablesTop"));
     emit changed();
     return true;
 }
@@ -289,6 +307,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("wholeTree"), m_wholeTree);
     object.insert(QStringLiteral("chartDepth"), m_chartDepth);
     object.insert(QStringLiteral("chartOnTop"), m_chartOnTop);
+    object.insert(QStringLiteral("chartLayout"), m_chartLayout);
     QJsonArray excluded;
     for (const QString& path : m_excludedPaths) {
         excluded.append(path);
