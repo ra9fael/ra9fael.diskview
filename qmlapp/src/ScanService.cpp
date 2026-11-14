@@ -5,6 +5,8 @@
 #include <QMetaObject>
 #include <QVariantList>
 
+#include <limits>
+
 // scan.h pulls in the WinShun SDK header and therefore windows.h, so it has to
 // come after the Qt headers.
 #include "scan.h"
@@ -56,16 +58,35 @@ void flattenInto(diskview::Node& node, int parent, FlatTree& out)
     for (diskview::Node& child : node.children) {
         flattenInto(child, index, out);
     }
+    // Clear ownership without shrink_to_fit: shrinking allocates a second
+    // buffer while the original result tree is still alive, which peaks on
+    // the last million-node directories right when the scan is "complete".
     node.name.clear();
-    node.name.shrink_to_fit();
     node.children.clear();
-    node.children.shrink_to_fit();
 }
 
 FlatTree flatten(diskview::Node& root)
 {
     FlatTree out;
-    out.names.reserve(4096);
+    // The result tree already knows its node count. Reserving all parallel
+    // arrays once avoids repeated growth while the source tree is still live.
+    const auto countNodes = [](const auto& self, const diskview::Node& node) -> qsizetype {
+        qsizetype count = 1;
+        for (const auto& child : node.children) count += self(self, child);
+        return count;
+    };
+    const qsizetype capacity = countNodes(countNodes, root);
+    const int safeCapacity = capacity > std::numeric_limits<int>::max()
+        ? std::numeric_limits<int>::max() : static_cast<int>(capacity);
+    out.names.reserve(safeCapacity);
+    out.parents.reserve(out.names.capacity());
+    out.sizes.reserve(out.names.capacity());
+    out.allocs.reserve(out.names.capacity());
+    out.modified.reserve(out.names.capacity());
+    out.attributes.reserve(out.names.capacity());
+    out.fileCounts.reserve(out.names.capacity());
+    out.dirCounts.reserve(out.names.capacity());
+    out.flags.reserve(out.names.capacity());
     flattenInto(root, -1, out);
     return out;
 }
