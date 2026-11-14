@@ -8,6 +8,7 @@
 
 class ScanService;
 class ScanSettings;
+class ThemeBridge;
 
 class QmlHost : public QObject {
     Q_OBJECT
@@ -80,6 +81,7 @@ private:
     QQmlApplicationEngine m_engine;
     ScanService* m_scanService = nullptr;
     ScanSettings* m_scanSettings = nullptr;
+    ThemeBridge* m_theme = nullptr;
     // The pause held while the scan was waiting: the check is only true when
     // the paused scan really produced nothing.
     bool m_pauseVerified = false;

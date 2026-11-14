@@ -128,6 +128,13 @@ void ChartItem::setTheme(const QString& theme)
     emit themeChanged();
     update();
 }
+void ChartItem::setAccent(const QColor& accent)
+{
+    if(!accent.isValid()||m_accent==accent)return;
+    m_accent=accent;
+    emit accentChanged();
+    update();
+}
 
 QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
 {
@@ -151,12 +158,12 @@ QColor ChartItem::strokeColor() const
     return m_theme=="dark"?QColor(255,255,255,46):QColor(24,38,56,56);
 }
 
-// The stronger stroke of a hover or a selection, in the accent blue both
-// themes share with the window's own controls.
+// The stronger stroke of a hover or a selection, in the accent the theme
+// tokens carry (the system's): a step lighter while only hovered, full when
+// selected.
 QColor ChartItem::accentColor(bool selected) const
 {
-    const QColor base=m_theme=="dark"?QColor("#6aaef7"):QColor("#2f7cd6");
-    return selected?base:base.lighter(118);
+    return selected?m_accent:m_accent.lighter(118);
 }
 
 // The tile's own gradient: a vertical fade from a lighter top to the base

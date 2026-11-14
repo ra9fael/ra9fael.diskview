@@ -32,7 +32,7 @@ Dialog {
                   + (scanService.skippedLinks > 0 ? " · 未跟随 " + scanService.skippedLinks + " 个链接" : "")
                   + (scanService.unknownSizes > 0 ? " · " + scanService.unknownSizes + " 个文件大小未知" : "")
                   + (scanService.orphanRecords > 0 ? " · " + scanService.orphanRecords + " 条孤立记录" : "")
-            color: "#243246"
+            color: theme.text
             font.weight: Font.DemiBold
         }
 
@@ -40,7 +40,7 @@ Dialog {
             Layout.fillWidth: true
             visible: scanService.fallbackReason.length > 0
             text: "快扫没有生效：" + scanService.fallbackReason
-            color: "#a76414"
+            color: theme.warn
             font.pixelSize: 12
             elide: Text.ElideMiddle
         }
@@ -48,7 +48,7 @@ Dialog {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "#f7f9fb"
+            color: theme.surface
             border.color: "#dce2e8"
             radius: 4
 
@@ -66,14 +66,14 @@ Dialog {
                         Layout.fillWidth: true
                         text: modelData.path
                         elide: Text.ElideMiddle
-                        color: "#243246"
+                        color: theme.text
                         font.pixelSize: 12
                     }
                     Label {
                         Layout.preferredWidth: 260
                         text: modelData.message.length > 0 ? modelData.message : ("错误 " + modelData.code)
                         elide: Text.ElideRight
-                        color: "#b3261e"
+                        color: theme.error
                         font.pixelSize: 12
                     }
                 }
@@ -83,7 +83,7 @@ Dialog {
                 anchors.centerIn: parent
                 visible: scanService.issues.length === 0
                 text: "没有问题"
-                color: "#8b98a9"
+                color: theme.textMuted
                 font.pixelSize: 12
             }
         }
@@ -91,7 +91,7 @@ Dialog {
         Label {
             Layout.fillWidth: true
             text: "扫描方式：" + (scanService.fast ? "快扫（MFT）" : "普通遍历")
-            color: "#66758a"
+            color: theme.textMuted
             font.pixelSize: 11
         }
     }

@@ -86,7 +86,7 @@ Dialog {
 
             // When WinShun owns these (its plugin settings page), the dialog
             // leaves them out instead of offering a second place to edit them.
-            Label { text: "扫描方式"; color: "#243246"; visible: !hostManagedSettings }
+            Label { text: "扫描方式"; color: theme.text; visible: !hostManagedSettings }
             ComboBox {
                 id: modeBox
                 visible: !hostManagedSettings
@@ -97,7 +97,7 @@ Dialog {
                 model: ["自动", "快扫（MFT，需管理员）", "普通遍历"]
             }
 
-            Label { text: "普通扫描并发上限"; color: "#243246"; visible: !hostManagedSettings }
+            Label { text: "普通扫描并发上限"; color: theme.text; visible: !hostManagedSettings }
             ComboBox {
                 id: workersBox
                 visible: !hostManagedSettings
@@ -107,7 +107,7 @@ Dialog {
                 model: ["自动", "1", "2", "4", "8"]
             }
 
-            Label { text: "介质策略"; color: "#243246"; visible: !hostManagedSettings }
+            Label { text: "介质策略"; color: theme.text; visible: !hostManagedSettings }
             ComboBox {
                 id: mediaBox
                 visible: !hostManagedSettings
@@ -115,7 +115,7 @@ Dialog {
                 model: ["自动检测", "SSD / NVMe", "机械硬盘", "网络目录"]
             }
 
-            Label { text: "预览发布"; color: "#243246"; visible: !hostManagedSettings }
+            Label { text: "预览发布"; color: theme.text; visible: !hostManagedSettings }
             ComboBox {
                 id: previewBox
                 visible: !hostManagedSettings
@@ -128,15 +128,15 @@ Dialog {
             Layout.fillWidth: true
             visible: hostManagedSettings
             text: "扫描方式、并发、介质与预览频率在 WinShun 的插件设置里修改。"
-            color: "#66758a"; font.pixelSize: 11
+            color: theme.textMuted; font.pixelSize: 11
             wrapMode: Text.Wrap
         }
 
-        Label { text: "排除路径"; color: "#243246"; font.weight: Font.DemiBold }
+        Label { text: "排除路径"; color: theme.text; font.weight: Font.DemiBold }
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 150
-            color: "#f7f9fb"
+            color: theme.surface
             border.color: "#dce2e8"
             radius: 4
             ListView {
@@ -152,7 +152,7 @@ Dialog {
                         Layout.fillWidth: true
                         text: model.display
                         elide: Text.ElideMiddle
-                        color: "#243246"
+                        color: theme.text
                         font.pixelSize: 12
                     }
                     Button {
@@ -165,7 +165,7 @@ Dialog {
                 anchors.centerIn: parent
                 visible: draftExcluded.count === 0
                 text: "没有排除路径"
-                color: "#8b98a9"
+                color: theme.textMuted
                 font.pixelSize: 12
             }
         }
@@ -200,7 +200,7 @@ Dialog {
         Label {
             Layout.fillWidth: true
             text: "设置只影响下一次扫描，当前结果不变。保存在 " + scanSettings.filePath
-            color: "#66758a"
+            color: theme.textMuted
             font.pixelSize: 11
             elide: Text.ElideMiddle
         }

@@ -14,16 +14,28 @@ qt_add_executable(diskview-qml
     src/ScanSettings.cpp src/ScanSettings.h
     src/ChartItem.cpp src/ChartItem.h
     src/DiskViewModel.cpp src/DiskViewModel.h
+    src/ThemeBridge.cpp src/ThemeBridge.h
+    # The function icons: the same Phosphor set and pixel-aligned glyph
+    # renderer the main app uses, copied so the plugin stands alone.
+    src/Phosphor.cpp src/Phosphor.h
+    src/PhosphorGlyph.cpp src/PhosphorGlyph.h
     # The elevated scan helper reads the NTFS MFT with this reader.
     "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
-    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml)
+    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
     FILES fixtures/disk-tree.json)
+# The icon fonts the glyphs are drawn from (Phosphor 2.1.2, MIT; see
+# resources/fonts/Phosphor-LICENSE.txt). ws::phosphor::loadFonts reads them
+# from :/fonts before the first window.
+qt_add_resources(diskview-qml "diskview_qml_fonts"
+    PREFIX "/fonts"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+    FILES resources/fonts/Phosphor.ttf resources/fonts/Phosphor-Fill.ttf)
 # The window icon is the app.ico the native edition ships in its rc: one file,
 # so both editions show the same icon in the taskbar and the title bar.
 qt_add_resources(diskview-qml "diskview_qml_icon"
@@ -89,15 +101,22 @@ if(DISKVIEW_BUILD_PLUGIN)
         src/ScanSettings.cpp src/ScanSettings.h
         src/ChartItem.cpp src/ChartItem.h
         src/DiskViewModel.cpp src/DiskViewModel.h
+        src/ThemeBridge.cpp src/ThemeBridge.h
+        src/Phosphor.cpp src/Phosphor.h
+        src/PhosphorGlyph.cpp src/PhosphorGlyph.h
         "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
     qt_add_qml_module(diskview-qml-app
         URI DiskViewPrototype
         VERSION 1.0
-        QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml)
+        QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml)
     qt_add_resources(diskview-qml-app "diskview_qml_fixture"
         PREFIX "/fixtures"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
         FILES fixtures/disk-tree.json)
+    qt_add_resources(diskview-qml-app "diskview_qml_fonts"
+        PREFIX "/fonts"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+        FILES resources/fonts/Phosphor.ttf resources/fonts/Phosphor-Fill.ttf)
     qt_add_resources(diskview-qml-app "diskview_qml_icon"
         PREFIX "/"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/.."

@@ -4,6 +4,8 @@
 #include "DiskViewModel.h"
 #include "ScanService.h"
 #include "ScanSettings.h"
+#include "ThemeBridge.h"
+#include "Phosphor.h"
 
 #include <QClipboard>
 #include <QDir>
@@ -58,6 +60,11 @@ bool QmlHost::load(QString* error)
     m_engine.rootContext()->setContextProperty("hostManagedSettings", !m_options.hostSettings.isEmpty());
     // The window asks the host for the two things QML cannot do on its own.
     m_engine.rootContext()->setContextProperty("appHost", this);
+    // The look: one token set the whole window and the chart read. The icon
+    // fonts have to be in place before the engine draws its first glyph.
+    ws::phosphor::loadFonts();
+    m_theme = new ThemeBridge(this);
+    m_engine.rootContext()->setContextProperty("theme", m_theme);
     // A path given on the command line wins over the remembered one.
     m_engine.rootContext()->setContextProperty(
         "initialScanPath",
@@ -586,10 +593,11 @@ bool QmlHost::runSelfTest(QString* report)
 
 void QmlHost::setTheme(const QString& theme) const
 {
-    auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
-    if (!window) return;
-    window->setProperty("themeName", theme);
-    if (auto* chart = window->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
+    // The tokens land in one object the whole window reads; the chart keeps
+    // its plain light/dark string for its greys, and the accent reaches it
+    // through the QML binding on the tokens.
+    if (m_theme) m_theme->setTheme(theme);
+    if (auto* chart = window()->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
         chart->setTheme(theme);
     }
 }

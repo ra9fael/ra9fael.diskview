@@ -18,6 +18,9 @@ class ChartItem : public QQuickPaintedItem {
     Q_PROPERTY(int depth READ depth WRITE setDepth NOTIFY depthChanged)
     Q_PROPERTY(QString highlightExtension READ highlightExtension WRITE setHighlightExtension NOTIFY highlightChanged)
     Q_PROPERTY(QString theme READ theme WRITE setTheme NOTIFY themeChanged)
+    // The accent the strokes take: the system's, through the theme tokens, so
+    // a hover and a selection keep the colour the user picked for Windows.
+    Q_PROPERTY(QColor accent READ accent WRITE setAccent NOTIFY accentChanged)
     Q_PROPERTY(QString hoverId READ hoverId NOTIFY hoverChanged)
     Q_PROPERTY(QPointF hoverPosition READ hoverPosition NOTIFY hoverChanged)
 
@@ -46,6 +49,8 @@ public:
     void setHighlightExtension(const QString& extension);
     QString theme() const { return m_theme; }
     void setTheme(const QString& theme);
+    QColor accent() const { return m_accent; }
+    void setAccent(const QColor& accent);
     QString hoverId() const { return m_hoverId; }
     QPointF hoverPosition() const { return m_hoverPosition; }
     // The name, path, size and kind of the node a region belongs to.
@@ -81,6 +86,7 @@ signals:
     void highlightChanged();
     // The host's light/dark choice; the chart's greys follow it.
     void themeChanged();
+    void accentChanged();
     // A right click on a region, in the item's own coordinates.
     void contextRequested(const QString& id, qreal x, qreal y);
     void centerActivated();
@@ -128,6 +134,7 @@ private:
     int m_viewMode = 0;
     int m_depth = 1;
     QString m_theme; // empty = light
+    QColor m_accent = QColor("#2f7cd6");
     QString m_highlightExtension;
     QString m_selectedId;
     QString m_centerLabel;

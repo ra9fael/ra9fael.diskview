@@ -13,7 +13,7 @@ ApplicationWindow {
     title: "Disk View · QML 技术样机"
     // The whole window follows the host's light/dark choice; the chart reads
     // the same switch so its greys and inks follow.
-    color: window.shade("#f4f6f8", "#1e2430")
+    color: theme.window
 
     DiskViewModel { id: diskModel; objectName: "diskModel" }
     Component.onCompleted: {
@@ -65,12 +65,10 @@ ApplicationWindow {
     property string maximizedPane: ""
     function layoutVertical() { return chartLayout === "tablesTop" || chartLayout === "tablesBottom" }
     function layoutTablesFirst() { return chartLayout === "tablesTop" || chartLayout === "tablesLeft" }
-    // The host's look: "light" until WinShun says otherwise. One place to read
-    // the theme from; every colour in this file goes through these helpers so
-    // a dark host gets a dark window.
-    property string themeName: "light"
-    property bool dark: themeName === "dark"
-    function shade(light, darkValue) { return dark ? darkValue : light }
+    // The host's look, through the theme tokens: one object holds every
+    // colour, so the window, the chart and the dialogs follow the host's
+    // light/dark choice and the system accent together.
+    property bool dark: theme.dark
 
     Connections {
         target: scanService
@@ -140,12 +138,12 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 34
-            color: window.shade("#ffffff", "#26303f")
-            border.color: window.shade("#dce2e8", "#333d4e")
+            color: theme.surface
+            border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
-                Label { text: "Disk View"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#202b3c" }
-                Label { text: "QML 技术样机"; font.pixelSize: 12; color: "#657386" }
+                Label { text: "Disk View"; font.pixelSize: 14; font.weight: Font.DemiBold; color: theme.text }
+                Label { text: "QML 技术样机"; font.pixelSize: 12; color: theme.textMuted }
                 Item { Layout.fillWidth: true }
                 Label {
                     text: scanService.state === "done" ? "真实扫描"
@@ -155,9 +153,9 @@ ApplicationWindow {
                           : "固定快照"
                     font.pixelSize: 11
                     color: scanService.state === "done" ? "#168c84"
-                          : scanService.state === "scanning" ? "#a76414"
-                          : scanService.state === "error" ? "#b3261e"
-                          : "#657386"
+                          : scanService.state === "scanning" ? theme.warn
+                          : scanService.state === "error" ? theme.error
+                          : theme.textMuted
                 }
                 BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 14; implicitHeight: 14 }
             }
@@ -167,8 +165,8 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 40
-            color: window.shade("#ffffff", "#26303f")
-            border.color: window.shade("#dce2e8", "#333d4e")
+            color: theme.surface
+            border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 8
                 TextField {
@@ -207,7 +205,7 @@ ApplicationWindow {
                     visible: scanSettings.scanMode !== 2
                     text: scanService.elevated ? "快扫可用（管理员）" : "快扫不可用（Win顺 未以管理员运行）"
                     font.pixelSize: 11
-                    color: scanService.elevated ? "#2c7a3f" : window.shade("#8a5a20", "#c9a15c")
+                    color: scanService.elevated ? theme.ok : theme.warn
                     ToolTip.visible: hovered
                     ToolTip.text: scanService.elevated
                                   ? "本进程持有管理员令牌，快扫直接读取 MFT，不再弹出 UAC"
@@ -220,27 +218,39 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 36
-            color: window.shade("#ffffff", "#26303f")
-            border.color: window.shade("#dce2e8", "#333d4e")
+            color: theme.surface
+            border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 6
-                Button {
-                    text: "树视图"
+                ToolButton {
+                    id: treeViewButton
+                    implicitWidth: 30
+                    implicitHeight: 26
+                    checked: diskModel.viewMode === 0
+                    ToolTip.visible: hovered
+                    ToolTip.text: "树视图"
                     onClicked: diskModel.viewMode = 0
                     background: Rectangle {
                         radius: 3
-                        color: diskModel.viewMode === 0 ? "#e3eefb" : "transparent"
-                        border.color: window.shade("#dce2e8", "#333d4e")
+                        color: treeViewButton.checked ? theme.selection : "transparent"
+                        border.color: theme.border
                     }
+                    contentItem: Glyph { iconName: "tree-structure"; size: 15; color: treeViewButton.checked ? theme.text : theme.textMuted }
                 }
-                Button {
-                    text: "文件视图"
+                ToolButton {
+                    id: fileViewButton
+                    implicitWidth: 30
+                    implicitHeight: 26
+                    checked: diskModel.viewMode === 1
+                    ToolTip.visible: hovered
+                    ToolTip.text: "文件视图"
                     onClicked: diskModel.viewMode = 1
                     background: Rectangle {
                         radius: 3
-                        color: diskModel.viewMode === 1 ? "#e3eefb" : "transparent"
-                        border.color: window.shade("#dce2e8", "#333d4e")
+                        color: fileViewButton.checked ? theme.selection : "transparent"
+                        border.color: theme.border
                     }
+                    contentItem: Glyph { iconName: "rows"; size: 15; color: fileViewButton.checked ? theme.text : theme.textMuted }
                 }
                 // The file view is a file finder: say where it looks and how
                 // loosely it matches.
@@ -264,20 +274,18 @@ ApplicationWindow {
                 }
                 Item { Layout.fillWidth: true }
                 ToolButton {
-                    text: "列"
-                    implicitWidth: 34
+                    id: columnsButton
+                    implicitWidth: 30
                     implicitHeight: 26
-                    font.pixelSize: 11
                     ToolTip.visible: hovered
                     ToolTip.text: "显示或隐藏列"
                     onClicked: columnsMenu.open()
-                    contentItem: Label {
-                        text: parent.text
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        color: "#33445c"
+                    background: Rectangle {
+                        radius: 3
+                        color: columnsButton.hovered ? theme.hoverRow : "transparent"
+                        border.color: theme.border
                     }
+                    contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.textMuted }
                 }
                 Menu {
                     id: columnsMenu
@@ -321,7 +329,7 @@ ApplicationWindow {
             orientation: Qt.Vertical
             Layout.fillWidth: true
             Layout.fillHeight: true
-            handle: Rectangle { implicitHeight: 5; color: window.shade("#e6ebf2", "#2a3342"); border.color: window.shade("#d3dbe5", "#333d4e") }
+            handle: Rectangle { implicitHeight: 5; color: theme.handleFill; border.color: theme.border }
 
             // A SplitView's pane order is the order its children were added in.
             // Both panes are real items with stable ids; applyLayoutOrder() puts
@@ -377,7 +385,7 @@ ApplicationWindow {
                 orientation: Qt.Horizontal
                 SplitView.preferredHeight: 320
                 SplitView.minimumHeight: 110
-                handle: Rectangle { implicitWidth: 5; color: window.shade("#e6ebf2", "#2a3342"); border.color: window.shade("#d3dbe5", "#333d4e") }
+                handle: Rectangle { implicitWidth: 5; color: theme.handleFill; border.color: theme.border }
 
                 Item {
                     id: treePane
@@ -389,15 +397,15 @@ ApplicationWindow {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
-                            color: window.shade("#f0f3f9", "#242b38")
-                            border.color: window.shade("#e5eaf0", "#333d4e")
+                            color: theme.surfaceAlt
+                            border.color: theme.border
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label {
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 120
                                     text: "文件夹 / 名称" + (diskModel.sortKey === 1 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
+                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     elide: Text.ElideRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(1) }
                                 }
@@ -405,29 +413,29 @@ ApplicationWindow {
                                     visible: !window.columnHidden("pct")
                                     Layout.preferredWidth: columns.pct
                                     text: "% 父级"
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
+                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
                                 }
                                 Label {
                                     Layout.preferredWidth: columns.size
                                     text: "大小" + (diskModel.sortKey === 0 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
+                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(0) }
                                 }
-                                Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.columnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.columnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.columnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
                                 Label {
                                     visible: !window.columnHidden("modified")
                                     Layout.preferredWidth: columns.modified
                                     text: "修改时间" + (diskModel.sortKey === 2 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"
+                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(2) }
                                 }
-                                Label { visible: !window.columnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.columnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
                             }
                         }
                         ListView {
@@ -502,7 +510,7 @@ ApplicationWindow {
                                                 Layout.preferredWidth: 12
                                                 visible: rowItem.hasChildren
                                                 text: rowItem.expanded ? "▾" : "▸"
-                                                color: "#7b8a9d"; font.pixelSize: 10
+                                                color: theme.textMuted; font.pixelSize: 10
                                                 MouseArea {
                                                     anchors.fill: parent
                                                     cursorShape: Qt.PointingHandCursor
@@ -515,7 +523,7 @@ ApplicationWindow {
                                                 Layout.fillWidth: true
                                                 text: rowItem.name
                                                 elide: Text.ElideRight
-                                                color: "#243246"; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: 11
                                             }
                                         }
                                     }
@@ -528,7 +536,7 @@ ApplicationWindow {
                                             y: parent.height / 2 - 4
                                             height: 8
                                             radius: 2
-                                            color: "#cfe3f8"
+                                            color: theme.selection
                                             width: Math.max(0, Math.min(1, rowItem.percent / 100)) * (parent.width - 8)
                                         }
                                         Label {
@@ -536,45 +544,45 @@ ApplicationWindow {
                                             anchors.leftMargin: 6
                                             verticalAlignment: Text.AlignVCenter
                                             text: rowItem.percent.toFixed(1) + "%"
-                                            color: "#33445c"; font.pixelSize: 11
+                                            color: theme.text; font.pixelSize: 11
                                         }
                                     }
-                                    Label { Layout.preferredWidth: columns.size; text: rowItem.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#33445c"; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: columns.size; text: rowItem.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
                                     Label {
                                         visible: !window.columnHidden("items")
                                         Layout.preferredWidth: columns.items
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.items) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: "#56657b"; font.pixelSize: 11
+                                        color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
                                         visible: !window.columnHidden("files")
                                         Layout.preferredWidth: columns.files
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.files) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: "#56657b"; font.pixelSize: 11
+                                        color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
                                         visible: !window.columnHidden("dirs")
                                         Layout.preferredWidth: columns.dirs
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.dirs) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: "#56657b"; font.pixelSize: 11
+                                        color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
                                         visible: !window.columnHidden("modified")
                                         Layout.preferredWidth: columns.modified
                                         text: rowItem.modifiedText
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: "#56657b"; font.pixelSize: 11
+                                        color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
                                         visible: !window.columnHidden("attributes")
                                         Layout.preferredWidth: columns.attrs
                                         text: rowItem.attributes
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: "#56657b"; font.pixelSize: 11
+                                        color: theme.textMuted; font.pixelSize: 11
                                     }
                                 }
                             }
@@ -592,16 +600,16 @@ ApplicationWindow {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
-                            color: window.shade("#f0f3f9", "#242b38")
-                            border.color: window.shade("#e5eaf0", "#333d4e")
+                            color: theme.surfaceAlt
+                            border.color: theme.border
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label { Layout.preferredWidth: 18; text: "" }
-                                Label { Layout.fillWidth: true; Layout.minimumWidth: 70; text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b" }
-                                Label { Layout.preferredWidth: 52; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 66; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 66; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 52; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#56657b"; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.fillWidth: true; Layout.minimumWidth: 70; text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted }
+                                Label { Layout.preferredWidth: 52; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: 66; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: 66; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: 52; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
                             }
                         }
                         ListView {
@@ -632,7 +640,7 @@ ApplicationWindow {
                                         Layout.minimumWidth: 70
                                         text: (modelData.ext.length ? modelData.ext : "(无)") + "  " + modelData.label
                                         elide: Text.ElideRight
-                                        color: "#243246"; font.pixelSize: 11
+                                        color: theme.text; font.pixelSize: 11
                                     }
                                     Item {
                                         Layout.preferredWidth: 52
@@ -652,12 +660,12 @@ ApplicationWindow {
                                             verticalAlignment: Text.AlignVCenter
                                             horizontalAlignment: Text.AlignRight
                                             text: modelData.percent.toFixed(1) + "%"
-                                            color: "#33445c"; font.pixelSize: 11
+                                            color: theme.text; font.pixelSize: 11
                                         }
                                     }
-                                    Label { Layout.preferredWidth: 66; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#33445c"; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: 66; text: modelData.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: 52; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: "#56657b"; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: 66; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: 66; text: modelData.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: 52; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
                                 }
                             }
                         }
@@ -676,8 +684,8 @@ ApplicationWindow {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32
-                    color: window.shade("#ffffff", "#26303f")
-                    border.color: window.shade("#dce2e8", "#333d4e")
+                    color: theme.surface
+                    border.color: theme.border
                     RowLayout {
                         anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12
                         spacing: 4
@@ -686,21 +694,21 @@ ApplicationWindow {
                             enabled: diskModel.canGoBack
                             onClicked: diskModel.goBack()
                             ToolTip.visible: hovered; ToolTip.text: "后退 (Alt+←)"
-                            contentItem: Label { text: parent.text; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: "#33445c" }
+                            contentItem: Label { text: parent.text; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: theme.text }
                         }
                         ToolButton {
                             text: "→"; flat: true; implicitWidth: 26; implicitHeight: 26
                             enabled: diskModel.canGoForward
                             onClicked: diskModel.goForward()
                             ToolTip.visible: hovered; ToolTip.text: "前进 (Alt+→)"
-                            contentItem: Label { text: parent.text; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: "#33445c" }
+                            contentItem: Label { text: parent.text; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: theme.text }
                         }
                         ToolButton {
                             text: "↑"; flat: true; implicitWidth: 26; implicitHeight: 26
                             enabled: diskModel.canGoUp
                             onClicked: diskModel.goUp()
                             ToolTip.visible: hovered; ToolTip.text: "上一级 (←/退格)"
-                            contentItem: Label { text: parent.text; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: "#33445c" }
+                            contentItem: Label { text: parent.text; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: parent.enabled ? 1 : 0.35; color: theme.text }
                         }
                         Row {
                             id: crumbRow
@@ -714,7 +722,7 @@ ApplicationWindow {
                                         text: modelData.name
                                         font.pixelSize: 13
                                         leftPadding: 3; rightPadding: 3
-                                        color: modelData.current ? "#202b3c" : "#075db8"
+                                        color: modelData.current ? theme.text : theme.accent
                                         font.weight: modelData.current ? Font.DemiBold : Font.Normal
                                         MouseArea {
                                             anchors.fill: parent
@@ -723,14 +731,14 @@ ApplicationWindow {
                                             onClicked: diskModel.navigate(modelData.id)
                                         }
                                     }
-                                    Label { text: "›"; font.pixelSize: 14; color: "#8a97a8"; visible: index < window.crumbs.length - 1 }
+                                    Label { text: "›"; font.pixelSize: 14; color: theme.textMuted; visible: index < window.crumbs.length - 1 }
                                 }
                             }
                         }
                         Item { Layout.fillWidth: true }
                         Label {
                             text: "当前目录 · " + diskModel.totalText + " · " + diskModel.formatCount(diskModel.nodeItems) + " 项"
-                            color: "#66758a"; font.pixelSize: 11
+                            color: theme.textMuted; font.pixelSize: 11
                         }
                     }
                 }
@@ -741,41 +749,60 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.leftMargin: 8; Layout.rightMargin: 8
                     spacing: 6
-                    Button {
-                        text: "方块"
+                    // The chart's view modes, as icons with their names in the
+                    // tooltip: squares for the treemap, a ring for the sunburst.
+                    ToolButton {
+                        id: treemapButton
+                        implicitWidth: 30
+                        implicitHeight: 26
+                        checked: window.chartKind === 0
+                        ToolTip.visible: hovered
+                        ToolTip.text: "方块（矩形树图）"
                         onClicked: window.chartKind = 0
                         background: Rectangle {
                             radius: 3
-                            color: window.chartKind === 0 ? "#e3eefb" : "transparent"
-                            border.color: window.shade("#dce2e8", "#333d4e")
+                            color: treemapButton.checked ? theme.selection : "transparent"
+                            border.color: theme.border
                         }
+                        contentItem: Glyph { iconName: "squares-four"; size: 15; color: treemapButton.checked ? theme.text : theme.textMuted }
                     }
-                    Button {
-                        text: "圆盘"
+                    ToolButton {
+                        id: sunburstButton
+                        implicitWidth: 30
+                        implicitHeight: 26
+                        checked: window.chartKind === 1
+                        ToolTip.visible: hovered
+                        ToolTip.text: "圆盘（旭日图）"
                         onClicked: window.chartKind = 1
                         background: Rectangle {
                             radius: 3
-                            color: window.chartKind === 1 ? "#e3eefb" : "transparent"
-                            border.color: window.shade("#dce2e8", "#333d4e")
+                            color: sunburstButton.checked ? theme.selection : "transparent"
+                            border.color: theme.border
                         }
+                        contentItem: Glyph { iconName: "chart-donut"; size: 15; color: sunburstButton.checked ? theme.text : theme.textMuted }
                     }
                     // Back to the folder the tree is rooted at and to 1:1: one
                     // button for both, since a chart that has wandered off is
                     // what brings the user here.
                     ToolButton {
-                        text: "复位"
-                        implicitWidth: 44
+                        id: resetButton
+                        implicitWidth: 30
                         implicitHeight: 26
-                        font.pixelSize: 11
                         ToolTip.visible: hovered
-                        ToolTip.text: "回到当前目录并还原缩放"
+                        ToolTip.text: "复位：回到当前目录并还原缩放"
                         onClicked: {
                             diskModel.resetChart()
                             chart.resetView()
                         }
+                        background: Rectangle {
+                            radius: 3
+                            color: resetButton.hovered ? theme.hoverRow : "transparent"
+                            border.color: theme.border
+                        }
+                        contentItem: Glyph { iconName: "arrow-counter-clockwise"; size: 15; color: theme.textMuted }
                     }
                     Item { Layout.fillWidth: true }
-                    Label { text: "层级"; font.pixelSize: 11; color: "#56657b" }
+                    Label { text: "层级"; font.pixelSize: 11; color: theme.textMuted }
                     ComboBox {
                         id: depthBox
                         implicitWidth: 76
@@ -792,7 +819,7 @@ ApplicationWindow {
                             scanSettings.save()
                         }
                     }
-                    Label { text: "布局"; font.pixelSize: 11; color: "#56657b" }
+                    Label { text: "布局"; font.pixelSize: 11; color: theme.textMuted }
                     ComboBox {
                         id: layoutBox
                         implicitWidth: 104
@@ -812,25 +839,43 @@ ApplicationWindow {
                         }
                     }
                     ToolButton {
-                        text: window.maximizedPane === "tables" ? "还原" : "表格全屏"
+                        id: tablesFullscreenButton
                         implicitHeight: 26
-                        font.pixelSize: 11
                         ToolTip.visible: hovered
-                        ToolTip.text: "只显示表格，再点一次还原"
+                        ToolTip.text: window.maximizedPane === "tables" ? "还原表格" : "表格全屏"
                         onClicked: {
                             window.maximizedPane = window.maximizedPane === "tables" ? "" : "tables"
                             verticalSplit.applyLayoutOrder()
                         }
+                        contentItem: Row {
+                            spacing: 4
+                            Glyph { iconName: window.maximizedPane === "tables" ? "arrows-in" : "arrows-out"; size: 14; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
+                            Label {
+                                text: tablesFullscreenButton.checked ? "还原" : "表格全屏"
+                                font.pixelSize: 11
+                                color: theme.textMuted
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
                     }
                     ToolButton {
-                        text: window.maximizedPane === "chart" ? "还原" : "图表全屏"
+                        id: chartFullscreenButton
                         implicitHeight: 26
-                        font.pixelSize: 11
                         ToolTip.visible: hovered
-                        ToolTip.text: "只显示图表，再点一次还原"
+                        ToolTip.text: window.maximizedPane === "chart" ? "还原图表" : "图表全屏"
                         onClicked: {
                             window.maximizedPane = window.maximizedPane === "chart" ? "" : "chart"
                             verticalSplit.applyLayoutOrder()
+                        }
+                        contentItem: Row {
+                            spacing: 4
+                            Glyph { iconName: window.maximizedPane === "chart" ? "arrows-in" : "arrows-out"; size: 14; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
+                            Label {
+                                text: chartFullscreenButton.checked ? "还原" : "图表全屏"
+                                font.pixelSize: 11
+                                color: theme.textMuted
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
                         }
                     }
                 }
@@ -840,8 +885,8 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     Rectangle {
                         anchors.fill: parent
-                        color: window.shade("#ffffff", "#26303f")
-                        border.color: window.shade("#dce2e8", "#333d4e")
+                        color: theme.surface
+                        border.color: theme.border
                         radius: 4
                         clip: true
                         ChartItem {
@@ -854,6 +899,7 @@ ApplicationWindow {
                             viewMode: window.chartKind
                             centerLabel: diskModel.currentName
                             highlightExtension: window.chartHighlight()
+                            accent: theme.accent
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
                             onActivated: function(nodeId, directory) {
                                 // The chart is a map: a double click enters the
@@ -883,19 +929,19 @@ ApplicationWindow {
                             height: tip.implicitHeight + 16
                             x: Math.max(8, Math.min(parent.width - width - 8, chart.hoverPosition.x + 16))
                             y: Math.max(8, Math.min(parent.height - height - 8, chart.hoverPosition.y + 18))
-                            color: "#fbfcfd"; border.color: "#c3ced9"; radius: 4
+                            color: theme.hoverRow; border.color: "#c3ced9"; radius: 4
                             Column {
                                 id: tip
                                 anchors.fill: parent; anchors.margins: 8; spacing: 3
-                                Label { width: parent.width; text: hoverCard.info.name || ""; font.weight: Font.DemiBold; font.pixelSize: 12; color: "#202b3c"; elide: Text.ElideRight }
-                                Label { width: parent.width; text: hoverCard.info.path || ""; font.pixelSize: 11; color: "#66758a"; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
+                                Label { width: parent.width; text: hoverCard.info.name || ""; font.weight: Font.DemiBold; font.pixelSize: 12; color: theme.text; elide: Text.ElideRight }
+                                Label { width: parent.width; text: hoverCard.info.path || ""; font.pixelSize: 11; color: theme.textMuted; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
                                 Label {
-                                    width: parent.width; font.pixelSize: 11; color: "#33445c"
+                                    width: parent.width; font.pixelSize: 11; color: theme.text
                                     text: (hoverCard.info.directory ? "文件夹" : "文件") + " · "
                                           + diskModel.formatSize(hoverCard.info.size || 0) + " · "
                                           + (hoverCard.info.percent || 0).toFixed(1) + "%"
                                 }
-                                Label { width: parent.width; text: "单击固定详情 · 双击进入文件夹"; font.pixelSize: 10; color: "#8b98a9" }
+                                Label { width: parent.width; text: "单击固定详情 · 双击进入文件夹"; font.pixelSize: 10; color: theme.textMuted }
                             }
                         }
                         // The old hint label lives in the launcher's help
@@ -907,13 +953,13 @@ ApplicationWindow {
 
         // ---- status bar --------------------------------------------------
         Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: 26; color: window.shade("#ffffff", "#26303f"); border.color: window.shade("#dce2e8", "#333d4e")
+            Layout.fillWidth: true; Layout.preferredHeight: 26; color: theme.surface; border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
                 Label {
                     text: diskModel.selectedId.length ? "已选：" + (chart.hoveredInfo(diskModel.selectedId).name || "")
                                                       : "未选中"
-                    color: "#56657b"; font.pixelSize: 11
+                    color: theme.textMuted; font.pixelSize: 11
                 }
                 Label {
                     Layout.fillWidth: true
@@ -923,14 +969,14 @@ ApplicationWindow {
                           : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
                           : scanService.skippedDirs > 0 ? "扫描完成 · " + scanService.skippedDirs + " 个目录无法读取"
                           : (scanService.fast ? "快扫" : "普通遍历") + " · " + scanService.statusText
-                    color: diskModel.loadError.length || scanService.state === "error" ? "#b3261e"
-                          : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? "#a76414" : "#66758a"
+                    color: diskModel.loadError.length || scanService.state === "error" ? theme.error
+                          : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? theme.warn : theme.textMuted
                     font.pixelSize: 11
                     elide: Text.ElideRight
                 }
                 Label {
                     text: chart.hoverId.length ? (chart.hoveredInfo(chart.hoverId).path || "") : ""
-                    color: "#8b98a9"; font.pixelSize: 11
+                    color: theme.textMuted; font.pixelSize: 11
                     elide: Text.ElideMiddle
                     Layout.maximumWidth: parent.width * 0.5
                 }
