@@ -182,23 +182,82 @@ void testFastScanFallback()
     // it and the outcome is a fallback with a reason, never a crash.
     const QString root = makeTree(QDir::current().filePath(QStringLiteral("dv-scan-fast")));
     std::atomic<bool> cancel {false};
-    diskview::ScanResult result;
+    FlatTree rejected;
     std::wstring reason;
+    std::uint64_t files = 0, dirs = 0, excluded = 0, orphans = 0, unknown = 0;
     const diskview::ProgressFn progress = [](const diskview::ScanProgress&) { return true; };
-    const auto outcome = diskview::fastscan::scanDirect(
-        root.toStdWString(), progress, {}, cancel, result, reason, {});
+    const auto outcome = diskview::fastscan::scanToFlatSafe(
+        root.toStdWString(), progress, cancel, rejected, reason, {},
+        files, dirs, excluded, orphans, unknown);
     check(outcome == diskview::fastscan::Outcome::Fallback, "the in-process fast scan refuses a non-root path");
     check(!reason.empty(), "the refused fast scan says why");
 
     // A cancelled scan reports the cancellation, whatever the path.
     std::atomic<bool> cancelled {true};
-    diskview::ScanResult cancelledResult;
+    FlatTree cancelledTree;
     std::wstring cancelledReason;
-    const auto cancelledOutcome = diskview::fastscan::scanDirect(
-        root.toStdWString(), progress, {}, cancelled, cancelledResult, cancelledReason, {});
-    check(cancelledOutcome == diskview::fastscan::Outcome::Fallback || cancelledOutcome == diskview::fastscan::Outcome::Cancelled,
+    std::uint64_t cf = 0, cd = 0, ce = 0, co = 0, cu = 0;
+    const auto cancelledOutcome = diskview::fastscan::scanToFlatSafe(
+        root.toStdWString(), progress, cancelled, cancelledTree, cancelledReason, {},
+        cf, cd, ce, co, cu);
+    check(cancelledOutcome == diskview::fastscan::Outcome::Cancelled,
           "a cancelled fast scan ends without completing");
     (void)elevated;
+}
+
+// The flat builder orders parents before children, transfers names from the
+// read batches, applies exclusions and totals each directory, without the
+// intermediate Node tree or a per-record hash index.
+void testFlatBuild()
+{
+    const auto entry = [](std::uint64_t id, std::uint64_t parent, const wchar_t* name,
+                          bool dir, bool known, std::uint64_t bytes) {
+        diskview::mft::Entry e;
+        e.id = id; e.parent = parent; e.name = name; e.directory = dir;
+        e.known = known; e.bytes = bytes;
+        e.attributes = dir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_ARCHIVE;
+        return e;
+    };
+    const std::uint64_t root = 5;
+    std::deque<diskview::mft::Entry> entries;
+    entries.push_back(entry(42, root, L"alpha", true, false, 0));
+    entries.push_back(entry(43, 42, L"a.txt", false, true, 100));
+    entries.push_back(entry(44, root, L"b.bin", false, true, 200));
+
+    FlatTree tree;
+    std::uint64_t excluded = 0, orphans = 0, unknown = 0;
+    const auto outcome = diskview::fastscan::buildFlat(entries, 4096, L"C:\\", {}, tree,
+                                                       excluded, orphans, unknown);
+    check(outcome == diskview::fastscan::Outcome::Complete, "flat build completes");
+    check(tree.count() == 4, "flat build writes root, folder and two files");
+    check(tree.names.at(0) == QStringLiteral("C:\\") && (tree.flags.at(0) & 1),
+          "flat build starts at the scanned root");
+    check(tree.fileCounts.at(0) == 2 && tree.dirCounts.at(0) == 1,
+          "flat build totals files and folders under the root");
+    check(tree.sizes.at(0) == 300, "flat build sums logical bytes");
+    for (int i = 1; i < tree.count(); ++i)
+        check(tree.parents.at(i) >= 0 && tree.parents.at(i) < i, "flat build keeps parents before children");
+    bool sawAlpha = false, sawA = false;
+    for (int i = 0; i < tree.count(); ++i) {
+        if (tree.names.at(i) == QStringLiteral("alpha")) sawAlpha = tree.sizes.at(i) == 100;
+        if (tree.names.at(i) == QStringLiteral("a.txt")) sawA = true;
+    }
+    check(sawAlpha && sawA, "flat build keeps nested names and folder sizes");
+
+    std::deque<diskview::mft::Entry> excludedInput;
+    excludedInput.push_back(entry(42, root, L"alpha", true, false, 0));
+    excludedInput.push_back(entry(43, 42, L"a.txt", false, true, 100));
+    excludedInput.push_back(entry(44, root, L"b.bin", false, true, 200));
+    diskview::ScanOptions options;
+    options.excludedPaths.push_back(L"C:\\alpha");
+    FlatTree filtered;
+    std::uint64_t filteredExcluded = 0, filteredOrphans = 0, filteredUnknown = 0;
+    diskview::fastscan::buildFlat(excludedInput, 4096, L"C:\\", options, filtered,
+                                  filteredExcluded, filteredOrphans, filteredUnknown);
+    check(filtered.count() == 2, "flat build drops an excluded subtree");
+    check(filteredExcluded == 1, "flat build counts the excluded subtree once");
+    check(filtered.fileCounts.at(0) == 1 && filtered.sizes.at(0) == 200,
+          "excluded bytes leave the totals");
 }
 
 int main(int argc, char** argv)
@@ -208,6 +267,7 @@ int main(int argc, char** argv)
     testServiceResumes();
     testUnreadableDirectoryIsReported();
     testFastScanFallback();
+    testFlatBuild();
     {
         diskview::mft::Batch batch;
         diskview::mft::Entry entry;

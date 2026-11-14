@@ -247,17 +247,46 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
           // never elevates itself: without the token the reader cannot open
           // the volume and the scan falls back to the ordinary enumeration,
           // saying so.
+          FlatTree fastTree;
+          bool fastDone = false;
           bool ordinary = true;
           std::wstring fallback;
           if (scanMode != 2 && diskview::mft::eligible(diskview::normalizePath(wide, nullptr))) {
               std::wstring reason;
-              const auto outcome = diskview::fastscan::scanDirect(wide, progress, snapshot, m_cancel, result, reason, options);
-              ordinary = outcome == diskview::fastscan::Outcome::Fallback;
-              if (outcome == diskview::fastscan::Outcome::Cancelled) {
+              std::uint64_t fastFiles = 0, fastDirs = 0, fastExcluded = 0, fastOrphans = 0, fastUnknown = 0;
+              const auto fastStart = ::GetTickCount64();
+              const auto outcome = diskview::fastscan::scanToFlatSafe(
+                  wide, progress, m_cancel, fastTree, reason, options,
+                  fastFiles, fastDirs, fastExcluded, fastOrphans, fastUnknown);
+              switch (outcome) {
+              case diskview::fastscan::Outcome::Complete:
+                  // The fast scan produced the model's arrays directly: no
+                  // Node tree, no flatten step and no second scan.
+                  fastDone = true;
+                  ordinary = false;
+                  result.fast = true;
+                  result.files = fastFiles;
+                  result.dirs = fastDirs;
+                  result.excludedItems = static_cast<quint32>(std::min<std::uint64_t>(fastExcluded, 0xFFFFFFFFu));
+                  result.unknownSizes = fastUnknown;
+                  result.orphanRecords = fastOrphans;
+                  result.elapsedMs = ::GetTickCount64() - fastStart;
+                  break;
+              case diskview::fastscan::Outcome::Cancelled:
                   result.cancelled = true;
-              }
-              if (ordinary) {
-                  fallback = ScanService::fastScanFallbackText(diskview::fastscan::processElevated(), reason).toStdWString();
+                  ordinary = false;
+                  break;
+              case diskview::fastscan::Outcome::MemoryFailure:
+                  // Do not fall back: ordinary enumeration would repeat the
+                  // same memory peak and double the time. Report it instead.
+                  result.error = QString::fromStdWString(reason).toStdString();
+                  ordinary = false;
+                  break;
+              case diskview::fastscan::Outcome::Fallback:
+                  ordinary = true;
+                  fallback = ScanService::fastScanFallbackText(
+                      diskview::fastscan::processElevated(), reason).toStdWString();
+                  break;
               }
           }
            if (ordinary && !m_cancel.load()) {
@@ -265,6 +294,7 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                // make the fallback visibly distinct and let its buffers die
                // before ordinary enumeration starts.
                result = diskview::ScanResult{};
+               fastTree = FlatTree{};
                diskview::scanPath(wide, progress, m_cancel, &result, snapshot, options);
           } else if (m_cancel.load()) {
               result.cancelled = true;
@@ -297,7 +327,10 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
           }
           FlatTree tree;
           if (!scanFailed) {
-              tree = flatten(result.root);
+              // The fast path already produced the model's arrays; only the
+              // ordinary path still has a Node tree to flatten.
+              if (fastDone) tree = std::move(fastTree);
+              else tree = flatten(result.root);
           }
           // The scanner's own tree is no longer needed: dropping it here halves
           // the peak, which matters under the host's memory cap.
