@@ -46,24 +46,6 @@ int defaultViewMode(const winshun::Json& settings)
     return v.isString() && v.toString() == "sunburst" ? 1 : 0;
 }
 
-// The scan settings the host owns (its own settings page shows and persists
-// them), as the raw values the window applies.
-QVariantMap hostScanSettings(const winshun::Json& settings)
-{
-    QVariantMap map;
-    const auto put = [&map, &settings](const char* key) {
-        const winshun::Json& value = settings[key];
-        if (value.isString() && !value.toString().empty()) {
-            map.insert(QString::fromLatin1(key), QString::fromStdString(value.toString()));
-        }
-    };
-    put("scanMode");
-    put("workers");
-    put("media");
-    put("preview");
-    return map;
-}
-
 // One row per fixed drive, then the row that opens the window; the same shape
 // the native plugin answers with, so the launcher looks unchanged.
 winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
@@ -143,7 +125,6 @@ QWindow* g_window = nullptr;
 // Where the host's QtQuick modules live: WinShun's qml folder.
 QStringList g_importPaths;
 // The host's settings, kept for windows that are opened later.
-QVariantMap g_hostSettings;
 std::atomic<bool> g_closing{false};
 
 struct WindowRequest {
@@ -180,7 +161,8 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     options.viewMode = request.viewMode;
     options.scanPath = request.path;
     options.importPaths = g_importPaths;
-    options.hostSettings = g_hostSettings;
+    // Host settings synchronisation is intentionally disabled until the
+    // upstream bridge is merged. The local settings file remains authoritative.
     auto* host = new QmlHost(options);
     if (!host->load(error)) {
         delete host;
@@ -232,20 +214,13 @@ public:
         if (!dataDir().empty()) {
             qputenv("WS_DATA_DIR", QByteArray::fromStdString(dataDir()));
         }
-        g_hostSettings = hostScanSettings(settings());
     }
 
     void settingsChanged(const winshun::Json& s) override
     {
-        // The host edited its settings page: apply them to the open window at
-        // once, and remember them for the next one.
-        g_hostSettings = hostScanSettings(s);
-        if (g_host) {
-            const QVariantMap map = g_hostSettings;
-            QMetaObject::invokeMethod(qGuiApp, [map] {
-                if (g_host) g_host->applyHostSettings(map);
-            }, Qt::BlockingQueuedConnection);
-        }
+        // Keep the window's local settings editable; do not overwrite them
+        // with host defaults while the upstream sync bridge is unavailable.
+        Q_UNUSED(s);
     }
 
     ~DiskViewQml() override
@@ -314,12 +289,8 @@ public:
 
     void appearanceChanged() override
     {
-        // The window reads the host's look the way it reads its own settings:
-        // through the QmlHost, so the values land on the GUI thread.
-        const std::string current = this->theme().empty() ? "light" : this->theme();
-        QMetaObject::invokeMethod(qGuiApp, [current] {
-            if (g_host) g_host->setTheme(QString::fromStdString(current));
-        }, Qt::BlockingQueuedConnection);
+        // Deliberately keep the standalone default palette for this release.
+        // Real host style/token synchronisation waits for upstream support.
     }
 
     void shuttingDown() override

@@ -40,6 +40,8 @@ inline bool processElevated() {
 // mft::read's sink; the tree is assembled once at the end, with previews
 // built in the background while the records keep coming in.
 inline Outcome scanDirect(const std::wstring& path,const ProgressFn& progress,const SnapshotFn& snapshot,const std::atomic<bool>& cancel,ScanResult& result,std::wstring& reason,const ScanOptions& options={}) {
+    if(cancel)return Outcome::Cancelled;
+    if(!mft::eligible(path)){reason=L"Fast scan requires a fixed NTFS drive root";return Outcome::Fallback;}
     const auto start=::GetTickCount64();
     ws::ntfs::MftReader reader(path.substr(0,2));
     if(!reader.valid()){reason=reader.error();return Outcome::Fallback;}
@@ -65,7 +67,9 @@ inline Outcome scanDirect(const std::wstring& path,const ProgressFn& progress,co
         ScanProgress pg;pg.files=files;pg.bytes=bytes;pg.current=path;pg.fast=true;pg.recordsDone=batch.done;pg.recordsTotal=batch.total;
         if(progress&&!progress(pg))return false;
         const auto now=::GetTickCount64();
-        if(snapshot&&now>=nextPublish&&!preview.valid()) {
+        // A preview duplicates the entry names as well as constructing a
+        // second tree. Stop publishing large previews under the host job cap.
+        if(snapshot&&entries.size()<=500000&&now>=nextPublish&&!preview.valid()) {
             // One background build at a time. Accumulate the next batches
             // while it associates records and sorts the immutable preview
             // tree.

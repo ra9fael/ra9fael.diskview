@@ -15,6 +15,7 @@ void FileListModel::setModel(DiskViewModel* model)
     }
     m_model = model;
     m_rows.clear();
+    m_cacheValid = false;
     if (m_model) {
         // The panel follows the shared state: another folder, another filter,
         // another extension pick, a new scan — every one of them rebuilds the
@@ -22,11 +23,15 @@ void FileListModel::setModel(DiskViewModel* model)
         // the one hook this needs.
         connect(m_model, &DiskViewModel::listChanged, this, &FileListModel::rebuild);
         connect(m_model, &DiskViewModel::currentPathChanged, this, &FileListModel::rebuild);
-        connect(m_model, &DiskViewModel::selectedChanged, this, &FileListModel::selectionChanged);
+        connect(m_model, &QAbstractItemModel::modelReset, this, [this] { m_cacheValid = false; });
+        connect(m_model, &DiskViewModel::selectedChanged, this, [this] {
+            if (!m_rows.isEmpty()) emit dataChanged(index(0), index(m_rows.size() - 1), {SelectedRole});
+            emit selectionChanged();
+        });
         m_connected = true;
-        rebuild();
     }
     endResetModel();
+    rebuild();
     emit modelChanged();
     emit countChanged();
 }
@@ -56,10 +61,13 @@ void FileListModel::rebuild()
     const quint64 signature = (quint64(root) << 8)
         ^ (quint64(qHash(m_model->m_filter)) << 1)
         ^ (m_model->m_fuzzyMatch ? 1u : 0u)
+        ^ (quint64(m_model->m_sortKey + 1) << 55)
+        ^ (m_model->m_ascending ? (1ull << 59) : 0ull)
         ^ (m_model->m_extensionFilterOn ? (quint64(qHash(m_model->m_extensionFilter)) << 40 | (1ull << 32)) : 0ull)
         ^ (m_model->m_partial ? (1ull << 62) : 0ull);
-    if (signature == m_signature && !m_rows.isEmpty()) return;
+    if (m_cacheValid && signature == m_signature && !m_rows.isEmpty()) return;
     m_signature = signature;
+    m_cacheValid = true;
 
     beginResetModel();
     m_rows.clear();

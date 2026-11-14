@@ -2,6 +2,7 @@
 // ranking of the largest files and the history of the visited folders.
 
 #include "DiskViewModel.h"
+#include "FileListModel.h"
 
 #include <QVariantMap>
 #include <iostream>
@@ -369,6 +370,20 @@ void testFormatting()
 
 int main()
 {
+    {
+        DiskViewModel shared;
+        shared.loadTree(tree());
+        FileListModel files;
+        files.setModel(&shared);
+        check(files.rowCount() == 4, "independent file panel loads existing scan");
+        shared.selectExtension(QStringLiteral(".txt"));
+        check(files.rowCount() == 1, "independent file panel follows extension pick");
+        shared.loadTree(folder(QStringLiteral("D:\\"), 42, {file(QStringLiteral("replacement.txt"), 42)}));
+        check(files.rowCount() == 1 && files.data(files.index(0), FileListModel::NameRole).toString() == QStringLiteral("replacement.txt"),
+              "new scan replaces cached file rows at the same root");
+        shared.select(files.idAt(0));
+        check(files.data(files.index(0), FileListModel::SelectedRole).toBool(), "file selection role follows shared state");
+    }
     std::cout << "list model\n";
     testDefaultOrder();
     testSorting();

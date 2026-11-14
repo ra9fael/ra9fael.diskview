@@ -74,4 +74,5 @@ private:
     bool m_wholeTree = false;
     bool m_connected = false;
     quint64 m_signature = 0;
+    bool m_cacheValid = false;
 };
