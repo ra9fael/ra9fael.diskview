@@ -26,13 +26,13 @@ quint64 allocatedFor(quint64 size)
 
 // WizTree shows the same date shape everywhere, so the column does not jump
 // around: yyyy-MM-dd HH:mm. Shared by both panels' cells.
-QString DiskViewModel::modifiedText(quint64 fileTime) const
+QString DiskViewModel::modifiedText(quint64 seconds) const
 {
-    if (!fileTime) return QStringLiteral("—");
-    // FILETIME counts 100 ns ticks from 1601-01-01 UTC.
-    const qint64 msecsSinceEpoch = static_cast<qint64>(fileTime / 10000ull) - 11644473600000ll;
-    if (msecsSinceEpoch <= 0) return QStringLiteral("—");
-    return QDateTime::fromMSecsSinceEpoch(msecsSinceEpoch).toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+    if (!seconds) return QStringLiteral("—");
+    // The scan stores Unix seconds (see unixSecondsFromFileTime); the column
+    // only shows minutes, so the extra FILETIME precision bought nothing.
+    return QDateTime::fromSecsSinceEpoch(static_cast<qint64>(seconds))
+        .toString(QStringLiteral("yyyy-MM-dd HH:mm"));
 }
 
 // The Windows attribute letters, the same set the Explorer shows.
@@ -118,7 +118,6 @@ void DiskViewModel::resetStorage()
 {
     m_tree = FlatTree {};
     m_childStart.clear();
-    m_childCount.clear();
     m_children.clear();
     m_visible.clear();
     m_history.clear();
@@ -137,25 +136,20 @@ void DiskViewModel::resetStorage()
 void DiskViewModel::buildChildren()
 {
     const int count = nodeCount();
-    m_childStart.fill(-1, count);
-    m_childCount.fill(0, count);
+    m_childStart.assign(static_cast<qsizetype>(count) + 1, 0);
     m_children.clear();
     if (count <= 1) return;
     // One entry per node that is not the root: the children always sit after
     // their parent, so a single forward pass is enough, and a parent pointer
     // that points forward is a broken tree rather than something to follow.
+    int edges = 0;
     for (int i = 1; i < count; ++i) {
         int& parent = m_tree.parents[i];
         if (parent < 0 || parent >= i) parent = -1;
-        else ++m_childCount[parent];
+        else { ++m_childStart[parent + 1]; ++edges; }
     }
-    m_children.resize(count - 1);
-    int running = 0;
-    for (int i = 0; i < count; ++i) {
-        if (m_childCount.at(i) == 0) continue;
-        m_childStart[i] = running;
-        running += m_childCount.at(i);
-    }
+    for (int i = 1; i <= count; ++i) m_childStart[i] += m_childStart[i - 1];
+    m_children.resize(edges);
     QVector<int> cursor = m_childStart;
     for (int i = 1; i < count; ++i) {
         const int parent = m_tree.parents.at(i);
@@ -274,8 +268,7 @@ int DiskViewModel::appendNode(const QVariantMap& node, int parent)
 {
     const QString name = node.value("name").toString();
     const QString stamp = node.value("modified").toString();
-    bool hasModified = false;
-    const quint64 modified = stamp.isEmpty() ? 0 : stamp.toULongLong(&hasModified);
+    const quint64 modified = stamp.isEmpty() ? 0 : stamp.toULongLong();
     const int index = m_tree.names.size();
     m_tree.names.append(name);
     m_tree.parents.append(parent);
@@ -283,14 +276,15 @@ int DiskViewModel::appendNode(const QVariantMap& node, int parent)
     // The scan reports the space actually taken; the fixture does not, and
     // allocOf() falls back to the cluster size in that case.
     m_tree.allocs.append(node.contains("alloc") ? static_cast<qint64>(node.value("alloc").toDouble()) : 0);
-    m_tree.modified.append(static_cast<qint64>(modified));
+    const quint32 stampSeconds = unixSecondsFromFileTime(modified);
+    m_tree.modified.append(stampSeconds);
     m_tree.attributes.append(node.value("attrs").toUInt());
     // The scan knows the entry counts; the fixture does not, and countItems()
     // sums them up afterwards.
     m_tree.fileCounts.append(static_cast<quint32>(node.value("files").toDouble()));
     m_tree.dirCounts.append(static_cast<quint32>(node.value("dirs").toDouble()));
     const bool directory = node.value("dir").toBool();
-    m_tree.flags.append(static_cast<quint8>((directory ? 1 : 0) | (hasModified ? 2 : 0)));
+    m_tree.flags.append(static_cast<quint8>((directory ? 1 : 0) | (stampSeconds ? 2 : 0)));
     for (const auto& child : node.value("children").toList()) {
         if (child.canConvert<QVariantMap>()) appendNode(child.toMap(), index);
     }

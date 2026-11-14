@@ -50,11 +50,12 @@ void flattenInto(diskview::Node& node, int parent, FlatTree& out)
     out.parents.append(parent);
     out.sizes.append(static_cast<qint64>(node.logical));
     out.allocs.append(static_cast<qint64>(node.allocApprox));
-    out.modified.append(static_cast<qint64>(node.modified));
+    const quint32 stamp = unixSecondsFromFileTime(node.modified);
+    out.modified.append(stamp);
     out.attributes.append(node.attributes);
     out.fileCounts.append(node.files);
     out.dirCounts.append(node.dirs);
-    out.flags.append(static_cast<quint8>((node.dir ? 1 : 0) | (node.modified ? 2 : 0)));
+    out.flags.append(static_cast<quint8>((node.dir ? 1 : 0) | (stamp ? 2 : 0)));
     for (diskview::Node& child : node.children) {
         flattenInto(child, index, out);
     }

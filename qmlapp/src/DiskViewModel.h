@@ -183,10 +183,12 @@ private:
     // The space the file system really spends on it; the fixture carries no
     // figure of its own, so the cluster size is assumed there.
     quint64 allocOf(int index) const;
-    quint64 modifiedOf(int index) const { return static_cast<quint64>(std::max<qint64>(0, m_tree.modified.at(index))); }
+    quint64 modifiedOf(int index) const { return static_cast<quint64>(m_tree.modified.at(index)); }
     bool hasModifiedOf(int index) const { return (m_tree.flags.at(index) & 2) != 0; }
     quint32 attributesOf(int index) const { return m_tree.attributes.at(index); }
-    int childCountOf(int index) const { return m_childCount.at(index); }
+    // CSR: children of a node are [start[index], start[index+1]) in m_children.
+    // The count is the difference, so no per-node count array is kept.
+    int childCountOf(int index) const { return m_childStart.at(index + 1) - m_childStart.at(index); }
     int childAt(int index, int position) const { return m_children.at(m_childStart.at(index) + position); }
     // A directory's children, in the order the scan wrote them.
     QVector<int> childrenOf(int index) const;
@@ -230,8 +232,8 @@ private:
     int depthOf(int index) const;
 
     FlatTree m_tree;
-    QVector<int> m_childStart; // -1 for a node without children
-    QVector<int> m_childCount;
+    // count+1 CSR offsets: a node's children are the slice [i, i+1).
+    QVector<int> m_childStart;
     QVector<int> m_children;   // node indices; a directory's range is contiguous
 
     QVector<int> m_visible;

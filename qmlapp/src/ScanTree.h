@@ -8,6 +8,16 @@
 
 #include <cstdint>
 
+// FILETIME (100 ns since 1601) to Unix seconds. The timestamp column shows
+// minutes, so 32 bits is plenty (it runs out in 2106) and half the bytes of the
+// FILETIME each node used to carry.
+inline quint32 unixSecondsFromFileTime(quint64 fileTime)
+{
+    if (fileTime == 0) return 0;
+    const qint64 ms = static_cast<qint64>(fileTime / 10000ull) - 11644473600000LL;
+    return ms > 0 ? static_cast<quint32>(ms / 1000) : 0;
+}
+
 // All node names in one contiguous UTF-16 buffer plus one offset per node.
 //
 // A QStringList costs a pointer and a heap block per name (a QStringData header
@@ -66,7 +76,7 @@ struct FlatTree {
     QVector<int> parents;        // -1 for the root
     QVector<qint64> sizes;
     QVector<qint64> allocs;
-    QVector<qint64> modified;    // FILETIME; 0 when the source has no stamp
+    QVector<quint32> modified;   // Unix seconds; 0 when the source has no stamp
     QVector<quint32> attributes;
     QVector<quint32> fileCounts; // a directory: files in its subtree
     QVector<quint32> dirCounts;  // a directory: folders in its subtree

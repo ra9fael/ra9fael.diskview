@@ -193,11 +193,12 @@ inline Outcome buildFlat(std::deque<mft::Entry>& entries,
         out.parents.append(frame.newIndex);
         out.sizes.append(static_cast<qint64>(logical));
         out.allocs.append(static_cast<qint64>(alloc));
-        out.modified.append(static_cast<qint64>(entry.modified));
+        const quint32 stamp = unixSecondsFromFileTime(entry.modified);
+        out.modified.append(stamp);
         out.attributes.append(entry.attributes);
         out.fileCounts.append(0);
         out.dirCounts.append(0);
-        out.flags.append(static_cast<quint8>((dir ? 1 : 0) | (entry.modified ? 2 : 0)));
+        out.flags.append(static_cast<quint8>((dir ? 1 : 0) | (stamp ? 2 : 0)));
         const int newIndex = static_cast<int>(out.names.size()) - 1;
         std::wstring().swap(entry.name); // hand the buffer back as we go
         stack.push_back({child, newIndex, std::move(full), 0});
