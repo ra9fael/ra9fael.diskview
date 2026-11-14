@@ -51,6 +51,11 @@ ApplicationWindow {
         scanSettings.hiddenColumns = hidden
         scanSettings.save()
     }
+    function resizeColumn(which, key, delta) {
+        const box = which === "file" ? fileColumns : columns
+        const minimum = key === "pct" ? 48 : key === "modified" ? 80 : key === "attrs" ? 42 : 52
+        box[key] = Math.max(minimum, box[key] + delta)
+    }
 
     // The breadcrumb of the current folder, shortened when it gets long the
     // way the native panel shortens it.
@@ -525,6 +530,17 @@ ApplicationWindow {
                                     elide: Text.ElideRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(1) }
                                 }
+                                Item {
+                                    Layout.preferredWidth: 12
+                                    Layout.fillHeight: true
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.SizeHorCursor
+                                        property real startX
+                                        onPressed: startX = mouse.x
+                                        onPositionChanged: if (pressed) window.resizeColumn("tree", "pct", mouse.x - startX)
+                                    }
+                                }
                                 Label {
                                     visible: !window.columnHidden("pct")
                                     Layout.preferredWidth: columns.pct
@@ -646,7 +662,7 @@ ApplicationWindow {
                                     }
                                     Item {
                                         visible: !window.columnHidden("pct")
-                                        Layout.preferredWidth: columns.pct
+                                        Layout.preferredWidth: fileColumns.pct
                                         Layout.fillHeight: true
                                         Rectangle {
                                             x: 4
@@ -850,10 +866,10 @@ ApplicationWindow {
                                             color: theme.text; font.pixelSize: 11
                                         }
                                     }
-                                    Label { Layout.preferredWidth: columns.size; text: fileRow.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("alloc") && filePane.width > 460; Layout.preferredWidth: columns.alloc; text: fileRow.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("modified") && filePane.width > 560; Layout.preferredWidth: columns.modified; text: fileRow.modifiedText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("attributes") && filePane.width > 640; Layout.preferredWidth: columns.attrs; text: fileRow.attributes; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: fileColumns.size; text: fileRow.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("alloc") && filePane.width > 460; Layout.preferredWidth: fileColumns.alloc; text: fileRow.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("modified") && filePane.width > 560; Layout.preferredWidth: fileColumns.modified; text: fileRow.modifiedText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("attributes") && filePane.width > 640; Layout.preferredWidth: fileColumns.attrs; text: fileRow.attributes; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
                                 }
                             }
                         }
@@ -1313,13 +1329,21 @@ ApplicationWindow {
 
     QtObject {
         id: columns
-        readonly property int pct: 78
-        readonly property int size: 84
-        readonly property int alloc: 84
-        readonly property int items: 62
-        readonly property int files: 62
-        readonly property int dirs: 58
-        readonly property int modified: 118
-        readonly property int attrs: 64
+        property int pct: 78
+        property int size: 84
+        property int alloc: 84
+        property int items: 62
+        property int files: 62
+        property int dirs: 58
+        property int modified: 118
+        property int attrs: 64
+    }
+    QtObject {
+        id: fileColumns
+        property int pct: 78
+        property int size: 84
+        property int alloc: 84
+        property int modified: 118
+        property int attrs: 64
     }
 }
