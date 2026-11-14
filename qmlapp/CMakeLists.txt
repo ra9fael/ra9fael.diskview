@@ -14,6 +14,7 @@ qt_add_executable(diskview-qml
     src/ScanSettings.cpp src/ScanSettings.h
     src/ChartItem.cpp src/ChartItem.h
     src/DiskViewModel.cpp src/DiskViewModel.h
+    src/FileListModel.cpp src/FileListModel.h
     src/ThemeBridge.cpp src/ThemeBridge.h
     # The function icons: the same Phosphor set and pixel-aligned glyph
     # renderer the main app uses, copied so the plugin stands alone.
@@ -101,6 +102,7 @@ if(DISKVIEW_BUILD_PLUGIN)
         src/ScanSettings.cpp src/ScanSettings.h
         src/ChartItem.cpp src/ChartItem.h
         src/DiskViewModel.cpp src/DiskViewModel.h
+        src/FileListModel.cpp src/FileListModel.h
         src/ThemeBridge.cpp src/ThemeBridge.h
         src/Phosphor.cpp src/Phosphor.h
         src/PhosphorGlyph.cpp src/PhosphorGlyph.h

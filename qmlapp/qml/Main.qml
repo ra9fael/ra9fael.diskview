@@ -16,11 +16,15 @@ ApplicationWindow {
     color: theme.window
 
     DiskViewModel { id: diskModel; objectName: "diskModel" }
+    // The file panel is its own model over the shared tree: its rows are the
+    // files, its own whole-tree switch. The outline stays on the shared
+    // model, whose rows are the folders (and their files, opened).
+    FileListModel { id: fileListModel; model: diskModel }
     Component.onCompleted: {
         diskModel.loadFixture(fixtureSource)
         // The file view remembers how it was left.
         diskModel.fuzzyMatch = scanSettings.fuzzyMatch
-        diskModel.wholeTree = scanSettings.wholeTree
+        fileListModel.wholeTree = scanSettings.wholeTree
         // ... and so does the chart: how many levels of blocks it draws.
         diskModel.chartDepth = scanSettings.chartDepth
         chart.depth = scanSettings.chartDepth
@@ -214,7 +218,9 @@ ApplicationWindow {
             }
         }
 
-        // ---- view tabs, search scope and the columns menu ---------------
+        // ---- search scope and the columns menu ---------------------------
+        // The tree panel and the file panel are separate now; the switches
+        // that belonged to one of them moved onto the file panel's header.
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 36
@@ -222,55 +228,9 @@ ApplicationWindow {
             border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 6
-                ToolButton {
-                    id: treeViewButton
-                    implicitWidth: 30
-                    implicitHeight: 26
-                    checked: diskModel.viewMode === 0
-                    ToolTip.visible: hovered
-                    ToolTip.text: "树视图"
-                    onClicked: diskModel.viewMode = 0
-                    background: Rectangle {
-                        radius: 3
-                        color: treeViewButton.checked ? theme.selection : "transparent"
-                        border.color: theme.border
-                    }
-                    contentItem: Glyph { iconName: "tree-structure"; size: 15; color: treeViewButton.checked ? theme.text : theme.textMuted }
-                }
-                ToolButton {
-                    id: fileViewButton
-                    implicitWidth: 30
-                    implicitHeight: 26
-                    checked: diskModel.viewMode === 1
-                    ToolTip.visible: hovered
-                    ToolTip.text: "文件视图"
-                    onClicked: diskModel.viewMode = 1
-                    background: Rectangle {
-                        radius: 3
-                        color: fileViewButton.checked ? theme.selection : "transparent"
-                        border.color: theme.border
-                    }
-                    contentItem: Glyph { iconName: "rows"; size: 15; color: fileViewButton.checked ? theme.text : theme.textMuted }
-                }
-                // The file view is a file finder: say where it looks and how
-                // loosely it matches.
-                ComboBox {
-                    visible: diskModel.viewMode === 1
-                    implicitWidth: 108
-                    implicitHeight: 26
-                    font.pixelSize: 11
-                    model: ["当前目录", "整个扫描"]
-                    currentIndex: diskModel.wholeTree ? 1 : 0
-                    onActivated: { diskModel.wholeTree = (index === 1); scanSettings.wholeTree = diskModel.wholeTree; scanSettings.save() }
-                }
-                ComboBox {
-                    visible: diskModel.viewMode === 1
-                    implicitWidth: 96
-                    implicitHeight: 26
-                    font.pixelSize: 11
-                    model: ["子串匹配", "模糊匹配"]
-                    currentIndex: diskModel.fuzzyMatch ? 1 : 0
-                    onActivated: { diskModel.fuzzyMatch = (index === 1); scanSettings.fuzzyMatch = diskModel.fuzzyMatch; scanSettings.save() }
+                Label {
+                    text: "搜索："
+                    font.pixelSize: 11; color: theme.textMuted
                 }
                 Item { Layout.fillWidth: true }
                 ToolButton {
@@ -316,7 +276,7 @@ ApplicationWindow {
                     topPadding: 4
                     bottomPadding: 4
                     font.pixelSize: 11
-                    placeholderText: diskModel.viewMode === 1 ? "查找文件名…" : "筛选名称…"
+                    placeholderText: "筛选名称或文件…"
                     selectByMouse: true
                     onTextEdited: diskModel.filter = text
                 }
@@ -337,12 +297,10 @@ ApplicationWindow {
             // layout switch.
             function applyLayoutOrder() {
                 const vertical = window.layoutVertical()
-                // The tables' own split turns with the outer one: side by side
-                // when the panels are stacked, one above the other when they
-                // sit next to each other.
+                // The outer split turns with the layout; the tables' inner one
+                // carries the three panels.
                 const first = window.layoutTablesFirst() ? topSplit : chartPane
                 const second = window.layoutTablesFirst() ? chartPane : topSplit
-                topSplit.orientation = vertical ? Qt.Horizontal : Qt.Vertical
                 verticalSplit.orientation = vertical ? Qt.Vertical : Qt.Horizontal
                 for (const pane of [first, second]) {
                     pane.parent = null
@@ -351,35 +309,55 @@ ApplicationWindow {
                 // A pane in a vertical split needs a height budget, in a
                 // horizontal one a width budget; anything else collapses it.
                 if (vertical) {
-                    // tables above/below the chart: tree | legend side by side
+                    // tables above/below the chart: the tree | the files over
+                    // the legend
+                    topSplit.orientation = Qt.Horizontal
                     topSplit.SplitView.preferredHeight = 320
                     topSplit.SplitView.preferredWidth = -1
                     treePane.SplitView.fillWidth = true
                     treePane.SplitView.preferredWidth = -1
                     treePane.SplitView.minimumWidth = 430
                     treePane.SplitView.minimumHeight = -1
-                    legendPane.SplitView.fillWidth = false
-                    legendPane.SplitView.preferredWidth = 360
-                    legendPane.SplitView.minimumWidth = 240
-                    legendPane.SplitView.minimumHeight = -1
-                } else {
-                    // tables beside the chart: tree above the legend
-                    topSplit.SplitView.preferredWidth = 470
-                    topSplit.SplitView.preferredHeight = -1
-                    treePane.SplitView.fillWidth = false
-                    treePane.SplitView.preferredHeight = 260
-                    treePane.SplitView.minimumHeight = 90
-                    treePane.SplitView.minimumWidth = -1
-                    legendPane.SplitView.fillWidth = false
-                    legendPane.SplitView.preferredHeight = 240
-                    legendPane.SplitView.minimumHeight = 70
+                    tablesInnerSplit.SplitView.fillWidth = false
+                    tablesInnerSplit.SplitView.preferredWidth = 380
+                    tablesInnerSplit.SplitView.minimumWidth = 280
+                    tablesInnerSplit.orientation = Qt.Vertical
+                    filePane.SplitView.fillHeight = true
+                    filePane.SplitView.preferredHeight = -1
+                    filePane.SplitView.minimumHeight = 120
+                    filePane.SplitView.minimumWidth = -1
+                    legendPane.SplitView.fillHeight = false
+                    legendPane.SplitView.preferredHeight = 190
+                    legendPane.SplitView.minimumHeight = 80
                     legendPane.SplitView.minimumWidth = -1
+                } else {
+                    // tables beside the chart: the three panels side by side
+                    topSplit.orientation = Qt.Vertical
+                    topSplit.SplitView.preferredWidth = 640
+                    topSplit.SplitView.preferredHeight = -1
+                    tablesInnerSplit.orientation = Qt.Horizontal
+                    treePane.SplitView.fillWidth = true
+                    treePane.SplitView.preferredWidth = -1
+                    treePane.SplitView.minimumWidth = 300
+                    treePane.SplitView.minimumHeight = -1
+                    filePane.SplitView.fillHeight = false
+                    filePane.SplitView.preferredHeight = -1
+                    filePane.SplitView.minimumHeight = -1
+                    filePane.SplitView.fillWidth = false
+                    filePane.SplitView.preferredWidth = 300
+                    filePane.SplitView.minimumWidth = 220
+                    legendPane.SplitView.fillWidth = false
+                    legendPane.SplitView.preferredWidth = 280
+                    legendPane.SplitView.minimumWidth = 220
+                    legendPane.SplitView.minimumHeight = -1
                 }
                 topSplit.visible = window.maximizedPane !== "chart"
                 chartPane.visible = window.maximizedPane !== "tables"
             }
 
-            // folder table | extension legend
+            // folder table | extension legend — a third panel, the file list,
+            // joins them when the dock layout gives it room. The tree keeps
+            // its own width, the file list opens beside it.
             SplitView {
                 id: topSplit
                 orientation: Qt.Horizontal
@@ -499,31 +477,36 @@ ApplicationWindow {
                                 }
                                 contentItem: RowLayout {
                                     spacing: 0
+                                    clip: true
                                     Item {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 6 + (diskModel.viewMode === 0 ? depth * 12 : 0)
-                                            spacing: 4
-                                            Label {
-                                                Layout.preferredWidth: 12
-                                                visible: rowItem.hasChildren
-                                                text: rowItem.expanded ? "▾" : "▸"
-                                                color: theme.textMuted; font.pixelSize: 10
-                                                MouseArea {
-                                                    anchors.fill: parent
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: diskModel.toggleExpanded(rowItem.nodeId)
+                                        Item {
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 6 + depth * 12
+                                                spacing: 4
+                                                Label {
+                                                    Layout.preferredWidth: 12
+                                                    visible: rowItem.hasChildren
+                                                    text: rowItem.expanded ? "▾" : "▸"
+                                                    color: theme.textMuted; font.pixelSize: 10
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onClicked: diskModel.toggleExpanded(rowItem.nodeId)
+                                                    }
                                                 }
-                                            }
-                                            Item { visible: !rowItem.hasChildren; Layout.preferredWidth: 12 }
-                                            Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 2; color: rowItem.extColor }
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: rowItem.name
-                                                elide: Text.ElideRight
-                                                color: theme.text; font.pixelSize: 11
+                                                Item { visible: !rowItem.hasChildren; Layout.preferredWidth: 12 }
+                                                Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 2; color: rowItem.extColor }
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: rowItem.name
+                                                    elide: Text.ElideRight
+                                                    color: theme.text; font.pixelSize: 11
+                                                }
                                             }
                                         }
                                     }
@@ -590,6 +573,159 @@ ApplicationWindow {
                     }
                 }
 
+                // The three panels: the tree | the files above the legend.
+                // The inner split keeps the files and the legend stacked so a
+                // narrow window still leaves the tree its columns.
+                SplitView {
+                    id: tablesInnerSplit
+                    orientation: Qt.Vertical
+                    SplitView.fillWidth: false
+                    SplitView.preferredWidth: 380
+                    SplitView.minimumWidth: 280
+                    handle: Rectangle { implicitWidth: 5; color: theme.handleFill; border.color: theme.border }
+
+                    Item {
+                        id: filePane
+                        SplitView.fillHeight: true
+                        SplitView.minimumHeight: 120
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: 0
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            color: theme.surfaceAlt
+                            border.color: theme.border
+                            RowLayout {
+                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "文件" + (fileListModel.wholeTree ? " · 整个扫描" : "")
+                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                }
+                                // Where the files come from: the folder the
+                                // chart is on, or the whole scan.
+                                ComboBox {
+                                    implicitWidth: 78
+                                    implicitHeight: 22
+                                    font.pixelSize: 10
+                                    model: ["当前目录", "整个扫描"]
+                                    currentIndex: fileListModel.wholeTree ? 1 : 0
+                                    onActivated: {
+                                        fileListModel.wholeTree = (index === 1)
+                                        scanSettings.wholeTree = fileListModel.wholeTree
+                                        scanSettings.save()
+                                    }
+                                }
+                                // How loosely a text matches: a substring of
+                                // the path, or the fuzzy subsequence of the
+                                // name.
+                                ComboBox {
+                                    implicitWidth: 78
+                                    implicitHeight: 22
+                                    font.pixelSize: 10
+                                    model: ["子串匹配", "模糊匹配"]
+                                    currentIndex: diskModel.fuzzyMatch ? 1 : 0
+                                    onActivated: {
+                                        diskModel.fuzzyMatch = (index === 1)
+                                        scanSettings.fuzzyMatch = diskModel.fuzzyMatch
+                                        scanSettings.save()
+                                    }
+                                }
+                            }
+                        }
+                        ListView {
+                            id: fileList
+                            objectName: "diskViewFileList"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            model: fileListModel
+                            clip: true
+                            reuseItems: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            Keys.onPressed: function(event) {
+                                if (event.key === Qt.Key_Up) { fileListModel.moveSelection(-1); event.accepted = true }
+                                else if (event.key === Qt.Key_Down) { fileListModel.moveSelection(1); event.accepted = true }
+                                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { fileListModel.openSelected(); event.accepted = true }
+                            }
+                            delegate: ItemDelegate {
+                                id: fileRow
+                                required property string nodeId
+                                required property string name
+                                required property string sizeText
+                                required property string allocText
+                                required property string path
+                                required property string extColor
+                                required property string modifiedText
+                                required property string attributes
+                                required property real percent
+                                required property bool selected
+                                width: ListView.view.width
+                                height: 24
+                                padding: 0
+                                highlighted: fileRow.selected || nodeId === diskModel.selectedId
+                                onClicked: fileListModel.select(nodeId)
+                                TapHandler {
+                                    acceptedButtons: Qt.RightButton
+                                    onSingleTapped: function(eventPoint) {
+                                        contextMenu.targetId = fileRow.nodeId
+                                        contextMenu.targetPath = fileRow.path
+                                        contextMenu.parent = fileRow
+                                        contextMenu.x = eventPoint.position.x
+                                        contextMenu.y = eventPoint.position.y
+                                        contextMenu.open()
+                                    }
+                                }
+                                contentItem: RowLayout {
+                                    spacing: 0
+                                    clip: true
+                                    Item {
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 6
+                                            spacing: 4
+                                            Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 2; color: fileRow.extColor }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: fileRow.name
+                                                elide: Text.ElideRight
+                                                color: theme.text; font.pixelSize: 11
+                                            }
+                                        }
+                                    }
+                                    Item {
+                                        visible: !window.columnHidden("pct")
+                                        Layout.preferredWidth: columns.pct
+                                        Layout.fillHeight: true
+                                        clip: true
+                                        Rectangle {
+                                            x: 4
+                                            y: parent.height / 2 - 4
+                                            height: 8
+                                            radius: 2
+                                            color: theme.selection
+                                            width: Math.max(0, Math.min(1, fileRow.percent / 100)) * (parent.width - 8)
+                                        }
+                                        Label {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 6
+                                            verticalAlignment: Text.AlignVCenter
+                                            text: fileRow.percent.toFixed(1) + "%"
+                                            color: theme.text; font.pixelSize: 11
+                                        }
+                                    }
+                                    Label { Layout.preferredWidth: columns.size; text: fileRow.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("alloc") && filePane.width > 460; Layout.preferredWidth: columns.alloc; text: fileRow.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("modified") && filePane.width > 560; Layout.preferredWidth: columns.modified; text: fileRow.modifiedText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { visible: !window.columnHidden("attributes") && filePane.width > 640; Layout.preferredWidth: columns.attrs; text: fileRow.attributes; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Item {
                     id: legendPane
                     SplitView.fillWidth: true
@@ -632,6 +768,7 @@ ApplicationWindow {
                                 onClicked: diskModel.selectExtension(modelData.ext)
                                 contentItem: RowLayout {
                                     spacing: 0
+                                    clip: true
                                     Item { Layout.preferredWidth: 18; Layout.fillHeight: true
                                         Rectangle { anchors.centerIn: parent; width: 9; height: 9; radius: 2; color: modelData.color }
                                     }
@@ -671,6 +808,7 @@ ApplicationWindow {
                         }
                     }
                 }
+                } // tablesInnerSplit
             }
 
             // the chart pane: its toolbar (picture, depth, layout) and the

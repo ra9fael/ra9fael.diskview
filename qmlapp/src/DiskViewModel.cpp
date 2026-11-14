@@ -2,12 +2,16 @@
 
 #include "ExtensionColors.h"
 
+#include <limits>
+
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QUrl>
+
 #include <algorithm>
 #include <new>
 
@@ -18,10 +22,11 @@ quint64 allocatedFor(quint64 size)
 {
     return (size + 4095u) / 4096u * 4096u;
 }
+}
 
 // WizTree shows the same date shape everywhere, so the column does not jump
-// around: yyyy-MM-dd HH:mm.
-QString modifiedText(quint64 fileTime)
+// around: yyyy-MM-dd HH:mm. Shared by both panels' cells.
+QString DiskViewModel::modifiedText(quint64 fileTime) const
 {
     if (!fileTime) return QStringLiteral("—");
     // FILETIME counts 100 ns ticks from 1601-01-01 UTC.
@@ -31,7 +36,7 @@ QString modifiedText(quint64 fileTime)
 }
 
 // The Windows attribute letters, the same set the Explorer shows.
-QString attributesText(quint32 attributes)
+QString DiskViewModel::attributesText(quint32 attributes) const
 {
     if (!attributes) return QStringLiteral("—");
     QString text;
@@ -45,9 +50,16 @@ QString attributesText(quint32 attributes)
     return text.isEmpty() ? QStringLiteral("—") : text;
 }
 
+QColor DiskViewModel::extensionColorOf(int index) const
+{
+    return directoryOf(index) ? QColor(QStringLiteral("#8f9aa8"))
+                              : diskviewqml::extensionColor(extOf(index));
+}
+
 // A subsequence match: "scm" finds "scan-manager". Cheaper and more
 // predictable than an edit distance, and it is what a fuzzy file finder
-// means in practice.
+// means in practice. The file panel's whole-tree search walks the same
+// matcher, so the two stay one.
 bool fuzzyContains(const QString& haystack, const QString& needle)
 {
     if (needle.isEmpty()) return true;
@@ -59,6 +71,19 @@ bool fuzzyContains(const QString& haystack, const QString& needle)
     }
     return true;
 }
+
+// The score of the same match: how far into the name the needle's last
+// character landed, lower is tighter. A file finder sorts its best matches
+// first; the order of a whole-tree search is this.
+int fuzzyRank(const QString& haystack, const QString& needle)
+{
+    int at = 0;
+    for (const QChar ch : needle) {
+        const int found = haystack.indexOf(ch, at, Qt::CaseInsensitive);
+        if (found < 0) return std::numeric_limits<int>::max();
+        at = found + 1;
+    }
+    return at;
 }
 
 DiskViewModel::DiskViewModel(QObject* parent) : QAbstractListModel(parent)
@@ -366,14 +391,13 @@ QVariant DiskViewModel::data(const QModelIndex& index, int role) const
     case ExpandedRole: return m_expanded.contains(nodeIndex);
     case AllocTextRole: return formatSize(static_cast<qint64>(allocOf(nodeIndex)));
     case ExtRole: return extOf(nodeIndex);
-    case ExtColorRole: return directory ? QStringLiteral("#8f9aa8") : diskviewqml::extensionColor(extOf(nodeIndex)).name();
+    case ExtColorRole: return extensionColorOf(nodeIndex).name();
     case ItemsRole: return static_cast<int>(m_tree.fileCounts.at(nodeIndex) + m_tree.dirCounts.at(nodeIndex));
     case FilesRole: return static_cast<int>(m_tree.fileCounts.at(nodeIndex));
     case DirsRole: return static_cast<int>(m_tree.dirCounts.at(nodeIndex));
     case ModifiedTextRole: return hasModifiedOf(nodeIndex) ? modifiedText(modifiedOf(nodeIndex)) : QStringLiteral("—");
     case ModifiedValueRole: return QVariant::fromValue<qulonglong>(hasModifiedOf(nodeIndex) ? modifiedOf(nodeIndex) : 0);
-    case AttributesRole: return attributesText(attributesOf(nodeIndex));
-    default: return {};
+    case AttributesRole: return attributesText(attributesOf(nodeIndex));    default: return {};
     }
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QColor>
 #include <QJsonObject>
 #include <QObject>
 #include <QSet>
@@ -22,6 +23,9 @@
 class DiskViewModel : public QAbstractListModel {
     Q_OBJECT
     QML_ELEMENT
+    // The file panel reads the arrays and the shared state through this
+    // class; it builds its own rows from the same tree.
+    friend class FileListModel;
     Q_PROPERTY(QString currentPath READ currentPath NOTIFY currentPathChanged)
     Q_PROPERTY(QString currentName READ currentName NOTIFY currentPathChanged)
     Q_PROPERTY(QString totalText READ totalText NOTIFY currentPathChanged)
@@ -71,6 +75,12 @@ public:
     };
     enum SortKey { SortBySize = 0, SortByName = 1, SortByModified = 2 };
     enum ViewMode { TreeView = 0, FileView = 1 };
+
+    // The shared helpers both panels use for their cells: the attribute
+    // letters, the modified stamp and the colour of a node's extension.
+    QString attributesText(quint32 attributes) const;
+    QString modifiedText(quint64 modified) const;
+    QColor extensionColorOf(int index) const;
 
     explicit DiskViewModel(QObject* parent = nullptr);
     Q_INVOKABLE bool loadFixture(const QString& fileName);
@@ -160,6 +170,8 @@ signals:
 
 private:
     // ---- the tree, read straight out of the flat arrays ---------------------
+    // The file panel (FileListModel) builds its rows from the same arrays, so
+    // the accessors are shared through friendship.
     int nodeCount() const { return m_tree.names.size(); }
     const QString& nameOf(int index) const { return m_tree.names.at(index); }
     int parentOf(int index) const { return m_tree.parents.at(index); }
