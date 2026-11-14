@@ -193,7 +193,7 @@ void ScanSettings::setChartOnTop(bool onTop)
 void ScanSettings::setChartLayout(const QString& layout)
 {
     static const QStringList known = {QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"),
-                                      QStringLiteral("tablesLeft"), QStringLiteral("tablesRight")};
+                                      QStringLiteral("tablesLeft"), QStringLiteral("tablesRight"), QStringLiteral("dock")};
     // Anything unknown falls back to the default instead of leaving the window
     // in a layout it cannot draw.
     const QString kept = known.contains(layout) ? layout : QStringLiteral("tablesTop");
@@ -255,6 +255,7 @@ bool ScanSettings::load()
         return false;
     }
     const QJsonObject object = document.object();
+    m_dockLayout = QString::fromUtf8(QJsonDocument(object.value(QStringLiteral("dockLayout")).toObject()).toJson(QJsonDocument::Compact));
     m_lastPath = object.value(QStringLiteral("path")).toString();
     // Out-of-range values from a hand-edited file are clamped, not trusted.
     m_scanMode = std::clamp(object.value(QStringLiteral("scanMode")).toInt(0), 0, 2);
@@ -285,7 +286,7 @@ bool ScanSettings::load()
     m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
     const QString layout = object.value(QStringLiteral("chartLayout")).toString();
     m_chartLayout = layout.isEmpty() ? (m_chartOnTop ? QStringLiteral("tablesBottom") : QStringLiteral("tablesTop"))
-                                 : (QStringList{QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"), QStringLiteral("tablesLeft"), QStringLiteral("tablesRight")}.contains(layout) ? layout : QStringLiteral("tablesTop"));
+                                 : (QStringList{QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"), QStringLiteral("tablesLeft"), QStringLiteral("tablesRight"), QStringLiteral("dock")}.contains(layout) ? layout : QStringLiteral("tablesTop"));
     emit changed();
     return true;
 }
@@ -308,6 +309,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("chartDepth"), m_chartDepth);
     object.insert(QStringLiteral("chartOnTop"), m_chartOnTop);
     object.insert(QStringLiteral("chartLayout"), m_chartLayout);
+    object.insert(QStringLiteral("dockLayout"), QJsonDocument::fromJson(m_dockLayout.toUtf8()).object());
     QJsonArray excluded;
     for (const QString& path : m_excludedPaths) {
         excluded.append(path);

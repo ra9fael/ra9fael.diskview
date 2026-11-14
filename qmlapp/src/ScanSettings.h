@@ -36,6 +36,7 @@ class ScanSettings : public QObject {
     // "tablesLeft" or "tablesRight". Replaces the boolean above, which is kept
     // only so an older settings file still reads.
     Q_PROPERTY(QString chartLayout READ chartLayout WRITE setChartLayout NOTIFY changed)
+    Q_PROPERTY(QString dockLayout READ dockLayout WRITE setDockLayout NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -66,6 +67,8 @@ public:
     bool chartOnTop() const { return m_chartOnTop; }
     void setChartOnTop(bool onTop);
     QString chartLayout() const { return m_chartLayout; }
+    QString dockLayout() const { return m_dockLayout; }
+    void setDockLayout(const QString& value) { if (m_dockLayout != value) { m_dockLayout = value; emit changed(); } }
     void setChartLayout(const QString& layout);
     QString filePath() const;
 
@@ -90,4 +93,5 @@ private:
     int m_chartDepth = 2;
     bool m_chartOnTop = false;
     QString m_chartLayout = QStringLiteral("tablesTop");
+    QString m_dockLayout;
 };

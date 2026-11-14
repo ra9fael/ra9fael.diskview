@@ -14,6 +14,7 @@ qt_add_executable(diskview-qml
     src/ScanSettings.cpp src/ScanSettings.h
     src/ChartItem.cpp src/ChartItem.h
     src/DiskViewModel.cpp src/DiskViewModel.h
+    src/DockState.cpp src/DockState.h
     src/FileListModel.cpp src/FileListModel.h
     src/ThemeBridge.cpp src/ThemeBridge.h
     # The function icons: the same Phosphor set and pixel-aligned glyph
@@ -25,7 +26,7 @@ qt_add_executable(diskview-qml
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
-    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml)
+    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -102,6 +103,7 @@ if(DISKVIEW_BUILD_PLUGIN)
         src/ScanSettings.cpp src/ScanSettings.h
         src/ChartItem.cpp src/ChartItem.h
         src/DiskViewModel.cpp src/DiskViewModel.h
+        src/DockState.cpp src/DockState.h
         src/FileListModel.cpp src/FileListModel.h
         src/ThemeBridge.cpp src/ThemeBridge.h
         src/Phosphor.cpp src/Phosphor.h
@@ -110,7 +112,7 @@ if(DISKVIEW_BUILD_PLUGIN)
     qt_add_qml_module(diskview-qml-app
         URI DiskViewPrototype
         VERSION 1.0
-        QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml)
+        QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml)
     qt_add_resources(diskview-qml-app "diskview_qml_fixture"
         PREFIX "/fixtures"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -199,6 +201,14 @@ foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
 endforeach()
 
 enable_testing()
+add_executable(diskview-dock-tests tests/dock-tests.cpp src/DockState.cpp src/DockState.h)
+target_link_libraries(diskview-dock-tests PRIVATE Qt6::Core)
+target_include_directories(diskview-dock-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+if(MSVC)
+    set_target_properties(diskview-dock-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+set_target_properties(diskview-dock-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+add_test(NAME diskview_dock COMMAND diskview-dock-tests)
 add_test(NAME diskview_chart_geometry COMMAND diskview-chart-geometry-tests)
 set_tests_properties(diskview_chart_geometry PROPERTIES TIMEOUT 30)
 add_test(NAME diskview_scan_settings COMMAND diskview-settings-tests)

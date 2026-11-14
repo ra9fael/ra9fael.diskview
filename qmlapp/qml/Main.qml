@@ -14,12 +14,14 @@ ApplicationWindow {
     // The whole window follows the host's light/dark choice; the chart reads
     // the same switch so its greys and inks follow.
     color: theme.window
+    readonly property var themeTokens: theme
 
     DiskViewModel { id: diskModel; objectName: "diskModel" }
     // The file panel is its own model over the shared tree: its rows are the
     // files, its own whole-tree switch. The outline stays on the shared
     // model, whose rows are the folders (and their files, opened).
     FileListModel { id: fileListModel; model: diskModel }
+    DockState { id: dockState; objectName: "diskViewDockState" }
     Component.onCompleted: {
         diskModel.loadFixture(fixtureSource)
         // The file view remembers how it was left.
@@ -29,12 +31,18 @@ ApplicationWindow {
         diskModel.chartDepth = scanSettings.chartDepth
         chart.depth = scanSettings.chartDepth
         window.chartLayout = scanSettings.chartLayout
+        try { dockState.layout = JSON.parse(scanSettings.dockLayout) } catch (e) {}
         verticalSplit.applyLayoutOrder()
+        if (window.chartLayout === "dock") Qt.callLater(dockWorkspace.refresh)
     }
 
     // Which table columns are on. The name column is not listed: it never
     // goes away.
     function columnHidden(key) { return scanSettings.hiddenColumns.indexOf(key) >= 0 }
+    function treeColumnHidden(key) {
+        const minimum = {pct: 320, alloc: 440, items: 540, files: 610, dirs: 680, modified: 810, attributes: 900}
+        return columnHidden(key) || treePane.width < (minimum[key] || 0)
+    }
     function toggleColumn(key) {
         const hidden = scanSettings.hiddenColumns.slice()
         const at = hidden.indexOf(key)
@@ -67,6 +75,60 @@ ApplicationWindow {
     property string chartLayout: "tablesTop"
     // "" or the pane that fills the window ("tables" / "chart").
     property string maximizedPane: ""
+    property var dockPanes: ({tree: treePane, files: filePane, legend: legendPane, chart: chartPane})
+    function detachForDock() {
+        for (const pair of [[topSplit, treePane], [tablesInnerSplit, filePane],
+                            [tablesInnerSplit, legendPane], [verticalSplit, chartPane]]) {
+            for (let i = pair[0].count - 1; i >= 0; --i) {
+                if (pair[0].itemAt(i) === pair[1]) pair[0].takeItem(i)
+            }
+        }
+    }
+    // Invoked by the standalone interaction checks. These are the very same
+    // state operations as the drag/drop and divider handlers use.
+    function verifyDock() {
+        const saved = dockState.layout
+        const oldLayout = chartLayout
+        const ok = function() {
+            return chartPane.parent !== null && chartPane.width > 0 && chartPane.height > 0
+        }
+        chartLayout = "dock"
+        detachForDock()
+        dockWorkspace.refresh()
+        let passed = ok()
+        passed = dockState.movePane("files", "tree", "center") && passed
+        dockState.activate("files")
+        passed = filePane.visible && !treePane.visible && passed
+        passed = dockState.movePane("files", "chart", "bottom") && passed
+        passed = dockState.setRatio("", .55) && passed
+        for (const id of ["tree", "files", "legend", "chart"]) {
+            maximizePane(id)
+            passed = dockPanes[id].parent === fullscreenSlot && passed
+            maximizePane(id)
+            passed = dockPanes[id].parent !== fullscreenSlot && passed
+        }
+        dockState.layout = saved
+        chartLayout = oldLayout
+        if (oldLayout !== "dock") { restorePresetParents(); verticalSplit.applyLayoutOrder() }
+        else dockWorkspace.refresh()
+        return passed
+    }
+    function flushDockLayout() {
+        scanSettings.dockLayout = JSON.stringify(dockState.layout)
+        return scanSettings.save()
+    }
+    function restorePresetParents() {
+        for (const id of ["tree", "files", "legend", "chart"]) {
+            const pane = dockPanes[id]
+            pane.anchors.fill = null
+            pane.visible = true
+            pane.parent = null
+            if (id === "tree") topSplit.insertItem(0, pane)
+            else if (id === "files") tablesInnerSplit.insertItem(0, pane)
+            else if (id === "legend") tablesInnerSplit.addItem(pane)
+            else verticalSplit.addItem(pane)
+        }
+    }
     function layoutVertical() { return chartLayout === "tablesTop" || chartLayout === "tablesBottom" }
     function layoutTablesFirst() { return chartLayout === "tablesTop" || chartLayout === "tablesLeft" }
     // Fullscreen: the named group is lifted into a layer of its own, over the
@@ -75,6 +137,20 @@ ApplicationWindow {
     // it on the way out. "tables" is the whole tree|files|legend split, so a
     // table fullscreen is one move, not three.
     function maximizePane(group) {
+        if (chartLayout === "dock") {
+            if (group === "tables") group = "tree"
+            const old = dockPanes[maximizedPane]
+            if (old) old.anchors.fill = null
+            maximizedPane = maximizedPane === group ? "" : group
+            dockWorkspace.refresh()
+            const pane = dockPanes[maximizedPane]
+            if (pane) {
+                pane.parent = fullscreenSlot
+                pane.visible = true
+                pane.anchors.fill = fullscreenSlot
+            }
+            return
+        }
         const current = maximizedPane === "chart" ? chartPane : maximizedPane === "tables" ? topSplit : null
         const target = group === "chart" ? chartPane : group === "tables" ? topSplit : null
         // The same group again: back to the split.
@@ -102,6 +178,7 @@ ApplicationWindow {
     // Put the maximized pane back into the split, in the order the layout
     // asks for, and let the layout set the size budgets again.
     function restorePanes() {
+        if (chartLayout === "dock") { dockWorkspace.refresh(); return }
         for (const pane of [topSplit, chartPane]) {
             if (pane.parent === fullscreenSlot) {
                 pane.anchors.fill = null
@@ -196,6 +273,7 @@ ApplicationWindow {
                 Label { text: "QML 技术样机"; font.pixelSize: 12; color: theme.textMuted }
                 Item { Layout.fillWidth: true }
                 Label {
+                    id: elevationLabel
                     text: scanService.state === "done" ? "真实扫描"
                           : scanService.state === "scanning" ? (scanService.paused ? "扫描已暂停" : "扫描中")
                           : scanService.state === "cancelled" ? "已取消的扫描"
@@ -256,10 +334,11 @@ ApplicationWindow {
                     text: scanService.elevated ? "快扫可用（管理员）" : "快扫不可用（Win顺 未以管理员运行）"
                     font.pixelSize: 11
                     color: scanService.elevated ? theme.ok : theme.warn
-                    ToolTip.visible: hovered
+                    ToolTip.visible: elevationHover.hovered
                     ToolTip.text: scanService.elevated
                                   ? "本进程持有管理员令牌，快扫直接读取 MFT，不再弹出 UAC"
                                   : "以管理员身份运行 Win顺，并在插件权限里允许 elevated 后，快扫才会启用"
+                    HoverHandler { id: elevationHover }
                 }
             }
         }
@@ -340,6 +419,7 @@ ApplicationWindow {
 
         SplitView {
             id: verticalSplit
+            visible: window.chartLayout !== "dock"
             orientation: Qt.Vertical
             anchors.fill: parent
             handle: Rectangle { implicitHeight: 5; color: theme.handleFill; border.color: theme.border }
@@ -349,6 +429,11 @@ ApplicationWindow {
             // them back in the chosen order and orientation, which is the whole
             // layout switch.
             function applyLayoutOrder() {
+                if (window.chartLayout === "dock") {
+                    window.detachForDock()
+                    Qt.callLater(dockWorkspace.refresh)
+                    return
+                }
                 const vertical = window.layoutVertical()
                 // The outer split turns with the layout; the tables' inner one
                 // carries the three panels.
@@ -454,19 +539,19 @@ ApplicationWindow {
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(0) }
                                 }
-                                Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.columnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.columnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.columnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
                                 Label {
-                                    visible: !window.columnHidden("modified")
+                                    visible: !window.treeColumnHidden("modified")
                                     Layout.preferredWidth: columns.modified
                                     text: "修改时间" + (diskModel.sortKey === 2 ? (diskModel.ascending ? " ↑" : " ↓") : "")
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(2) }
                                 }
-                                Label { visible: !window.columnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
                             }
                         }
                         ListView {
@@ -580,37 +665,37 @@ ApplicationWindow {
                                         }
                                     }
                                     Label { Layout.preferredWidth: columns.size; text: rowItem.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { visible: !window.treeColumnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
                                     Label {
-                                        visible: !window.columnHidden("items")
+                                        visible: !window.treeColumnHidden("items")
                                         Layout.preferredWidth: columns.items
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.items) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
-                                        visible: !window.columnHidden("files")
+                                        visible: !window.treeColumnHidden("files")
                                         Layout.preferredWidth: columns.files
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.files) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
-                                        visible: !window.columnHidden("dirs")
+                                        visible: !window.treeColumnHidden("dirs")
                                         Layout.preferredWidth: columns.dirs
                                         text: rowItem.directory ? diskModel.formatCount(rowItem.dirs) : "—"
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
-                                        visible: !window.columnHidden("modified")
+                                        visible: !window.treeColumnHidden("modified")
                                         Layout.preferredWidth: columns.modified
                                         text: rowItem.modifiedText
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
                                         color: theme.textMuted; font.pixelSize: 11
                                     }
                                     Label {
-                                        visible: !window.columnHidden("attributes")
+                                        visible: !window.treeColumnHidden("attributes")
                                         Layout.preferredWidth: columns.attrs
                                         text: rowItem.attributes
                                         horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
@@ -1006,22 +1091,32 @@ ApplicationWindow {
                             scanSettings.save()
                         }
                     }
+                    ToolButton {
+                        visible: window.chartLayout === "dock"
+                        implicitWidth: 28; implicitHeight: 26
+                        ToolTip.visible: hovered
+                        ToolTip.text: "恢复默认 Dock 布局"
+                        onClicked: dockState.reset()
+                        contentItem: Glyph { iconName: "layout"; size: 15; color: theme.textMuted }
+                    }
                     Label { text: "布局"; font.pixelSize: 11; color: theme.textMuted }
                     ComboBox {
                         id: layoutBox
                         implicitWidth: 104
                         implicitHeight: 26
                         font.pixelSize: 11
-                        model: ["表格在上", "图表在上", "表格在左", "图表在左"]
-                        currentIndex: Math.max(0, ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight"].indexOf(window.chartLayout))
+                        model: ["表格在上", "图表在上", "表格在左", "图表在左", "自由 Dock"]
+                        currentIndex: Math.max(0, ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight", "dock"].indexOf(window.chartLayout))
                         ToolTip.visible: hovered
                         ToolTip.text: "表格与图表怎么排"
                         onActivated: {
-                            const names = ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight"]
+                            const names = ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight", "dock"]
+                            if (window.maximizedPane) window.maximizePane(window.maximizedPane)
+                            const wasDock = window.chartLayout === "dock"
                             window.chartLayout = names[index]
+                            if (wasDock && window.chartLayout !== "dock") window.restorePresetParents()
                             scanSettings.chartLayout = window.chartLayout
                             scanSettings.save()
-                            if (window.maximizedPane) window.maximizePane(window.maximizedPane)
                             verticalSplit.applyLayoutOrder()
                         }
                     }
@@ -1080,7 +1175,7 @@ ApplicationWindow {
                             viewMode: window.chartKind
                             centerLabel: diskModel.currentName
                             highlightExtension: window.chartHighlight()
-                            accent: theme.accent
+                            accent: window.themeTokens.accent
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
                             onActivated: function(nodeId, directory) {
                                 // The chart is a map: a double click enters the
@@ -1131,6 +1226,22 @@ ApplicationWindow {
                 }
             }
         }
+
+            DockWorkspace {
+                id: dockWorkspace
+                objectName: "diskViewDockWorkspace"
+                anchors.fill: parent
+                visible: window.chartLayout === "dock"
+                panes: window.dockPanes
+                state: dockState
+                fullscreen: window.maximizedPane
+                onMaximizeRequested: function(pane) { window.maximizePane(pane) }
+                onPersisted: {
+                    scanSettings.dockLayout = JSON.stringify(dockState.layout)
+                    dockSave.restart()
+                }
+            }
+            Timer { id: dockSave; interval: 300; onTriggered: scanSettings.save() }
 
             // The fullscreen layer: the maximized pane lives here, above the
             // split, so nothing behind it can cover it. It is a layer of its

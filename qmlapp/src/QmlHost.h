@@ -81,6 +81,7 @@ signals:
     void scanFailed(const QString& message);
 
 private:
+    bool runDockChecks(QString* report);
     Options m_options;
     QQmlApplicationEngine m_engine;
     ScanService* m_scanService = nullptr;

@@ -2,6 +2,7 @@
 
 #include "ChartItem.h"
 #include "DiskViewModel.h"
+#include "DockState.h"
 #include "ScanService.h"
 #include "ScanSettings.h"
 #include "ThemeBridge.h"
@@ -275,7 +276,7 @@ FlatTree flattenSynthetic(int nodes)
 }
 } // namespace
 
-bool QmlHost::runChartBenchmark(int nodes, QString* report)
+bool QmlHost::runDockChecks(QString* report)
 {
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     auto* chart = window ? window->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr;
@@ -284,6 +285,82 @@ bool QmlHost::runChartBenchmark(int nodes, QString* report)
         *report = QStringLiteral("bench: the chart or the model is missing\n");
         return false;
     }
+
+    QQmlExpression dockCheck(m_engine.rootContext(), window, QStringLiteral("verifyDock()"));
+    if (!dockCheck.evaluate().toBool() || dockCheck.hasError()) {
+        *report = QStringLiteral("FAIL\tdock layout/fullscreen round trip: %1\n").arg(dockCheck.error().toString());
+        return false;
+    }
+    QCoreApplication::processEvents();
+
+    // Drive the actual title-bar MouseAreas through the window: drag the
+    // files tab into the centre of the tree, then drag it out to the chart.
+    if (auto* state = window->findChild<DockState*>(QStringLiteral("diskViewDockState"));
+        state && window->property("chartLayout").toString() == QStringLiteral("dock")) {
+        const auto original = state->layout();
+        const std::function<QQuickItem*(QQuickItem*, const QString&)> findVisual =
+            [&](QQuickItem* root, const QString& name) -> QQuickItem* {
+                if (root->objectName() == name) return root;
+                for (auto* child : root->childItems()) if (auto* found = findVisual(child, name)) return found;
+                return nullptr;
+            };
+        const auto send = [&](QEvent::Type type, QPointF position, Qt::MouseButton button, Qt::MouseButtons buttons) {
+            QMouseEvent event(type, position, window->mapToGlobal(position.toPoint()), button, buttons, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &event);
+            QCoreApplication::processEvents();
+        };
+        const auto dragTab = [&](const QString& pane, const QString& target, bool center) {
+            const auto before = state->layout();
+            auto* source = findVisual(window->contentItem(), QStringLiteral("dock-tab-") + pane);
+            auto* destination = findVisual(window->contentItem(), QStringLiteral("dock-group-") + target);
+            if (!source || !destination) return false;
+            const QPointF start = source->mapToScene(QPointF(source->width() / 2, source->height() / 2));
+            auto* workspace = window->findChild<QQuickItem*>(QStringLiteral("diskViewDockWorkspace"));
+            if (!workspace) return false;
+            QPointF end;
+            for (const auto& entry : state->placements(workspace->width(), workspace->height())) {
+                const auto rect = entry.toMap();
+                if (rect.value("type") == "tabs" && rect.value("active") == target) {
+                    end = workspace->mapToScene(QPointF(rect.value("x").toDouble() + rect.value("width").toDouble() * .5,
+                        rect.value("y").toDouble() + rect.value("height").toDouble() * (center ? .5 : .9)));
+                    break;
+                }
+            }
+            send(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+            return state->layout() != before;
+        };
+        if (!dragTab(QStringLiteral("files"), QStringLiteral("tree"), true)
+            || !dragTab(QStringLiteral("files"), QStringLiteral("chart"), false)) {
+            *report = QStringLiteral("FAIL\tdock pointer drag\n");
+            state->setLayout(original);
+            return false;
+        }
+        state->setLayout(original);
+        QCoreApplication::processEvents();
+        auto* handle = findVisual(window->contentItem(), QStringLiteral("dock-handle-"));
+        if (!handle) { *report = QStringLiteral("FAIL\tdock divider missing\n"); return false; }
+        const QPointF start = handle->mapToScene(QPointF(handle->width() / 2, handle->height() / 2));
+        const QPointF end = start + QPointF(65, 0);
+        send(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+        if (state->layout() == original) { *report = QStringLiteral("FAIL\tdock pointer divider resize\n"); return false; }
+        state->setLayout(original);
+        QCoreApplication::processEvents();
+        QQmlExpression saveDock(m_engine.rootContext(), window, QStringLiteral("flushDockLayout()"));
+        if (!saveDock.evaluate().toBool()) { *report = QStringLiteral("FAIL\tdock persistence\n"); return false; }
+    }
+    return true;
+}
+
+bool QmlHost::runChartBenchmark(int nodes, QString* report)
+{
+    auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
+    auto* chart = window ? window->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr;
+    auto* model = window ? window->findChild<DiskViewModel*>(QStringLiteral("diskModel")) : nullptr;
+    if (!chart || !model) return false;
     const QVariantMap tree = syntheticTree(nodes);
     const FlatTree flat = flattenSynthetic(nodes);
     const int runs = 3;
@@ -421,6 +498,7 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
 
 bool QmlHost::runSelfTest(QString* report)
 {
+    if (!runDockChecks(report)) return false;
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     auto* chart = window ? window->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr;
     auto* model = window ? window->findChild<DiskViewModel*>(QStringLiteral("diskModel")) : nullptr;
