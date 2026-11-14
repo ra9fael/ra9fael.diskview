@@ -86,7 +86,7 @@ inline Outcome scanDirect(const std::wstring& path,const ProgressFn& progress,co
     if(preview.valid()){auto discarded=preview.get();previewMs+=discarded->snapshotMs;}
     if(cancel)return Outcome::Cancelled;
     if(!ok){reason=error.empty()?L"MFT scan failed":error;return Outcome::Fallback;}
-    const auto mergeStart=::GetTickCount64();mft::build(path,entries,cluster,result,true,options,&cancel);result.mergeMs=::GetTickCount64()-mergeStart;result.snapshotMs=previewMs;result.elapsedMs=::GetTickCount64()-start;
+    const auto mergeStart=::GetTickCount64();mft::build(path,entries,cluster,result,true,options,&cancel,&entries);result.mergeMs=::GetTickCount64()-mergeStart;result.snapshotMs=previewMs;result.elapsedMs=::GetTickCount64()-start;
     return result.cancelled?Outcome::Cancelled:Outcome::Complete;
 }
 

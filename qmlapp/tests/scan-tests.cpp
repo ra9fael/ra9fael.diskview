@@ -208,6 +208,29 @@ int main(int argc, char** argv)
     testServiceResumes();
     testUnreadableDirectoryIsReported();
     testFastScanFallback();
+    {
+        std::vector<diskview::mft::Entry> entries;
+        diskview::mft::Entry folder;
+        folder.id = 42; folder.parent = ws::ntfs::kRootRecord;
+        folder.directory = true; folder.name = L"folder";
+        entries.push_back(folder);
+        diskview::mft::Entry file;
+        file.id = 43; file.parent = 42; file.name = L"sample.txt";
+        file.known = true; file.bytes = 1234;
+        entries.push_back(file);
+        diskview::ScanResult copied, consumed;
+        diskview::mft::build(L"C:\\", entries, 4096, copied);
+        diskview::mft::build(L"C:\\", entries, 4096, consumed, true, {}, nullptr, &entries);
+        check(consumed.files == copied.files && consumed.dirs == copied.dirs,
+              "consuming MFT names preserves counts");
+        check(consumed.root.logical == 1234 && consumed.orphanRecords == 0,
+              "compact visited flags preserve sizes and orphan accounting");
+        check(consumed.root.children.at(0).name == L"folder"
+              && consumed.root.children.at(0).children.at(0).name == L"sample.txt",
+              "consuming build transfers directory and file names");
+        check(copied.root.children.at(0).children.at(0).name == L"sample.txt",
+              "non-consuming native build remains supported");
+    }
     if (failures == 0) {
         std::printf("scan tests: PASS\n");
         return 0;

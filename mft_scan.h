@@ -60,7 +60,7 @@ inline bool read(ws::ntfs::RecordSource& reader,std::uint32_t cluster,const Sink
     if(rejected) {error=L"MFT contains unreadable records ("+std::to_wstring(rejected)+L"); use ordinary enumeration.";return false;}
     return true;
 }
-inline void build(const std::wstring& root,const std::vector<Entry>& entries,std::uint32_t cluster,ScanResult& out,bool complete=true,const ScanOptions& options={},const std::atomic<bool>* cancel=nullptr) {
+inline void build(const std::wstring& root,const std::vector<Entry>& entries,std::uint32_t cluster,ScanResult& out,bool complete=true,const ScanOptions& options={},const std::atomic<bool>* cancel=nullptr,std::vector<Entry>* consumed=nullptr) {
     out=ScanResult{};out.displayRoot=root;out.clusterBytes=cluster;out.root.name=root;out.root.dir=true;out.fast=true;
     const auto cancelled=[&]{return cancel&&cancel->load();};
     const auto excluded=[&](const std::wstring& p){return std::any_of(options.excludedPaths.begin(),options.excludedPaths.end(),[&](const auto& base){return sameOrBelow(p,base);});};
@@ -81,7 +81,10 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
         if(!e.name.empty()&&ws::ntfs::recordOf(e.id)!=ws::ntfs::kRootRecord)children[e.parent].push_back(i);
     }
     detail::Ctx ranking;std::unordered_set<std::uint64_t> active;
-    std::unordered_set<std::size_t> visited;
+    // One byte per entry rather than an allocated hash node per entry. A full
+    // system volume has millions of names; the old set alone cost hundreds
+    // of megabytes while the input records and result tree were both alive.
+    std::vector<unsigned char> visited(entries.size(),0);
     // Excluded descendants are accounted for as excluded scope, never as
     // unreadable/orphan records. An iterative walk also handles metadata cycles.
     std::unordered_set<std::uint64_t> ignored;
@@ -90,7 +93,7 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
         while(!pending.empty()&&!cancelled()) {
             const auto current=pending.back();pending.pop_back();if(!ignored.insert(current).second)continue;
             const auto found=children.find(current);if(found==children.end())continue;
-            for(const auto index:found->second){visited.insert(index);if(directoryAttributes.count(entries[index].id))pending.push_back(entries[index].id);}
+            for(const auto index:found->second){visited[index]=1;if(directoryAttributes.count(entries[index].id))pending.push_back(entries[index].id);}
         }
     };
     const auto visit=[&](const auto& self,std::uint64_t id,Node& dir,const std::wstring& path,int depth)->void {
@@ -98,8 +101,9 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
         const auto found=children.find(id);
         if(found!=children.end())for(const auto index:found->second) {
             if(cancelled())break;
-            if(!visited.insert(index).second)continue;
-            const auto& e=entries[index];Node n;n.name=e.name;n.dir=directoryAttributes.count(e.id)!=0;
+            if(visited[index])continue;
+            visited[index]=1;
+            const auto& e=entries[index];Node n;n.dir=directoryAttributes.count(e.id)!=0;
             // The metadata is on the base record; the name may come from an
             // extension record that repeats less of it.
             n.attributes=n.dir?directoryAttributes[e.id]:e.attributes;
@@ -120,7 +124,10 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
                     if(out.skippedList.size()<detail::kMaxSkippedList)out.skippedList.push_back({full,ERROR_NOT_FOUND});
                 } else {n.logical=size->second;n.allocApprox=detail::clusterRound(n.logical,cluster);detail::considerLarge(ranking,n.logical,path,e.name.c_str());}
             }
-            dir.logical+=n.logical;dir.allocApprox+=n.allocApprox;dir.skippedChildren+=n.skippedChildren;dir.children.push_back(std::move(n));
+             // Final QML builds can transfer each name instead of keeping a
+             // second allocation until the entire tree has been constructed.
+             n.name=consumed?std::move((*consumed)[index].name):e.name;
+             dir.logical+=n.logical;dir.allocApprox+=n.allocApprox;dir.skippedChildren+=n.skippedChildren;dir.children.push_back(std::move(n));
         }
         std::stable_sort(dir.children.begin(),dir.children.end(),[](const auto& a,const auto& b){return a.logical>b.logical;});active.erase(id);
     };
@@ -128,7 +135,7 @@ inline void build(const std::wstring& root,const std::vector<Entry>& entries,std
     if(cancelled()){out.cancelled=true;return;}
     while(!ranking.top.empty()){out.largest.push_back(ranking.top.top());ranking.top.pop();}
     std::sort(out.largest.begin(),out.largest.end(),std::greater<>());
-    for(std::size_t i=0;i<entries.size();++i)if(!entries[i].name.empty()&&ws::ntfs::recordOf(entries[i].id)!=ws::ntfs::kRootRecord&&!visited.count(i))++out.orphanRecords;
+    for(std::size_t i=0;i<entries.size();++i)if(!visited[i]&&!entries[i].name.empty()&&ws::ntfs::recordOf(entries[i].id)!=ws::ntfs::kRootRecord)++out.orphanRecords;
     if(!complete){out.pendingRecords=out.orphanRecords;out.orphanRecords=0;}
 }
 } // namespace diskview::mft

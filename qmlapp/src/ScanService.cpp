@@ -322,6 +322,8 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                   emit finished(tree);
               },
               Qt::QueuedConnection);
+      } catch (const std::bad_alloc&) {
+        reportScanFailure(QStringLiteral("扫描内存不足：插件内存额度或系统可用内存不足。请先缩小扫描目录范围后重试。"));
       } catch (const std::exception& e) {
         reportScanFailure(QStringLiteral("扫描中断：%1").arg(QString::fromUtf8(e.what())));
       } catch (...) {
