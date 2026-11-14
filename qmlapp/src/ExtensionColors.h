@@ -12,10 +12,10 @@
 namespace diskviewqml {
 
 inline const QColor kExtensionPalette[] = {
-    QColor("#c2703f"), QColor("#3f7ec2"), QColor("#4f9a59"), QColor("#8d69b0"),
-    QColor("#bc5c62"), QColor("#4e9ab2"), QColor("#a58b45"), QColor("#6f8f3f"),
-    QColor("#b05f8f"), QColor("#5f7fbf"), QColor("#c99a3f"), QColor("#4f8f8a"),
-    QColor("#9a5f5f"), QColor("#7f9a4f"), QColor("#5a6fa0"), QColor("#a07050"),
+    QColor("#2f7ed8"), QColor("#16a085"), QColor("#e67e22"), QColor("#8e67c7"),
+    QColor("#d65b6b"), QColor("#0f9fb4"), QColor("#c4932d"), QColor("#6d9d3b"),
+    QColor("#c45b96"), QColor("#547ec3"), QColor("#e0a52d"), QColor("#2b9b91"),
+    QColor("#b85e5e"), QColor("#78a83e"), QColor("#526fae"), QColor("#c17a43"),
 };
 
 inline QColor extensionColor(const QString& extension)

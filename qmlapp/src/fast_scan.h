@@ -33,7 +33,7 @@ inline void appendBatch(mft::Batch& batch, std::deque<mft::Entry>& entries,
     batch.entries.clear();
 }
 
-inline Outcome scanDirect(const std::wstring& path,const ProgressFn& progress,
+inline Outcome scanDirectImpl(const std::wstring& path,const ProgressFn& progress,
                           const SnapshotFn& snapshot,const std::atomic<bool>& cancel,
                           ScanResult& result,std::wstring& reason,const ScanOptions& options={}) {
     (void)snapshot;
@@ -69,5 +69,21 @@ inline Outcome scanDirect(const std::wstring& path,const ProgressFn& progress,
     result.mergeMs=::GetTickCount64()-mergeStart;
     result.elapsedMs=::GetTickCount64()-start;
     return result.cancelled?Outcome::Cancelled:Outcome::Complete;
+}
+
+// A complete MFT read can still fail when build() creates its relationship
+// indexes. Turn that peak into an ordinary-tree fallback: the deque and all
+// temporary index allocations are destroyed before ScanService starts the
+// fallback, instead of surfacing a fatal bad_alloc after billions of records.
+inline Outcome scanDirect(const std::wstring& path,const ProgressFn& progress,
+                          const SnapshotFn& snapshot,const std::atomic<bool>& cancel,
+                          ScanResult& result,std::wstring& reason,const ScanOptions& options={}) {
+    try {
+        return scanDirectImpl(path, progress, snapshot, cancel, result, reason, options);
+    } catch (const std::bad_alloc&) {
+        result = ScanResult{};
+        reason = L"MFT fast scan exceeded available memory while assembling the directory index";
+        return Outcome::Fallback;
+    }
 }
 } // namespace diskview::fastscan

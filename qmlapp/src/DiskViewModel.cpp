@@ -799,6 +799,7 @@ void DiskViewModel::toggleExpanded(const QString& id)
     applyRowChange();
 }
 
+
 bool DiskViewModel::isExpanded(const QString& id) const
 {
     return m_expanded.contains(indexForId(id));
@@ -922,14 +923,24 @@ QVariantMap DiskViewModel::chartTree() const
         QVariantList children;
         --budget;
         if (level + 1 < levels && budget > 0) {
-            QVector<int> kids = childrenOf(index);
-            if (kids.size() > kChartChildren) {
-                // The chart sorts by size itself, so only the largest children
-                // are worth handing over.
-                std::nth_element(kids.begin(), kids.begin() + kChartChildren, kids.end(),
-                                 [this](int a, int b) { return sizeOf(a) > sizeOf(b); });
-                kids.resize(kChartChildren);
+            // Do not materialize every child of a large directory just to
+            // discard all but the largest chart tiles. Keep a bounded top-K
+            // heap-like vector while reading the CSR range.
+            QVector<int> kids;
+            const int count = childCountOf(index);
+            const int start = count > 0 ? m_childStart.at(index) : 0;
+            kids.reserve(std::min(count, kChartChildren));
+            for (int pos=0; pos<count; ++pos) {
+                const int child = m_children.at(start + pos);
+                if (kids.size() < kChartChildren) {
+                    kids.push_back(child);
+                } else {
+                    auto smallest = std::min_element(kids.begin(), kids.end(),
+                        [this](int a, int b) { return sizeOf(a) < sizeOf(b); });
+                    if (sizeOf(child) > sizeOf(*smallest)) *smallest = child;
+                }
             }
+            std::sort(kids.begin(), kids.end(), [this](int a, int b) { return sizeOf(a) > sizeOf(b); });
             for (int child : kids) {
                 if (budget <= 0) break;
                 children.push_back(self(self, child, level + 1));

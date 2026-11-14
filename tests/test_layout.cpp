@@ -952,7 +952,7 @@ static void testMftMetadataAndTransport() {
         std::memcpy(image.data()+number*1024,record.data(),record.size());
     ws::ntfs::MftReader reader(image,{512,4096,1024},{{0,image.size()}},0,image.size(),{2,false});
     CHECK(reader.valid());std::vector<mft::Entry> entries;std::wstring error;
-    CHECK(mft::read(reader,4096,[&](const mft::Batch& batch){
+    CHECK(mft::read(reader,4096,[&](mft::Batch& batch){
         const auto encoded=helper::encode(batch);mft::Batch decoded;CHECK(helper::decode(encoded,decoded));
         for(auto& e:decoded.entries)entries.push_back(std::move(e));return true;
     },error));

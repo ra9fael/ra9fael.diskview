@@ -15,6 +15,7 @@ Item {
     property string target: ""
     property string edge: ""
     property point pointer
+    property bool showHeaders: true
     signal maximizeRequested(string pane)
     signal persisted()
 
@@ -152,6 +153,7 @@ Item {
                     onClicked: workspace.maximizeRequested(region.modelData.active)
                     contentItem: Glyph { iconName: "arrows-out"; size: 14; color: theme.textMuted }
                 }
+                Label { visible: workspace.showHeaders; text: workspace.title(region.modelData.active); font.pixelSize: 11; color: theme.textMuted; Layout.preferredWidth: 80 }
             }
             MouseArea {
                 anchors.fill: parent

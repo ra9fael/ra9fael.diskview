@@ -239,12 +239,17 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                   fallback = ScanService::fastScanFallbackText(diskview::fastscan::processElevated(), reason).toStdWString();
               }
           }
-          if (ordinary && !m_cancel.load()) {
-              diskview::scanPath(wide, progress, m_cancel, &result, snapshot, options);
+           if (ordinary && !m_cancel.load()) {
+               // The MFT path may have consumed most of the process budget;
+               // make the fallback visibly distinct and let its buffers die
+               // before ordinary enumeration starts.
+               result = diskview::ScanResult{};
+               diskview::scanPath(wide, progress, m_cancel, &result, snapshot, options);
           } else if (m_cancel.load()) {
               result.cancelled = true;
           }
-          result.fallbackReason = fallback;
+           result.fallbackReason = fallback;
+           if (ordinary && !fallback.empty()) result.fast = false;
 
           const bool scanFailed = !result.error.empty();
           const QString error = QString::fromStdString(result.error);

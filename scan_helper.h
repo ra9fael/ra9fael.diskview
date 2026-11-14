@@ -68,7 +68,7 @@ inline int run(const std::wstring& drive,const std::wstring& pipeName,DWORD pare
     try {
         ws::ntfs::MftReader reader(drive.substr(0,2));std::wstring error;
         bool ok=false;
-        if(reader.valid())ok=mft::read(reader,reader.geometry().clusterSize,[&](const mft::Batch& batch){const auto bytes=encode(batch);return send(pipe.h,1,bytes.data(),static_cast<std::uint32_t>(bytes.size()));},error);
+        if(reader.valid())ok=mft::read(reader,reader.geometry().clusterSize,[&](mft::Batch& batch){const auto bytes=encode(batch);return send(pipe.h,1,bytes.data(),static_cast<std::uint32_t>(bytes.size()));},error);
         else error=reader.error();
         if(!ok){if(error.empty())return 5;send(pipe.h,3,error.data(),static_cast<std::uint32_t>(error.size()*sizeof(wchar_t)));return 5;}
         return send(pipe.h,2,nullptr,0)?0:6;

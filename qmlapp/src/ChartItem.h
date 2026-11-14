@@ -62,6 +62,7 @@ public:
     Q_INVOKABLE QPointF firstDirectoryCenter() const;
     Q_INVOKABLE QString hitTestAt(qreal x,qreal y) const { return hitTest(QPointF(x,y)); }
     Q_INVOKABLE QString firstRegionHit() const;
+    Q_INVOKABLE bool hasDirectoryRegion() const;
     Q_INVOKABLE bool validateHitTest() const;
     Q_INVOKABLE QString validateInteraction() const;
     Q_INVOKABLE QPointF firstRegionCenter() const;

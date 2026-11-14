@@ -1295,7 +1295,7 @@ ApplicationWindow {
                           : scanService.paused ? "扫描已暂停 · 点「继续」让它接着扫"
                           : diskModel.partial ? "部分结果 · 扫描未完成，数据仍在变化"
                           : scanService.skippedDirs > 0 ? "扫描完成 · " + scanService.skippedDirs + " 个目录无法读取"
-                          : (scanService.fast ? "快扫" : "普通遍历") + " · " + scanService.statusText
+                           : (scanService.fast ? "MFT 快扫" : "普通遍历") + " · " + scanService.statusText
                     color: diskModel.loadError.length || scanService.state === "error" ? theme.error
                           : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? theme.warn : theme.textMuted
                     font.pixelSize: 11

@@ -52,9 +52,15 @@ diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QStri
 
 void ChartItem::setTreeData(const QVariantMap& data)
 {
+    if (m_treeData == data) return;
     m_treeData=data; m_pathIds.clear(); m_nodeInfo.clear();
     m_chartRoot=nodeFromVariant(data,m_pathIds,m_nodeInfo); m_tiles.clear(); m_slices.clear();
     emit treeDataChanged(); rebuildGeometry();
+}
+bool ChartItem::hasDirectoryRegion() const
+{
+    for (const auto& region : m_regions) if (region.directory) return true;
+    return false;
 }
 void ChartItem::setViewMode(int mode)
 {
