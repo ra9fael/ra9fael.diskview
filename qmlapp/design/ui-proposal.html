@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Disk View QML — 可交互原型 v5</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  body { font: 12px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; background: #232323; color: #ddd; height: 100vh; display: flex; flex-direction: column; }
+
+  .proto { background: #1a1a1a; border-bottom: 1px solid #333; padding: 6px 12px; display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
+  .proto b { color: #7fd4c7; font-weight: 600; margin-right: 4px; }
+  .proto button { background: #333; color: #ccc; border: 1px solid #4a4a4a; border-radius: 3px; padding: 3px 10px; cursor: pointer; font-size: 11px; }
+  .proto button:hover { background: #444; color: #fff; }
+  .proto button.on { background: #0f766e; color: #fff; border-color: #0c5f59; }
+  .proto .sep { width: 1px; height: 16px; background: #444; margin: 0 4px; }
+  .proto .hint { color: #888; font-size: 11px; }
+
+  .app { flex: 1; display: flex; flex-direction: column; background: var(--win-bg); color: var(--ink); overflow: hidden; }
+  :root, .app.light {
+    --win-bg:#f4f6f8; --surface:#fff; --surface2:#f0f3f9; --border:#dce2e8;
+    --ink:#202b3c; --ink2:#33445c; --ink3:#56657b; --muted:#66758a;
+    --accent:#e3eefb; --accent-ink:#14537f; --canvas:#dedede;
+  }
+  .app.dark {
+    --win-bg:#23282f; --surface:#2b323c; --surface2:#2a313b; --border:#3a434f;
+    --ink:#d7dde6; --ink2:#c5cfda; --ink3:#93a0b0; --muted:#7c8a9a;
+    --accent:#2f5578; --accent-ink:#d7e9fb; --canvas:#1c1c1c;
+  }
+
+  .titlebar { height: 30px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 10px; gap: 8px; font-size: 12px; flex-shrink: 0; }
+  .titlebar .ico { width:16px;height:16px;background:#0f766e;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:bold; }
+  .titlebar .spacer{flex:1} .titlebar .wbtn{width:32px;height:100%;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+
+  .toolbar { display:flex; gap:6px; align-items:center; padding:7px 12px; background:var(--surface); border-bottom:1px solid var(--border); flex-shrink:0; }
+  .btn{padding:5px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;font-size:12px;cursor:pointer;white-space:nowrap;color:var(--ink2)}
+  .btn:hover{filter:brightness(.97)} .dark .btn:hover{filter:brightness(1.15)}
+  .btn.primary{background:#0f766e;color:#fff;border-color:#0c5f59} .btn.primary:hover{background:#128a80}
+  .btn.elevated{background:#fff4d6;border-color:#d9b25a;color:#7a5a10} .dark .btn.elevated{background:#4a3d16;border-color:#7a5a10;color:#f0d68a}
+  .seg{display:flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}
+  .seg>div{padding:5px 12px;font-size:12px;background:var(--surface2);cursor:pointer;color:var(--ink2)}
+  .seg>div.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .lbl{font-size:11px;color:var(--ink3)}
+  select{padding:4px 6px;border:1px solid var(--border);border-radius:3px;font-size:12px;background:var(--surface);color:var(--ink2);cursor:pointer}
+  .grow{flex:1}
+  .inp{flex:1;min-width:120px;padding:5px 10px;border:1px solid var(--border);border-radius:3px;font-size:12px;background:var(--surface);color:var(--ink2);outline:none}
+  .inp:focus{border-color:#0f766e}
+
+  .dock { flex:1; display:flex; min-height:0; min-width:0; position:relative; }
+  .dockpane { position:absolute; display:flex; flex-direction:column; min-width:60px; min-height:60px; background:var(--win-bg); }
+  .dockpane.dragging { opacity:.8; z-index:40; }
+  .dockpane .tab { height:24px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 8px; gap:6px; font-size:11px; font-weight:600; color:var(--ink3); cursor:move; flex-shrink:0; }
+  .dockpane .tab .grow{flex:1}
+  .dockpane .tab .mini { width:18px;height:18px;border:1px solid var(--border);border-radius:2px;background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;cursor:pointer;color:var(--ink3); }
+  .dockpane .tab .mini:hover { border-color:#0f766e; color:#0f766e; }
+  /* explicit dock buttons: an obvious alternative to dragging */
+  .dockpane .tab .dockbtn { width:16px;height:16px;line-height:14px;text-align:center;border:1px solid transparent;border-radius:2px;
+                            font-size:9px;cursor:pointer;color:var(--ink3);opacity:.55; }
+  .dockpane .tab .dockbtn:hover { opacity:1; border-color:#0f766e; color:#0f766e; background:var(--accent); }
+  /* drag compass: which edge of the target pane the panel will dock to */
+  .compass { position:absolute; z-index:36; pointer-events:none; display:grid;
+             grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr 1fr 1fr; gap:3px; }
+  .compass > div { display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;
+                   color:#fff; background:rgba(15,118,110,.30); border-radius:3px; opacity:0; transition:opacity .08s; }
+  .compass > div.on { opacity:1; background:rgba(15,118,110,.85); box-shadow:0 0 0 2px #7fd4c7 inset; }
+  .compass .c { border-radius:6px; }
+  .dropzone { position:absolute; background:rgba(15,118,110,.18); border:2px dashed #0f766e; z-index:35; pointer-events:none; border-radius:3px; }
+  .handle { background:var(--border); position:absolute; z-index:5; }
+  .handle.h { width:5px; cursor:col-resize; }
+  .handle.v { height:5px; cursor:row-resize; }
+
+  .pane-head { height:24px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 10px; font-size:11px; font-weight:600; color:var(--ink3); gap:8px; flex-shrink:0; }
+  .tbl-wrap{flex:1;overflow:auto}
+  .tbl{width:100%;border-collapse:collapse;font-size:11px}
+  .tbl th{background:var(--surface2);color:var(--ink3);text-align:right;padding:4px 8px;font-weight:600;border-bottom:1px solid var(--border);position:sticky;top:0;cursor:pointer}
+  .tbl th:first-child{text-align:left}
+  .tbl td{padding:3px 8px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:right;color:var(--ink2);cursor:default}
+  .tbl td:first-child{text-align:left}
+  .tbl tbody tr:hover td{background:color-mix(in srgb,var(--accent) 40%,transparent)}
+  .tbl tbody tr.sel td{background:var(--accent);color:var(--accent-ink)}
+  .tbl tbody tr.cur-root td{box-shadow:inset 3px 0 0 #ff9100}
+  .tri{display:inline-block;width:12px;color:var(--ink3);cursor:pointer;text-align:center}
+  .tri:hover{color:#0f766e}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+
+  .crumb{height:30px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:4px;font-size:12px;flex-shrink:0;overflow:hidden}
+  .crumb .nav{width:24px;height:24px;text-align:center;border:1px solid var(--border);border-radius:3px;background:var(--surface);color:var(--ink2);cursor:pointer;margin-right:3px;line-height:22px;flex-shrink:0}
+  .crumb .nav:hover:not(.off){border-color:#0f766e;color:#0f766e}
+  .crumb .nav.off{opacity:.35;cursor:default}
+  .crumb a{color:#075db8;text-decoration:none;padding:2px 5px;border-radius:2px;cursor:pointer;white-space:nowrap}
+  .dark .crumb a{color:#7fb8ef}
+  .crumb a:hover{background:var(--accent)}
+  .crumb .sep{color:var(--muted)}
+  .crumb .cur{color:var(--ink);font-weight:600;padding:2px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .crumb .info{margin-left:auto;color:var(--muted);font-size:11px;white-space:nowrap;flex-shrink:0;padding-left:8px}
+
+  .chart-tools{height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--surface);border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0}
+  .canvas{flex:1;position:relative;background:var(--canvas);overflow:hidden}
+
+  /* tiles: no z-index on hover/selection, so a folder can never cover its own
+     children; the highlight is an overlay drawn after every tile instead. */
+  .tile{position:absolute;overflow:hidden;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.22)}
+  .tile .head{height:14px;font-size:10px;line-height:14px;padding:0 4px;color:#fff;background:rgba(0,0,0,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile .head .sz{opacity:.8;margin-left:5px;font-size:9px}
+  .tile .body{position:absolute;inset:14px 0 0 0}
+  .tile.dim .body,.tile.dim .head{filter:saturate(.12) brightness(.75)}
+  .file .name{position:absolute;left:0;bottom:0;font-size:10px;color:#fff;padding:2px 4px;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .outline{position:absolute;pointer-events:none;z-index:30;border-radius:1px}
+  .outline.hover{border:2px solid #ffd24d;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+  .outline.sel{border:2px solid #ff9100;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+
+  .tip{position:fixed;pointer-events:none;background:rgba(18,22,28,.94);color:#fff;font-size:10px;line-height:1.5;padding:6px 9px;border-radius:3px;z-index:99;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+  .tip b{font-size:11px}
+  .tip .path{opacity:.7;display:block;max-width:340px;overflow:hidden;text-overflow:ellipsis}
+
+  .status{height:26px;background:var(--surface);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 14px;font-size:11px;color:var(--muted);gap:16px;flex-shrink:0}
+  .status .grow{flex:1}
+
+  .leg table{width:100%;border-collapse:collapse;font-size:11px}
+  .leg td{padding:3px 8px;border-bottom:1px solid var(--border);color:var(--ink2);cursor:pointer}
+  .leg tr:hover td{background:color-mix(in srgb,var(--accent) 40%,transparent)}
+  .leg tr.on td{background:var(--accent);color:var(--accent-ink)}
+  .leg tr.related td{box-shadow:inset 3px 0 0 #ff9100;font-weight:600}
+  .leg .bar{height:6px;background:color-mix(in srgb,var(--border) 70%,transparent);border-radius:2px;position:relative;margin:3px 0;min-width:40px}
+  .leg .bar i{position:absolute;inset:0 auto 0 0;border-radius:2px}
+</style>
+</head>
+<body>
+
+<div class="proto">
+  <b>原型控制</b>
+  <span class="lbl">主题</span>
+  <button id="tLight" class="on" onclick="setTheme('light')">浅色</button>
+  <button id="tDark" onclick="setTheme('dark')">暗色</button>
+  <span class="sep"></span>
+  <span class="hint">拖面板标签可停靠（边缘=分割，中间=叠成标签）；□ 最大化；「重置布局」还原</span>
+</div>
+
+<div class="app light" id="app">
+  <div class="titlebar">
+    <span class="ico">D</span> Disk View · 磁盘透视
+    <span class="spacer"></span><span class="wbtn">—</span><span class="wbtn">□</span><span class="wbtn">✕</span>
+  </div>
+
+  <div class="toolbar">
+    <span class="btn primary" onclick="startScan()">扫描</span>
+    <span class="btn elevated" title="插件声明 elevated：进程以管理员运行，快扫 helper 直接提权">快扫 · 管理员</span>
+    <input class="inp" id="pathInp" value="D:\" spellcheck="false">
+    <div class="seg" id="viewSeg">
+      <div class="on" data-v="0" onclick="setView(0)">树视图</div>
+      <div data-v="1" onclick="setView(1)">文件视图</div>
+    </div>
+    <span class="grow"></span>
+    <span class="btn" onclick="resetDock()">重置布局</span>
+    <span class="btn" onclick="toggleCols()">列 ▾</span>
+  </div>
+
+  <div class="dock" id="dock">
+    <div class="dockpane" id="p_tree" data-panel="tree">
+      <div class="tab">文件夹 / 名称 <span style="font-weight:normal;color:var(--muted)">单击选中 · 双击进入 · 三角展开</span><span class="grow"></span>
+        <span class="dockbtn" data-dockto="left"   title="停靠到左侧">◀</span>
+        <span class="dockbtn" data-dockto="top"    title="停靠到上方">▲</span>
+        <span class="dockbtn" data-dockto="bottom" title="停靠到下方">▼</span>
+        <span class="dockbtn" data-dockto="right"  title="停靠到右侧">▶</span>
+        <span class="mini" onclick="toggleMax('p_tree')" title="最大化 / 还原">□</span></div>
+      <div class="pane-head" id="treeHead">排序：大小 ↓</div>
+      <div class="tbl-wrap"><table class="tbl" id="treeTbl"><thead></thead><tbody></tbody></table></div>
+    </div>
+    <div class="dockpane" id="p_legend" data-panel="legend">
+      <div class="tab">扩展名 <span class="grow"></span>
+        <span class="dockbtn" data-dockto="left"   title="停靠到左侧">◀</span>
+        <span class="dockbtn" data-dockto="top"    title="停靠到上方">▲</span>
+        <span class="dockbtn" data-dockto="bottom" title="停靠到下方">▼</span>
+        <span class="dockbtn" data-dockto="right"  title="停靠到右侧">▶</span>
+        <span class="mini" onclick="toggleMax('p_legend')">□</span></div>
+      <div class="tbl-wrap leg"><table id="legTbl"><tbody></tbody></table></div>
+    </div>
+    <div class="dockpane" id="p_chart" data-panel="chart">
+      <div class="tab">可视化 <span class="grow"></span>
+        <span class="dockbtn" data-dockto="left"   title="停靠到左侧">◀</span>
+        <span class="dockbtn" data-dockto="top"    title="停靠到上方">▲</span>
+        <span class="dockbtn" data-dockto="bottom" title="停靠到下方">▼</span>
+        <span class="dockbtn" data-dockto="right"  title="停靠到右侧">▶</span>
+        <span class="dockbtn" data-span="v" title="占满整列">⇕</span>
+        <span class="dockbtn" data-span="h" title="占满整行">⇔</span>
+        <span class="mini" onclick="toggleMax('p_chart')">□</span></div>
+      <div class="crumb">
+        <span class="nav" id="navBack" title="后退">←</span>
+        <span class="nav" id="navFwd" title="前进">→</span>
+        <span class="nav" id="navUp" title="上一级">↑</span>
+        <span id="crumbs"></span><span class="info" id="crumbInfo"></span>
+      </div>
+      <div class="chart-tools">
+        <div class="seg" id="kindSeg">
+          <div class="on" data-k="0" onclick="setKind(0)">方块</div>
+          <div data-k="1" onclick="setKind(1)">圆盘</div>
+        </div>
+        <span class="lbl">层级</span>
+        <select id="depthSel" onchange="setDepth(+this.value)">
+          <option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option>
+        </select>
+        <span class="grow"></span>
+        <span class="btn" style="padding:3px 8px" onclick="resetZoom()">复位缩放</span>
+        <span class="lbl" style="color:var(--muted)">滚轮缩放 · 拖动平移 · 双击进入</span>
+      </div>
+      <div class="canvas" id="canvas"></div>
+    </div>
+  </div>
+
+  <div class="status">
+    <span id="stSel">未选中</span>
+    <span id="stScan">快扫（MFT · 管理员） · 418.6 GB · 1.2M 项</span>
+    <span class="grow"></span>
+    <span id="stPath">D:\</span>
+  </div>
+</div>
+
+<div class="tip" id="tip" style="display:none"></div>
+
+<script>
+/* ===================== demo data: a deep, wide, realistic tree ===================== */
+let seed = 20261114;
+const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+const pick = a => a[Math.floor(rnd() * a.length)];
+const GIB = 1024**3, MIB = 1024**2, KIB = 1024;
+
+const TOP = ['Windows','Program Files','Users','ProgramData','dev','Games','Backups','Media','Temp'];
+const FOLDER = ['WinSxS','System32','drivers','assemblies','build','src','debug','release','cache','logs',
+  'docs','assets','third_party','node_modules','.git','tools','plugins','vendor','shaders','textures',
+  'audio','video','installer','packages','data','config','exports','sdk','qt','bin','lib','include'];
+const STEM = ['main','app','core','render','viewer','scan','tree','chart','cache','index','symbols','report',
+  'config','manifest','setup','update','driver','kernel','data','assets','theme','layout','model','service',
+  'window','dialog','widget','helper','worker','task','job','queue','store','api','client','server'];
+const EXT = ['.exe','.dll','.pdb','.bin','.zip','.pak','.dat','.json','.cpp','.h','.qml','.md','.sys',
+  '.7z','.log','.png','.jpg','.mp4','.iso','.lib','.obj','.ttf','.xml','.ini','.db'];
+
+const extColor = { '.exe':'#d94a3a', '.dll':'#4a90d9', '.pdb':'#e0912f', '.bin':'#5b7fa6', '.zip':'#7a3fd1',
+  '.pak':'#1e9e40', '.dat':'#2f80ed', '.json':'#d42f6b', '.cpp':'#2fa87f', '.h':'#37a8a0', '.qml':'#41b883',
+  '.md':'#7a8a9a', '.sys':'#c0392b', '.7z':'#6f2dbd', '.log':'#8a8f98', '.png':'#b45fd1', '.jpg':'#c46fc0',
+  '.mp4':'#e0682f', '.iso':'#a35f2d', '.lib':'#4c86b8', '.obj':'#5f93c0', '.ttf':'#b0713c', '.xml':'#c9a227',
+  '.ini':'#9aa66f', '.db':'#2f8f9d' };
+const dirRamp = [['#f5a623','#d97a0a'],['#ef9a1d','#cc6f07'],['#e8871e','#b35f04'],
+                 ['#d97a0a','#a35403'],['#c96e08','#8f4a02'],['#b85f05','#7d3f01']];
+
+const fmt = b => b >= GIB ? (b/GIB).toFixed(b/GIB >= 100 ? 0 : 1)+' GB'
+                : b >= MIB ? Math.round(b/MIB)+' MB'
+                : Math.round(b/KIB)+' KB';
+const shade = (hex,k) => { const n = parseInt(hex.slice(1),16), f = v => Math.max(0,Math.min(255,Math.round(v*k)));
+  return `rgb(${f(n>>16&255)},${f(n>>8&255)},${f(n&255)})`; };
+const $ = id => document.getElementById(id);
+const app = $('app');
+
+/* builds a subtree; sizes are the sum of the children so totals stay honest */
+function makeFolder(name, level, budget){
+  const node = { name, dir:true, kids:[], file:false };
+  const nKids = level >= 4 ? 3 + Math.floor(rnd()*5) : 4 + Math.floor(rnd()*8);
+  let spent = 0;
+  for (let i = 0; i < nKids; i++){
+    const remaining = budget - spent;
+    if (remaining <= 4*MIB) break;
+    const share = remaining * (0.12 + rnd() * 0.35);
+    const goFolder = level < 4 && rnd() < 0.55;
+    if (goFolder){
+      const kid = makeFolder(pick(FOLDER) + (rnd() < .25 ? '_' + Math.floor(rnd()*90+10) : ''), level + 1, share);
+      node.kids.push(kid); spent += kid.size;
+    } else {
+      const ext = pick(EXT);
+      const stem = pick(STEM) + (rnd() < .3 ? '_' + Math.floor(rnd()*900+100) : '');
+      node.kids.push({ name: stem + ext, size: Math.max(4*KIB, Math.round(share)), file:true, dir:false, ext });
+      spent += Math.max(4*KIB, Math.round(share));
+    }
+  }
+  if (!node.kids.length) node.kids.push({ name:'placeholder.dat', size:1*MIB, file:true, dir:false, ext:'.dat' });
+  node.size = node.kids.reduce((s,k) => s + k.size, 0);
+  return node;
+}
+const data = { name:'D:\\', dir:true, file:false, kids:[] };
+TOP.forEach((t, i) => data.kids.push(makeFolder(t, 1, (28 + rnd()*22) * GIB)));
+data.size = data.kids.reduce((s,k) => s + k.size, 0);
+
+/* stable ids and paths */
+let nextId = 1;
+(function tag(n, parent){
+  n.id = nextId++; n.parent = parent || null;
+  n.path = parent ? parent.path + '\\' + n.name : n.name;
+  (n.kids || []).sort((a,b) => b.size - a.size).forEach(k => tag(k, n));
+})(data, null);
+const byId = new Map();
+(function index(n){ byId.set(n.id, n); (n.kids||[]).forEach(index); })(data);
+let nodeCount = 0; (function c(n){ nodeCount++; (n.kids||[]).forEach(c); })(data);
+
+/* ===================== state ===================== */
+let cur = data, hist = [], fwd = [], selNode = null,
+    expanded = new Set(data.kids.slice(0,2).map(k => k.id)),
+    kind = 0, depth = 3, theme = 'light', highlightExt = null, view = 0,
+    zoom = 1, panX = 0, panY = 0,
+    // The tree is an outline: it keeps its own root and grows by expanding.
+    // The chart is the drill-down view: `cur` is what it is showing. That is
+    // why drilling into the chart expands the tree instead of moving it.
+    treeRoot = data;
+
+/* ===================== dock (unchanged behaviour) ===================== */
+let dock = { tl:['tree'], tr:['chart'], bl:['legend'], br:[], sizes:{col:0.62,row:0.5} };
+// A pane may span two cells: 'v' takes the whole column, 'h' the whole row.
+// That is what lets three panes fill a two-by-two grid without an empty hole.
+let span = { chart: 'v' };
+let maximized = null, activeTab = {};
+const panelEls = { tree:$('p_tree'), legend:$('p_legend'), chart:$('p_chart') };
+const panelTitle = { tree:'文件夹', legend:'扩展名', chart:'可视化' };
+
+function slotRect(slot, W, H){
+  const {col,row} = dock.sizes, m = 2, gap = 3;
+  const w2 = (W - m*2 - gap) * col, h2 = (H - m*2 - gap) * row;
+  return { tl:{x:m, y:m, w:w2, h:h2},
+           tr:{x:m+w2+gap, y:m, w:W-m*2-w2-gap, h:h2},
+           bl:{x:m, y:m+h2+gap, w:w2, h:H-m*2-h2-gap},
+           br:{x:m+w2+gap, y:m+h2+gap, w:W-m*2-w2-gap, h:H-m*2-h2-gap} }[slot];
+}
+/* the cells a pane covers: its own plus the one it spans into */
+function cellsOf(paneId){
+  const slot = slotOf(paneId);
+  if (!slot) return [];
+  const s = span[paneId];
+  if (s === 'v') return [slot, (slot[0] === 't' ? 'b' : 't') + slot[1]];
+  if (s === 'h') return [slot, slot[0] + (slot[1] === 'l' ? 'r' : 'l')];
+  return [slot];
+}
+function paneRect(paneId, W, H){
+  const cells = cellsOf(paneId);
+  if (!cells.length) return null;
+  const rs = cells.map(c => slotRect(c, W, H));
+  const x = Math.min(...rs.map(r => r.x)), y = Math.min(...rs.map(r => r.y));
+  const right = Math.max(...rs.map(r => r.x + r.w)), bottom = Math.max(...rs.map(r => r.y + r.h));
+  return { x, y, w: right - x, h: bottom - y };
+}
+function coveredCells(){ const set = new Set(); for (const id of Object.keys(panelEls)) cellsOf(id).forEach(c => set.add(c)); return set; }
+function applyDock(){
+  const dockEl = $('dock'), W = dockEl.clientWidth, H = dockEl.clientHeight;
+  dockEl.querySelectorAll('.handle').forEach(e => e.remove());
+  if (maximized){
+    Object.entries(panelEls).forEach(([id,el]) => { el.style.display = id===maximized ? 'flex':'none'; });
+    const el = panelEls[maximized];
+    el.style.left='0px'; el.style.top='0px'; el.style.width=W+'px'; el.style.height=H+'px';
+    drawChart(); return;
+  }
+  const drawn = new Set();
+  for (const slot of ['tl','tr','bl','br']){
+    if (drawn.has(slot)) continue;
+    const ids = dock[slot];
+    if (!ids.length) continue;
+    const visible = ids.includes(activeTab[slot]) ? activeTab[slot] : ids[0];
+    activeTab[slot] = visible;
+    ids.forEach(id => {
+      const el = panelEls[id];
+      el.style.display = id === visible ? 'flex' : 'none';
+      if (id !== visible) return;
+      const r = paneRect(id, W, H) || slotRect(slot, W, H);
+      cellsOf(id).forEach(c => drawn.add(c));
+      el.style.left=r.x+'px'; el.style.top=r.y+'px'; el.style.width=r.w+'px'; el.style.height=r.h+'px';
+      const tab = el.querySelector('.tab');
+      let tabs = tab.querySelector('.tabs');
+      if (!tabs){ tabs = document.createElement('span'); tabs.className='tabs';
+        tabs.style.cssText='display:flex;gap:4px;margin-left:8px'; tab.insertBefore(tabs, tab.firstChild.nextSibling); }
+      tabs.innerHTML = ids.map(pid =>
+        `<span data-tab="${pid}" style="padding:1px 7px;border-radius:2px;cursor:pointer;font-size:10px;
+          background:${pid===visible?'var(--accent)':'transparent'};color:${pid===visible?'var(--accent-ink)':'var(--ink3)'}">
+          ${panelTitle[pid]}</span>`).join('');
+      tabs.querySelectorAll('[data-tab]').forEach(t => t.onclick = ev => {
+        ev.stopPropagation(); activeTab[slot] = t.dataset.tab; applyDock();
+      });
+    });
+  }
+  // handles only where two panes actually meet: a spanning pane leaves no
+  // seam along the edge it covers
+  const {col,row} = dock.sizes, m=2, gap=3;
+  const w2=(W-m*2-gap)*col, h2=(H-m*2-gap)*row;
+  const leftCol = coveredCells().has('tl') || coveredCells().has('bl');
+  const rightCol = coveredCells().has('tr') || coveredCells().has('br');
+  const topRow = coveredCells().has('tl') || coveredCells().has('tr');
+  const bottomRow = coveredCells().has('bl') || coveredCells().has('br');
+  if (leftCol && rightCol){
+    const hh=document.createElement('div'); hh.className='handle h';
+    hh.style.cssText=`left:${m+w2}px;top:${m}px;height:${H-m*2}px;`;
+    hh.onmousedown = ev => startDockResize(ev,'col'); dockEl.appendChild(hh);
+  }
+  if (topRow && bottomRow){
+    const hv=document.createElement('div'); hv.className='handle v';
+    hv.style.cssText=`left:${m}px;top:${m+h2}px;width:${W-m*2}px;`;
+    hv.onmousedown = ev => startDockResize(ev,'row'); dockEl.appendChild(hv);
+  }
+  drawChart();
+}
+function toggleMax(id){
+  const name = String(id).replace(/^p_/, '');
+  maximized = (maximized === name) ? null : name;
+  applyDock();
+}
+function resetDock(){
+  dock = { tl:['tree'], tr:['chart'], bl:['legend'], br:[], sizes:{col:0.62,row:0.5} };
+  span = { chart: 'v' };
+  maximized=null; activeTab={}; applyDock();
+}
+function startDockResize(ev, axis){
+  const sx=ev.clientX, sy=ev.clientY, s0={...dock.sizes};
+  const move = e => {
+    const W=$('dock').clientWidth, H=$('dock').clientHeight;
+    if (axis==='col') dock.sizes.col = Math.max(.2, Math.min(.8, s0.col + (e.clientX-sx)/(W-10)));
+    else dock.sizes.row = Math.max(.2, Math.min(.8, s0.row + (e.clientY-sy)/(H-10)));
+    applyDock();
+  };
+  const up = () => { document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up); };
+  document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+  ev.preventDefault();
+}
+function slotOf(id){ for (const s of ['tl','tr','bl','br']) if (dock[s].includes(id)) return s; return null; }
+function slotAtClient(x, y){
+  const d=$('dock'), W=d.clientWidth, H=d.clientHeight, r0=d.getBoundingClientRect();
+  const lx=x-r0.left, ly=y-r0.top;
+  for (const s of ['tl','tr','bl','br']){
+    const r = slotRect(s, W, H);
+    if (dock[s].length && lx>=r.x && lx<=r.x+r.w && ly>=r.y && ly<=r.y+r.h) return s;
+  }
+  return null;
+}
+for (const pane of document.querySelectorAll('.dockpane')){
+  const tab = pane.querySelector('.tab');
+  tab.addEventListener('mousedown', ev => {
+    if (ev.target.classList.contains('mini') || ev.target.dataset.tab
+        || ev.target.classList.contains('dockbtn')) return;
+    const id = pane.dataset.panel, sx = ev.clientX, sy = ev.clientY;
+    let zone = null;
+    const dz = document.createElement('div'); dz.className='dropzone'; dz.style.display='none';
+    $('dock').appendChild(dz);
+    // the compass spells out what a drop will do: 4 edges + the middle (stack)
+    const compass = document.createElement('div'); compass.className='compass'; compass.style.display='none';
+    compass.innerHTML = `<div></div><div data-z="top">▲ 上方</div><div></div>
+                         <div data-z="left">◀ 左侧</div><div data-z="stack" class="c">叠为标签</div><div data-z="right">右侧 ▶</div>
+                         <div></div><div data-z="bottom">▼ 下方</div><div></div>`;
+    $('dock').appendChild(compass);
+    const markCompass = (which) => {
+      compass.querySelectorAll('[data-z]').forEach(d => d.classList.toggle('on', d.dataset.z === which));
+    };
+    const move = e => {
+      if (Math.abs(e.clientX-sx)+Math.abs(e.clientY-sy) < 6) return;
+      pane.classList.add('dragging');
+      // a pane under the cursor is the docking target (any pane except itself)
+      let targetSlot = slotAtClient(e.clientX, e.clientY);
+      const overSelf = targetSlot && targetSlot === slotOf(id);
+      if (overSelf) targetSlot = null;
+      if (!targetSlot){
+        zone = null; dz.style.display='none'; compass.style.display='none'; return;
+      }
+      const d0 = $('dock').getBoundingClientRect(), W=$('dock').clientWidth, H=$('dock').clientHeight;
+      const r = slotRect(targetSlot, W, H);
+      const lx = e.clientX-d0.left, ly = e.clientY-d0.top;
+      const rx = (lx-r.x)/r.w, ry = (ly-r.y)/r.h;   // 0..1 inside the target
+      let side = null;
+      if (rx < .28) side='left'; else if (rx > .72) side='right';
+      else if (ry < .28) side='top'; else if (ry > .72) side='bottom';
+      const free = ['tl','tr','bl','br'].filter(s => !dock[s].length && s !== slotOf(id));
+      if (!side && !free.length) zone = { type:'stack', onto: dock[targetSlot][0] };
+      else zone = { type:'split', target: targetSlot, side: side || 'bottom' };
+      // compass sits over the whole target pane and lights the active edge
+      compass.style.cssText += `;display:grid;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
+      markCompass(zone.type === 'stack' ? 'stack' : zone.side);
+      // preview rectangle in the place the panel will occupy
+      let zr = { left:r.x, top:r.y, width:r.w, height:r.h };
+      if (zone.type === 'split'){
+        if (zone.side==='left')  zr.width = r.w*0.5;
+        if (zone.side==='right'){ zr.width = r.w*0.5; zr.left = r.x + r.w*0.5; }
+        if (zone.side==='top')   zr.height = r.h*0.5;
+        if (zone.side==='bottom'){ zr.height = r.h*0.5; zr.top = r.y + r.h*0.5; }
+      }
+      dz.style.cssText += `;display:block;left:${zr.left}px;top:${zr.top}px;width:${zr.width}px;height:${zr.height}px`;
+    };
+    const up = () => {
+      document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up);
+      pane.classList.remove('dragging'); dz.remove(); compass.remove();
+      if (zone) dockDrop(id, zone);
+    };
+    document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+  });
+}
+/* the explicit dock buttons: move this pane to the given edge of the window */
+for (const btn of document.querySelectorAll('.dockbtn')){
+  btn.addEventListener('mousedown', ev => ev.stopPropagation());
+  btn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const pane = btn.closest('.dockpane');
+    if (!pane) return;
+    if (btn.dataset.span) toggleSpan(pane.dataset.panel, btn.dataset.span);
+    else dockToEdge(pane.dataset.panel, btn.dataset.dockto);
+  });
+}
+/* spanning makes three panes fit a two-by-two grid: the chart takes the whole
+   column, the tree and the legend split the other one */
+function toggleSpan(id, dir){
+  span[id] = (span[id] === dir) ? null : dir;
+  if (span[id] === 'h' && !slotOf(id)) return;
+  applyDock();
+}
+/* Named slots make the four edges unambiguous: left/right keep the pane's row,
+   top/bottom keep its column. */
+function dockToEdge(id, edge){
+  const from = slotOf(id);
+  const col = (from === 'tl' || from === 'bl') ? 'l' : 'r';
+  const row = (from === 'tl' || from === 'tr') ? 't' : 'b';
+  const cell = edge === 'left'  ? (row === 't' ? 'tl' : 'bl')
+             : edge === 'right' ? (row === 't' ? 'tr' : 'br')
+             : edge === 'top'   ? (col === 'l' ? 'tl' : 'tr')
+             :                    (col === 'l' ? 'bl' : 'br');
+  movePaneToCell(id, cell);
+}
+/* Moves a pane into a cell; whatever was there takes the pane's old cell, so a
+   drop always swaps two places instead of duplicating a pane. */
+function movePaneToCell(id, cell){
+  const from = slotOf(id);
+  if (from === cell){ activeTab[cell] = id; applyDock(); return; }
+  const occupant = dock[cell].filter(p => p !== id);
+  if (from) dock[from] = dock[from].filter(p => p !== id);
+  dock[cell] = [id];
+  // a displaced pane joins the pane's old cell; panes that stay there keep
+  // their place, so nothing disappears from the layout
+  if (from && occupant.length) dock[from] = dock[from].concat(occupant);
+  activeTab[cell] = id;
+  if (from && occupant.length) activeTab[from] = occupant[0];
+  Object.keys(dock).forEach(k => { if (Array.isArray(dock[k]) && !dock[k].length) dock[k] = []; });
+  applyDock();
+}
+function dockDrop(id, zone){
+  if (zone.type === 'stack'){
+    const s = slotOf(zone.onto);
+    if (s){
+      const from = slotOf(id);
+      if (from && from !== s) dock[from] = dock[from].filter(p => p !== id);
+      dock[s] = dock[s].filter(p => p !== id).concat(id);
+      activeTab[s] = id;
+      applyDock();
+    }
+    return;
+  }
+  // split: which cell the pane lands in, decided by the edge of the target
+  const t = zone.target;
+  const col = (t === 'tl' || t === 'bl') ? 'l' : 'r';
+  const row = (t === 'tl' || t === 'tr') ? 't' : 'b';
+  const cell = zone.side === 'left'  ? (row === 't' ? 'tl' : 'bl')
+             : zone.side === 'right' ? (row === 't' ? 'tr' : 'br')
+             : zone.side === 'top'   ? (col === 'l' ? 'tl' : 'tr')
+             :                         (col === 'l' ? 'bl' : 'br');
+  movePaneToCell(id, cell);
+}
+
+/* ===================== toolbar ===================== */
+function startScan(){
+  const p = ($('pathInp').value || 'D:\\').trim();
+  $('stScan').textContent = '扫描中 · ' + p + ' …';
+  $('stScan').style.color = '#a76414';
+  setTimeout(() => {
+    $('stScan').style.color = '';
+    $('stScan').textContent = `快扫（MFT · 管理员） · ${fmt(data.size)} · ${nodeCount.toLocaleString()} 项`;
+  }, 1000);
+}
+function setView(v){
+  view = v;
+  [...$('viewSeg').children].forEach(el => el.classList.toggle('on', +el.dataset.v === v));
+  renderTree();
+}
+let colsShown = true;
+function toggleCols(){
+  colsShown = !colsShown;
+  document.querySelectorAll('#treeTbl .col-opt').forEach(el => el.style.display = colsShown ? '' : 'none');
+}
+
+/* ===================== navigation =====================
+   The chart drills; the tree is an outline that grows by expanding. Drilling
+   into the chart therefore opens the tree down to that folder and selects it,
+   instead of moving the tree's own root. */
+function revealInTree(node){
+  const chain = [];
+  for (let n = node; n && n !== treeRoot; n = n.parent) chain.push(n);
+  chain.reverse().forEach(n => expanded.add(n.id));
+}
+function enter(node){
+  if (!node || !node.dir || !node.kids) return;
+  hist.push(cur); fwd.length = 0;
+  cur = node;
+  selNode = node;
+  revealInTree(node);
+  resetZoom(); render();
+}
+function goBack(){
+  if (!hist.length) return;
+  fwd.push(cur); cur = hist.pop(); selNode = cur; revealInTree(cur); resetZoom(); render();
+}
+function goFwd(){
+  if (!fwd.length) return;
+  hist.push(cur); cur = fwd.pop(); selNode = cur; revealInTree(cur); resetZoom(); render();
+}
+function goUp(){
+  if (!cur.parent) return;
+  hist.push(cur); fwd.length = 0;
+  cur = cur.parent; selNode = cur; revealInTree(cur); resetZoom(); render();
+}
+function jumpTo(node){
+  if (!node || node === cur) return;
+  hist.push(cur); fwd.length = 0; cur = node; selNode = null; resetZoom(); render();
+}
+$('navBack').onclick = goBack;
+$('navFwd').onclick = goFwd;
+$('navUp').onclick = goUp;
+
+/* ===================== tree table ===================== */
+function flattenFiles(root){
+  const out = [];
+  (function walk(n){ (n.kids||[]).forEach(k => { if (k.dir) walk(k); else out.push(k); }); })(root);
+  return out.sort((a,b) => b.size - a.size);
+}
+function renderTree(){
+  const rows = view===0 ? (treeRoot.kids||[]) : flattenFiles(treeRoot);
+  $('treeTbl').querySelector('thead').innerHTML =
+    `<tr><th>名称</th><th class="col-opt">% 父级</th><th>大小 ↓</th><th class="col-opt">项目</th><th class="col-opt">修改时间</th></tr>`;
+  const body = [];
+  const add = (n, indent, parentSize) => {
+    const pct = (n.size / (parentSize || treeRoot.size) * 100).toFixed(1);
+    const color = n.dir ? '#8f9aa8' : (extColor[n.ext] || '#999');
+    const open = expanded.has(n.id);
+    const tri = n.dir ? `<span class="tri" data-tri="${n.id}">${open?'▾':'▸'}</span>` : '<span class="tri"></span>';
+    const inChart = cur === n ? ' cur-root' : '';
+    body.push(`<tr data-id="${n.id}" class="${selNode===n?'sel':''}${inChart}">
+      <td style="padding-left:${8+indent*16}px">${tri}<span class="dot" style="background:${color}"></span>${n.name}</td>
+      <td class="col-opt">${pct}%</td><td>${fmt(n.size)}</td>
+      <td class="col-opt">${n.kids ? n.kids.length : '—'}</td><td class="col-opt">2026-11-13</td></tr>`);
+    if (view===0 && n.dir && open) n.kids.forEach(c => add(c, indent+1, n.size));
+  };
+  rows.forEach(n => add(n, 0, treeRoot.size));
+  $('treeTbl').querySelector('tbody').innerHTML = body.join('');
+  $('treeHead').textContent = `大纲：${treeRoot.name} · ${rows.length} 项`;
+}
+(function wireTable(){
+  const tb = () => $('treeTbl').querySelector('tbody');
+  tb().addEventListener('click', ev => {
+    const tri = ev.target.closest('[data-tri]');
+    if (tri){
+      ev.stopPropagation();
+      const id = +tri.dataset.tri;
+      expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+      renderTree(); return;
+    }
+    const tr = ev.target.closest('tr[data-id]');
+    if (!tr) return;
+    selNode = byId.get(+tr.dataset.id);
+    renderTree(); renderStatus();
+    syncChartSelection();
+  });
+  tb().addEventListener('dblclick', ev => {
+    const tr = ev.target.closest('tr[data-id]');
+    if (!tr) return;
+    const n = byId.get(+tr.dataset.id);
+    if (!n) return;
+    // a double click on a row opens it in place, like the triangle: the tree
+    // is an outline, the chart is the thing that drills
+    if (n.dir && n.kids && n.kids.length){
+      expanded.has(n.id) ? expanded.delete(n.id) : expanded.add(n.id);
+      selNode = n;
+      renderTree(); renderStatus(); syncChartSelection();
+    } else {
+      selNode = n; renderTree(); renderStatus(); syncChartSelection();
+    }
+  });
+})();
+
+/* ===================== legend ===================== */
+function renderLegend(){
+  const totals = {};
+  (function walk(n){ if (n.file) totals[n.ext] = (totals[n.ext]||0) + n.size; (n.kids||[]).forEach(walk); })(cur);
+  const rows = Object.entries(totals).sort((a,b) => b[1]-a[1]);
+  const total = rows.reduce((s,r) => s+r[1], 0) || 1;
+  // the selected file's extension is marked, so picking a tile on the chart
+  // points at its row here as well; clicking a row still filters the picture
+  const related = (selNode && !selNode.dir) ? selNode.ext : null;
+  let html = `<tr><td colspan="4" style="color:var(--muted);font-size:10px;padding:4px 8px">点选一行高亮对应扩展名</td></tr>`;
+  for (const [ext,size] of rows){
+    const on = highlightExt === ext, c = extColor[ext] || '#999';
+    const rel = related === ext;
+    html += `<tr data-ext="${ext}" class="${on?'on':''}${rel?' related':''}">
+      <td style="width:38%"><span class="dot" style="background:${c}"></span>${ext}</td>
+      <td>${(size/total*100).toFixed(1)}%</td>
+      <td style="width:28%"><div class="bar"><i style="width:${(size/total*100).toFixed(1)}%;background:${c}"></i></div></td>
+      <td style="text-align:right">${fmt(size)}</td></tr>`;
+  }
+  $('legTbl').querySelector('tbody').innerHTML = html;
+}
+$('legTbl').addEventListener('click', ev => {
+  const tr = ev.target.closest('tr[data-ext]');
+  if (!tr) return;
+  const ext = tr.dataset.ext;
+  highlightExt = (highlightExt === ext) ? null : ext;
+  renderLegend(); drawChart();
+});
+
+/* ===================== status / crumbs ===================== */
+function renderStatus(){
+  $('stSel').textContent = selNode ? `已选：${selNode.name} · ${fmt(selNode.size)}` : '未选中';
+  $('stScan').textContent = `快扫（MFT · 管理员） · ${fmt(data.size)} · ${nodeCount.toLocaleString()} 项`;
+}
+function renderCrumbs(){
+  const chain = []; for (let n = cur; n; n = n.parent) chain.unshift(n);
+  // keep the last few crumbs when the path is long
+  const MAX = 4;
+  const shown = chain.length > MAX
+    ? [{ id:null, name:'…' }, ...chain.slice(-MAX)]
+    : chain;
+  let html = '';
+  shown.forEach((n, i) => {
+    const last = i === shown.length - 1;
+    if (n.id === null) html += `<span class="cur" style="opacity:.6">…</span>`;
+    else html += last ? `<span class="cur">${n.name}</span>` : `<a data-jump="${n.id}">${n.name}</a>`;
+    if (!last) html += '<span class="sep">›</span>';
+  });
+  $('crumbs').innerHTML = html;
+  $('crumbs').querySelectorAll('[data-jump]').forEach(a => {
+    a.onclick = () => jumpTo(byId.get(+a.dataset.jump));
+  });
+  $('crumbInfo').textContent = `当前目录 · ${fmt(cur.size)} · ${(cur.kids?cur.kids.length:0)} 项`;
+  $('navUp').classList.toggle('off', !cur.parent);
+  $('navBack').classList.toggle('off', !hist.length);
+  $('navFwd').classList.toggle('off', !fwd.length);
+  $('stPath').textContent = cur.path;
+}
+
+/* ===================== treemap ===================== */
+function tileColor(node, d){
+  if (node.dir){ const [a,b] = dirRamp[Math.min(d, dirRamp.length-1)]; return `linear-gradient(135deg,${a},${b})`; }
+  const c = extColor[node.ext] || '#999';
+  return `linear-gradient(160deg,${shade(c,1.35)},${shade(c,0.72)})`;
+}
+const tileRects = new Map();
+
+function layoutTiles(node, box, d, out){
+  if (d >= depth || !node.kids || !node.kids.length) return;
+  const HEAD = 14, PAD = 3;
+  let area = { x:box.x, y:box.y, w:box.w, h:box.h };
+  if (d > 0){ area = { x:box.x+PAD, y:box.y+PAD, w:box.w-PAD*2, h:box.h-PAD*2 }; }
+  area.y += HEAD; area.h -= HEAD;           // children live under the title strip
+  if (area.w <= 4 || area.h <= 4) return;
+  const kids = node.kids.filter(k => k.size > 0).slice().sort((a,b) => b.size - a.size);
+  const total = kids.reduce((s,k) => s + k.size, 0);
+  if (!total) return;
+  let x = area.x, y = area.y, w = area.w, h = area.h, i = 0;
+  const kArea = k => k.size / total * area.w * area.h;
+  const worst = (len, list) => {
+    const sum = list.reduce((a,b) => a+b, 0), mx = Math.max(...list), mn = Math.min(...list);
+    return Math.max(len*len*mx/(sum*sum), sum*sum/(len*len*mn));
+  };
+  while (i < kids.length && w > 3 && h > 3){
+    const vertical = w >= h;
+    const len = vertical ? h : w;
+    let row = [kids[i]], j = i + 1, best = worst(len, [kArea(kids[i])]);
+    while (j < kids.length){
+      const cand = row.concat(kids[j]);
+      const sc = worst(len, cand.map(kArea));
+      if (sc > best) break;
+      row = cand; best = sc; j++;
+    }
+    const rowSum = row.reduce((s,k) => s + kArea(k), 0);
+    const thick = Math.max(2, Math.min(vertical ? w : h, rowSum / len));
+    let off = vertical ? y : x;
+    for (const k of row){
+      const l = Math.max(2, Math.min(vertical ? h : w, kArea(k)/thick));
+      const t = vertical ? { n:k, x, y:off, w:thick, h:l, d:d+1 }
+                         : { n:k, x:off, y, w:l, h:thick, d:d+1 };
+      out.push(t);
+      off += l;
+    }
+    if (vertical){ x += thick; w -= thick; } else { y += thick; h -= thick; }
+    i = j;
+  }
+  for (const t of out.slice()) if (t.d === d+1 && t.n.dir) layoutTiles(t.n, t, t.d, out);
+}
+
+function drawTreemap(){
+  const cv = $('canvas');
+  // a fresh layer every time: switching from the sunburst must not leave the
+  // old svg behind, and the zoom transform needs the layer anyway
+  cv.innerHTML = '';
+  const layer = document.createElement('div');
+  layer.className = 'zoomlayer'; layer.id = 'zoomLayer';
+  layer.style.cssText = 'position:absolute;inset:0;transform-origin:0 0';
+  cv.appendChild(layer);
+
+  const W = cv.clientWidth, H = cv.clientHeight;
+  const tiles = [];
+  layoutTiles(cur, {x:0,y:0,w:W,h:H}, 0, tiles);
+  tileRects.clear();
+
+  const frag = document.createDocumentFragment();
+  for (const t of tiles){
+    if (t.w < 5 || t.h < 5) continue;
+    const n = t.n;
+    tileRects.set(n.id, t);
+    const el = document.createElement('div');
+    const dimmed = highlightExt && !n.dir && n.ext !== highlightExt;
+    el.className = 'tile ' + (n.dir ? 'dir ' : 'file ') + (dimmed ? 'dim' : '');
+    el.style.cssText = `left:${t.x}px;top:${t.y}px;width:${t.w}px;height:${t.h}px;background:${tileColor(n,t.d)}`;
+    el.dataset.id = n.id;
+    if (n.dir && t.h >= 20 && t.w >= 40){
+      el.innerHTML = `<div class="head">${n.name} <span class="sz">${fmt(n.size)}</span></div><div class="body"></div>`;
+    } else if (!n.dir && t.h >= 16 && t.w >= 34){
+      el.innerHTML = `<div class="name">${n.name} ${fmt(n.size)}</div>`;
+    }
+    el.onmousemove = ev => { showTip(ev, n); showOutline('hover', n.id); };
+    el.onmouseleave = () => { tip.style.display = 'none'; hideOutline('hover'); };
+    frag.appendChild(el);
+  }
+  layer.appendChild(frag);
+
+  // the selection/hover outline lives above every tile, so it never hides a
+  // child's content the way a raised z-index on the folder does
+  ['sel','hover'].forEach(kindName => {
+    const o = document.createElement('div');
+    o.className = 'outline ' + kindName; o.id = 'outline-' + kindName;
+    o.style.display = 'none';
+    layer.appendChild(o);
+  });
+  layer.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+  showOutline('sel', selNode ? selNode.id : null);
+}
+function showOutline(kindName, id){
+  const o = $('outline-' + kindName);
+  if (!o) return;
+  const r = id !== null && id !== undefined ? tileRects.get(id) : null;
+  if (!r){ o.style.display = 'none'; return; }
+  o.style.display = 'block';
+  o.style.left = r.x + 'px'; o.style.top = r.y + 'px';
+  o.style.width = r.w + 'px'; o.style.height = r.h + 'px';
+}
+function hideOutline(kindName){ const o = $('outline-' + kindName); if (o) o.style.display = 'none'; }
+
+// The selection lives in one place (selNode); every panel draws from it. The
+// table, the legend and the chart all call this after they change it, so a
+// selection made in the table shows up in the picture and the other way round.
+function syncChartSelection(){
+  if (kind === 0) showOutline('sel', selNode ? selNode.id : null);
+  else drawChart();
+  renderLegend();      // the selected file marks its extension row
+}
+
+/* ===================== sunburst (SVG) ===================== */
+function drawSunburst(){
+  const cv = $('canvas');
+  cv.innerHTML = '';                       // drops the treemap layer with it
+  tileRects.clear();
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (W < 20 || H < 20) return;
+  const cx = W/2, cy = H/2;
+  const R = Math.min(W, H)/2 - 12, hole = R*0.26;
+  const rings = Math.max(1, Math.min(depth, 4));
+  const ringW = (R - hole) / rings;
+  const palette = ['#e8871e','#2f80ed','#1e9e40','#d42f6b','#6f2dbd','#e0912f','#2fa87f'];
+  let ci = 0;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.style.cssText = 'position:absolute;inset:0;overflow:visible';
+  const annulus = (r0, r1, a0, a1) => {
+    const pt = (r,a) => [cx + r*Math.cos(a), cy + r*Math.sin(a)];
+    const large = (a1-a0) > Math.PI ? 1 : 0;
+    const [x0,y0] = pt(r1,a0), [x1,y1] = pt(r1,a1), [x2,y2] = pt(r0,a1), [x3,y3] = pt(r0,a0);
+    return `M${x0},${y0} A${r1},${r1} 0 ${large} 1 ${x1},${y1} L${x2},${y2} A${r0},${r0} 0 ${large} 0 ${x3},${y3} Z`;
+  };
+  const ring = (node, d, r0, r1, a0, a1) => {
+    const kids = (node.kids||[]).slice().sort((a,b) => b.size-a.size);
+    const total = kids.reduce((s,k) => s+k.size, 0);
+    if (!total) return;
+    let a = a0;
+    for (const k of kids){
+      const ka1 = a + (k.size/total)*(a1-a0);
+      const color = k.dir ? palette[(ci++) % palette.length] : (extColor[k.ext] || '#999');
+      const p = document.createElementNS(ns, 'path');
+      p.setAttribute('d', annulus(r0, r1, a, ka1));
+      p.setAttribute('fill', color);
+      p.setAttribute('stroke', theme === 'dark' ? '#1c1c1c' : '#dedede');
+      p.setAttribute('stroke-width', '1');
+      p.style.cursor = 'pointer';
+      p.dataset.id = k.id;
+      if (selNode === k){ p.setAttribute('stroke','#ff9100'); p.setAttribute('stroke-width','2.5'); }
+      if (highlightExt && !k.dir && k.ext !== highlightExt) p.setAttribute('fill-opacity','.28');
+      p.addEventListener('mousemove', ev => showTip(ev, k));
+      p.addEventListener('mouseleave', () => tip.style.display = 'none');
+      svg.appendChild(p);
+      if (k.dir && d+1 < rings) ring(k, d+1, r0+ringW, r1+ringW, a, ka1);
+      a = ka1;
+    }
+  };
+  ring(cur, 0, hole, hole+ringW, -Math.PI/2, 3*Math.PI/2);
+  cv.appendChild(svg);
+  const holeEl = document.createElement('div');
+  holeEl.style.cssText = `position:absolute;left:${cx-hole}px;top:${cy-hole}px;width:${hole*2}px;height:${hole*2}px;
+    border-radius:50%;background:var(--canvas);display:flex;align-items:center;justify-content:center;
+    font-size:10px;color:var(--ink2);text-align:center;cursor:pointer;white-space:pre;z-index:2;`;
+  holeEl.textContent = cur.name + '\n双击返回';
+  holeEl.ondblclick = ev => { ev.stopPropagation(); goUp(); };
+  cv.appendChild(holeEl);
+}
+
+/* ===================== chart ===================== */
+function drawChart(){ if (kind === 1) drawSunburst(); else drawTreemap(); }
+function setKind(k){
+  kind = k;
+  [...$('kindSeg').children].forEach(el => el.classList.toggle('on', +el.dataset.k === k));
+  resetZoom();
+}
+function setDepth(d){ depth = d; drawChart(); }
+function resetZoom(){ zoom = 1; panX = 0; panY = 0; drawChart(); }
+
+$('canvas').addEventListener('click', ev => {
+  const el = ev.target.closest('[data-id]');
+  if (!el) return;
+  selNode = byId.get(+el.dataset.id);
+  renderTree(); renderStatus();
+  syncChartSelection();
+});
+$('canvas').addEventListener('dblclick', ev => {
+  const el = ev.target.closest('[data-id]');
+  if (!el) return;
+  const n = byId.get(+el.dataset.id);
+  if (n && n.dir) enter(n);
+});
+$('canvas').addEventListener('wheel', ev => {
+  if (kind !== 0) return;
+  ev.preventDefault();
+  const k = ev.deltaY < 0 ? 1.12 : 1/1.12;
+  const next = Math.max(.4, Math.min(6, zoom*k));
+  const r = $('canvas').getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  panX = mx - (mx - panX) * (next/zoom);
+  panY = my - (my - panY) * (next/zoom);
+  zoom = next;
+  const layer = $('zoomLayer');
+  if (layer) layer.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+}, { passive: false });
+let dragging = null;
+$('canvas').addEventListener('mousedown', ev => {
+  if (kind !== 0 || ev.button !== 0) return;
+  dragging = { x: ev.clientX, y: ev.clientY, px: panX, py: panY, moved: false };
+});
+document.addEventListener('mousemove', ev => {
+  if (!dragging) return;
+  const dx = ev.clientX - dragging.x, dy = ev.clientY - dragging.y;
+  if (!dragging.moved && Math.abs(dx) + Math.abs(dy) > 4) dragging.moved = true;
+  if (dragging.moved){
+    panX = dragging.px + dx; panY = dragging.py + dy;
+    const layer = $('zoomLayer');
+    if (layer) layer.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+  }
+});
+document.addEventListener('mouseup', () => dragging = null);
+
+const tip = $('tip');
+function showTip(ev, node){
+  tip.innerHTML = `<b>${node.name}</b><span class="path">${node.path}</span>` +
+    `${node.dir ? '文件夹' : '文件'} · ${fmt(node.size)} · ${(node.size/cur.size*100).toFixed(1)}%`;
+  tip.style.display = 'block';
+  tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = Math.min(ev.clientY + 16, window.innerHeight - tip.offsetHeight - 8) + 'px';
+}
+
+/* ===================== theme ===================== */
+function setTheme(t){
+  theme = t;
+  app.classList.toggle('dark', t === 'dark'); app.classList.toggle('light', t === 'light');
+  $('tLight').classList.toggle('on', t === 'light'); $('tDark').classList.toggle('on', t === 'dark');
+  drawChart();
+}
+
+/* ===================== boot ===================== */
+function render(){ renderTree(); renderLegend(); renderCrumbs(); renderStatus(); applyDock(); }
+window.addEventListener('resize', () => applyDock());
+render();
+</script>
+</body>
+</html>
