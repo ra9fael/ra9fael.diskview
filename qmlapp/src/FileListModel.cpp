@@ -113,22 +113,30 @@ void FileListModel::rebuild()
             return fuzzyRank(m_model->nameOf(a), filter) < fuzzyRank(m_model->nameOf(b), filter);
         });
     } else {
-        const auto key = [this](int node) -> QString {
+        // Compare the actual values. The old key built two base-36 QStrings
+        // per comparison; at 200k rows that is millions of allocations and a
+        // whole second of the file panel rebuilding.
+        std::stable_sort(m_rows.begin(), m_rows.end(), [this](int a, int b) {
+            int order = 0;
             switch (m_model->m_sortKey) {
-            case DiskViewModel::SortByModified: return QString::number(m_model->modifiedOf(node), 36).rightJustified(12, '0');
-            default: break;
+            case DiskViewModel::SortByName:
+                order = QString::compare(m_model->nameOf(a), m_model->nameOf(b), Qt::CaseInsensitive);
+                break;
+            case DiskViewModel::SortByModified: {
+                const quint64 x = m_model->hasModifiedOf(a) ? m_model->modifiedOf(a) : 0;
+                const quint64 y = m_model->hasModifiedOf(b) ? m_model->modifiedOf(b) : 0;
+                if (x != y) order = x < y ? -1 : 1;
+                break;
             }
-            // Names compare on their lowercase form; sizes compare by their
-            // base-36 digits padded to a fixed width, which keeps the sort
-            // stable and the code one lane.
-            return m_model->m_sortKey == DiskViewModel::SortByName
-                ? m_model->nameOf(node).toLower()
-                : QString::number(m_model->sizeOf(node), 36).rightJustified(14, '0');
-        };
-        std::stable_sort(m_rows.begin(), m_rows.end(), [this, &key](int a, int b) {
-            const QString ka = key(a), kb = key(b);
-            if (ka != kb) return m_model->m_ascending ? ka < kb : kb < ka;
-            return a < b;
+            default: {
+                const quint64 x = m_model->sizeOf(a);
+                const quint64 y = m_model->sizeOf(b);
+                if (x != y) order = x < y ? -1 : 1;
+                break;
+            }
+            }
+            if (order == 0) return a < b;
+            return m_model->m_ascending ? order < 0 : order > 0;
         });
     }
     endResetModel();

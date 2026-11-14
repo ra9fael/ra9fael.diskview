@@ -130,6 +130,8 @@ void DiskViewModel::resetStorage()
     m_current = -1;
     m_chartRoot = -1;
     m_historyPos = -1;
+    ++m_dataRevision;
+    m_extensionCacheValid = false;
 }
 
 void DiskViewModel::buildChildren()
@@ -937,6 +939,10 @@ bool DiskViewModel::revealNode(const QString& id)
 QVariantList DiskViewModel::extensions() const
 {
     struct Agg { quint64 size = 0, alloc = 0; int files = 0; };
+    // The legend walks the whole subtree; cache the answer per chart root and
+    // data revision so a repaint or a selection does not repeat it.
+    if (m_extensionCacheValid && m_extensionCacheRoot == m_chartRoot && m_extensionCacheData == m_dataRevision)
+        return m_extensionCache;
     QHash<QString, Agg> totals;
     if (m_chartRoot >= 0) {
         QVector<int> files;
@@ -968,6 +974,10 @@ QVariantList DiskViewModel::extensions() const
             {"color", diskviewqml::extensionColor(row.first).name()},
         });
     }
+    m_extensionCache = rows;
+    m_extensionCacheRoot = m_chartRoot;
+    m_extensionCacheData = m_dataRevision;
+    m_extensionCacheValid = true;
     return rows;
 }
 
@@ -989,18 +999,24 @@ QVariantMap DiskViewModel::chartTree() const
             // Do not materialize every child of a large directory just to
             // discard all but the largest chart tiles. Keep a bounded top-K
             // heap-like vector while reading the CSR range.
+            // A min-heap of the largest kChartChildren. Scanning with
+            // min_element for every extra child made this O(children x 256),
+            // which is what made a chart export take hundreds of ms on a big
+            // directory.
             QVector<int> kids;
             const int count = childCountOf(index);
             const int start = count > 0 ? m_childStart.at(index) : 0;
             kids.reserve(std::min(count, kChartChildren));
+            const auto smallestFirst = [this](int a, int b) { return sizeOf(a) > sizeOf(b); };
             for (int pos=0; pos<count; ++pos) {
                 const int child = m_children.at(start + pos);
                 if (kids.size() < kChartChildren) {
                     kids.push_back(child);
-                } else {
-                    auto smallest = std::min_element(kids.begin(), kids.end(),
-                        [this](int a, int b) { return sizeOf(a) < sizeOf(b); });
-                    if (sizeOf(child) > sizeOf(*smallest)) *smallest = child;
+                    std::push_heap(kids.begin(), kids.end(), smallestFirst);
+                } else if (sizeOf(child) > sizeOf(kids.front())) {
+                    std::pop_heap(kids.begin(), kids.end(), smallestFirst);
+                    kids.back() = child;
+                    std::push_heap(kids.begin(), kids.end(), smallestFirst);
                 }
             }
             std::sort(kids.begin(), kids.end(), [this](int a, int b) { return sizeOf(a) > sizeOf(b); });

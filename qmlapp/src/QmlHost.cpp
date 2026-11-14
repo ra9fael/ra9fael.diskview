@@ -384,6 +384,20 @@ bool QmlHost::runChartBenchmark(int nodes, QString* report)
     for (int i = 0; i < runs; ++i) model->loadTree(tree);
     const double nestedMs = double(timer.nsecsElapsed()) / 1e6 / runs;
 
+    // Enter a folder and come back: the model reset and row rebuild that a
+    // chart double click pays, measured apart from export and painting.
+    qint64 enterNs = 0, resetNs = 0;
+    for (int i = 0; i < runs; ++i) {
+        timer.restart();
+        model->enterNode(QStringLiteral("2"));
+        enterNs += timer.nsecsElapsed();
+        timer.restart();
+        model->resetChart();
+        resetNs += timer.nsecsElapsed();
+    }
+    const double navMs = double(enterNs) / 1e6 / runs;
+    const double resetMs = double(resetNs) / 1e6 / runs;
+
     timer.restart();
     QVariantMap payload;
     for (int i = 0; i < runs; ++i) payload = model->chartTree();
@@ -396,10 +410,12 @@ bool QmlHost::runChartBenchmark(int nodes, QString* report)
     chart->setDepth(2);
     const QString deep = chart->benchmark(runs);
     chart->setDepth(1);
-    *report = QStringLiteral("bench model flat=%1ms nested=%2ms export=%3ms\nbench depth=1 %4\nbench depth=2 %5\n")
+    *report = QStringLiteral("bench model flat=%1ms nested=%2ms export=%3ms enter=%4ms reset=%5ms\nbench depth=1 %6\nbench depth=2 %7\n")
                   .arg(modelMs, 0, 'f', 1)
                   .arg(nestedMs, 0, 'f', 1)
                   .arg(exportMs, 0, 'f', 1)
+                  .arg(navMs, 0, 'f', 1)
+                  .arg(resetMs, 0, 'f', 1)
                   .arg(shallow, deep);
     return true;
 }

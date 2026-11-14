@@ -256,6 +256,15 @@ private:
     // Bumped with every chartChanged, and written into the exported map, so
     // ChartItem can tell a new payload by one integer.
     int m_chartRevision = 0;
+    // The legend aggregates the whole subtree. Its result only depends on the
+    // chart root and the tree data, so it is cached instead of recomputed for
+    // every read of the QML binding.
+    mutable QVariantList m_extensionCache;
+    mutable bool m_extensionCacheValid = false;
+    mutable int m_extensionCacheRoot = -1;
+    mutable int m_extensionCacheData = -1;
+    // Bumped whenever the tree data itself changes (a load or a new scan).
+    int m_dataRevision = 0;
     bool m_partial = false;
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;
