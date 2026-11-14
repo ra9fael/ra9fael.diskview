@@ -325,19 +325,22 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                   {"message", systemErrorMessage(skipped.error)},
               });
           }
-          FlatTree tree;
+          // One buffer, handed to the GUI thread by pointer. Capturing the
+          // FlatTree by value would copy a multi-million-node tree into the
+          // queued event while the worker still owns it.
+          auto treePtr = std::make_shared<FlatTree>();
           if (!scanFailed) {
               // The fast path already produced the model's arrays; only the
               // ordinary path still has a Node tree to flatten.
-              if (fastDone) tree = std::move(fastTree);
-              else tree = flatten(result.root);
+              if (fastDone) *treePtr = std::move(fastTree);
+              else *treePtr = flatten(result.root);
           }
           // The scanner's own tree is no longer needed: dropping it here halves
           // the peak, which matters under the host's memory cap.
           result = diskview::ScanResult {};
           QMetaObject::invokeMethod(
               this,
-              [this, tree, scanFailed, error, root, files, dirs, elapsed, wasCancelled, workers, excluded, fast,
+              [this, treePtr, scanFailed, error, root, files, dirs, elapsed, wasCancelled, workers, excluded, fast,
                fallbackText, skippedDirs, skippedLinks, unknownSizes, orphanRecords, issues] {
                   m_running.store(false);
                   m_scanWorkers = workers;
@@ -366,8 +369,8 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                       setState(QStringLiteral("cancelled"));
                       // A cancelled scan still has the part it managed to read:
                       // it is shown, marked as unfinished.
-                      if (!tree.isEmpty()) {
-                          emit partialTree(tree);
+                      if (!treePtr->isEmpty()) {
+                          emit partialTree(*treePtr);
                       }
                       emit cancelled();
                       return;
@@ -378,7 +381,8 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                                      .arg(dirs)
                                      .arg(qint64(elapsed));
                   setState(QStringLiteral("done"));
-                  emit finished(tree);
+                  m_finishedTree = treePtr;
+                  emit finished();
               },
               Qt::QueuedConnection);
       } catch (const std::bad_alloc&) {

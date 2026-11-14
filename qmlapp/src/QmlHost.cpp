@@ -105,6 +105,16 @@ bool QmlHost::load(QString* error)
         // its rc and picks it up through WM_SETICON. The resource is compiled
         // into this binary, so both editions show one icon.
         window->setIcon(QIcon(QStringLiteral(":/app.ico")));
+        // Hand the finished tree to the model by move. The QML signal handler
+        // would copy the whole tree through a QVariant; on a full C: volume
+        // that is a second multi-hundred-megabyte allocation.
+        if (auto* model = window->findChild<DiskViewModel*>(QStringLiteral("diskModel"))) {
+            connect(m_scanService, &ScanService::finished, model, [this, model] {
+                if (auto tree = m_scanService->takeFinishedTree()) {
+                    model->loadFlat(std::move(*tree), false);
+                }
+            });
+        }
         // --maximize drives the window's own function, so the fullscreen layer
         // is exercised the way a press on the toolbar would.
         if (!m_options.maximizeOnStart.isEmpty()) {

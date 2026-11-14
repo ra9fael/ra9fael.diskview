@@ -11,6 +11,7 @@
 #include "ScanTree.h"
 
 #include <atomic>
+#include <memory>
 #include <thread>
 
 // The real scanner, as a QML singleton: the QML edition keeps its own
@@ -108,14 +109,18 @@ public:
     // Runs the last path again, with the settings as they are now.
     Q_INVOKABLE bool rescan();
     Q_INVOKABLE bool isRunning() const { return m_running.load(); }
+    // The tree of the scan that just finished, or null. The caller moves it
+    // into the model, so no second copy of a full scan is made.
+    std::shared_ptr<FlatTree> takeFinishedTree() { return std::move(m_finishedTree); }
 
 signals:
     void stateChanged();
     // Emitted right before the scan starts, so the window can drop the tree
     // it is showing: it belongs to another scan.
     void started(const QString& path);
-    // The complete result.
-    void finished(const FlatTree& tree);
+    // The complete result is parked here for the window to move out: a signal
+    // argument would copy a multi-million-node tree into the queued event.
+    void finished();
     // An immutable snapshot of the scan so far, while the scan runs.
     void partialTree(const FlatTree& tree);
     void failed(const QString& message);
@@ -157,5 +162,6 @@ private:
     // makes the next one pointless, and keeping them all queued copies the
     // whole tree per snapshot. On a multi-million-node scan that is gigabytes.
     std::atomic<bool> m_snapshotPending{false};
+    std::shared_ptr<FlatTree> m_finishedTree;
     std::thread m_thread;
 };

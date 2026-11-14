@@ -202,7 +202,8 @@ ApplicationWindow {
         target: scanService
         function onStarted(path) { diskModel.clear() }
         function onPartialTree(tree) { diskModel.loadFlat(tree, true) }
-        function onFinished(tree) { diskModel.loadFlat(tree, false) }
+        // The finished tree is handed to the model from C++ by move, so the
+        // multi-million-node result is not copied through a QML signal.
         function onCancelled() { diskModel.setPartial(true) }
         function onFailed(message) { diskModel.setPartial(true) }
     }

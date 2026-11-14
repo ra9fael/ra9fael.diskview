@@ -226,7 +226,8 @@ void testFlatBuild()
 
     FlatTree tree;
     std::uint64_t excluded = 0, orphans = 0, unknown = 0;
-    const auto outcome = diskview::fastscan::buildFlat(entries, 4096, L"C:\\", {}, tree,
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> noBaseSizes;
+    const auto outcome = diskview::fastscan::buildFlat(entries, noBaseSizes, 4096, L"C:\\", {}, tree,
                                                        excluded, orphans, unknown);
     check(outcome == diskview::fastscan::Outcome::Complete, "flat build completes");
     check(tree.count() == 4, "flat build writes root, folder and two files");
@@ -252,12 +253,25 @@ void testFlatBuild()
     options.excludedPaths.push_back(L"C:\\alpha");
     FlatTree filtered;
     std::uint64_t filteredExcluded = 0, filteredOrphans = 0, filteredUnknown = 0;
-    diskview::fastscan::buildFlat(excludedInput, 4096, L"C:\\", options, filtered,
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> filteredBaseSizes;
+    diskview::fastscan::buildFlat(excludedInput, filteredBaseSizes, 4096, L"C:\\", options, filtered,
                                   filteredExcluded, filteredOrphans, filteredUnknown);
     check(filtered.count() == 2, "flat build drops an excluded subtree");
     check(filteredExcluded == 1, "flat build counts the excluded subtree once");
     check(filtered.fileCounts.at(0) == 1 && filtered.sizes.at(0) == 200,
           "excluded bytes leave the totals");
+
+    // A name that came from an extension record does not repeat the size; the
+    // base-record table must fill it, not count the file as unknown.
+    std::deque<diskview::mft::Entry> extensionNames;
+    extensionNames.push_back(entry(50, root, L"ext.bin", false, false, 0));
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> baseSizes{{50, 4096}};
+    FlatTree merged;
+    std::uint64_t mergedExcluded = 0, mergedOrphans = 0, mergedUnknown = 0;
+    diskview::fastscan::buildFlat(extensionNames, baseSizes, 4096, L"C:\\", {}, merged,
+                                  mergedExcluded, mergedOrphans, mergedUnknown);
+    check(merged.sizes.at(0) == 4096 && mergedUnknown == 0,
+          "base-record size fills an extension-only name");
 }
 
 int main(int argc, char** argv)
@@ -275,8 +289,9 @@ int main(int argc, char** argv)
         batch.entries.push_back(std::move(entry));
         const auto* originalName=batch.entries.front().name.data();
         std::deque<diskview::mft::Entry> accumulated;
+        std::vector<std::pair<std::uint32_t, std::uint64_t>> baseSizes;
         std::uint64_t files=0,bytes=0;
-        diskview::fastscan::appendBatch(batch,accumulated,files,bytes);
+        diskview::fastscan::appendBatch(batch,accumulated,baseSizes,files,bytes);
         check(batch.entries.empty()&&accumulated.size()==1,"MFT batch is consumed");
         check(accumulated.front().name.data()==originalName,"MFT read transfers name allocation, not const-copy");
         check(files==1&&bytes==42,"MFT batch counters are preserved");
