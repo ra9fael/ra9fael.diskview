@@ -5,6 +5,7 @@
 #include <QQuickWindow>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 
 class ScanService;
 class ScanSettings;
@@ -70,6 +71,11 @@ public:
     Q_INVOKABLE void setTheme(const QString& theme) const;
     Q_INVOKABLE void copyToClipboard(const QString& text) const;
     Q_INVOKABLE void revealInExplorer(const QString& path) const;
+    // The fixed drives, for the address bar's location menu: path, label and
+    // a short free/total line.
+    Q_INVOKABLE QVariantList drives() const;
+    // The system folder picker. Empty when the user cancels.
+    Q_INVOKABLE QString chooseFolder(const QString& initial) const;
     // Builds a tree of that many nodes and times the whole chart pipeline.
     bool runChartBenchmark(int nodes, QString* report);
 

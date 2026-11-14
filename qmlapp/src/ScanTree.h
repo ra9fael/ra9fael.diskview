@@ -7,6 +7,7 @@
 #include <QVector>
 
 #include <cstdint>
+#include <cstring>
 
 // FILETIME (100 ns since 1601) to Unix seconds. The timestamp column shows
 // minutes, so 32 bits is plenty (it runs out in 2106) and half the bytes of the
@@ -42,6 +43,18 @@ public:
         for (const QChar ch : name) m_chars.append(ch);
         m_offsets.append(static_cast<quint32>(m_chars.size()));
     }
+
+    // Append straight from a character slice, without building a QString for
+    // every node.
+    void appendChars(const QChar* data, qsizetype length)
+    {
+        const qsizetype start = m_chars.size();
+        m_chars.resize(start + length);
+        std::memcpy(m_chars.data() + start, data, static_cast<std::size_t>(length) * sizeof(QChar));
+        m_offsets.append(static_cast<quint32>(m_chars.size()));
+    }
+
+    void reserveChars(qsizetype count) { m_chars.reserve(count); }
 
     // No allocation: the caller compares or displays through the view.
     QStringView viewAt(int index) const

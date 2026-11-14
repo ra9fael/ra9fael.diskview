@@ -10,6 +10,11 @@
 
 #include <QClipboard>
 #include <QDir>
+#include <QStorageInfo>
+
+#include <windows.h>
+#include <shlobj.h>
+#include <objbase.h>
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -526,6 +531,15 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
 
 bool QmlHost::runSelfTest(QString* report)
 {
+    // The address bar's location menu needs at least one fixed drive.
+    if (QObject* root = m_engine.rootObjects().value(0)) {
+        QQmlExpression drives(m_engine.rootContext(), root,
+                              QStringLiteral("appHost.drives().length"));
+        if (drives.hasError() || drives.evaluate().toInt() <= 0) {
+            *report = QStringLiteral("FAIL\tlocation menu has no drives\n");
+            return false;
+        }
+    }
     if (!runDockChecks(report)) return false;
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     auto* chart = window ? window->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr;
@@ -703,6 +717,47 @@ bool QmlHost::runSelfTest(QString* report)
                       .arg(m_pauseVerified ? QStringLiteral("verified") : QStringLiteral("bad"));
     }
     return pass;
+}
+
+QVariantList QmlHost::drives() const
+{
+    const auto gb = [](qint64 bytes) {
+        return QStringLiteral("%1 GB").arg(static_cast<double>(bytes) / (1024.0 * 1024 * 1024), 0, 'f', 1);
+    };
+    QVariantList rows;
+    for (const QFileInfo& entry : QDir::drives()) {
+        QStorageInfo storage(entry.absoluteFilePath());
+        if (!storage.isValid() || !storage.isReady() || storage.bytesTotal() <= 0) continue;
+        QString root = entry.absoluteFilePath();
+        while (root.endsWith(QLatin1Char('/')) || root.endsWith(QLatin1Char('\\'))) root.chop(1);
+        root += QLatin1Char('\\');
+        rows.append(QVariantMap{
+            {"path", root},
+            {"label", root},
+            {"detail", QStringLiteral("%1 可用 / %2").arg(gb(storage.bytesAvailable()), gb(storage.bytesTotal()))},
+        });
+    }
+    return rows;
+}
+
+QString QmlHost::chooseFolder(const QString& initial) const
+{
+    Q_UNUSED(initial);
+    // New-style picker; the shell needs an apartment-threaded COM on this
+    // thread, which the GUI thread may not have initialised yet.
+    const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    BROWSEINFOW info{};
+    info.lpszTitle = const_cast<LPWSTR>(L"选择要扫描的位置");
+    info.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+    LPITEMIDLIST id = ::SHBrowseForFolderW(&info);
+    QString result;
+    if (id) {
+        wchar_t path[32768]{};
+        if (::SHGetPathFromIDListW(id, path)) result = QString::fromWCharArray(path);
+        ::CoTaskMemFree(id);
+    }
+    if (SUCCEEDED(com)) ::CoUninitialize();
+    return result;
 }
 
 void QmlHost::setTheme(const QString& theme) const

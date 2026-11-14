@@ -303,13 +303,61 @@ ApplicationWindow {
             border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 8
+                // Location first: a drive menu, then the editable path, then
+                // the system folder picker. Enter in the field starts the scan.
+                Button {
+                    id: locationButton
+                    implicitHeight: 28
+                    ToolTip.visible: hovered
+                    ToolTip.text: "选择磁盘或位置"
+                    onClicked: drivesMenu.open()
+                    contentItem: Row {
+                        spacing: 4
+                        Glyph { iconName: "hard-drives"; size: 15; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
+                        Label { text: "位置"; font.pixelSize: 11; color: theme.text; anchors.verticalCenter: parent.verticalCenter }
+                        Glyph { iconName: "caret-down"; size: 12; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
+                    }
+                }
+                Menu {
+                    id: drivesMenu
+                    Repeater {
+                        model: appHost.drives()
+                        delegate: MenuItem {
+                            required property var modelData
+                            text: modelData.label + "    " + modelData.detail
+                            onClicked: {
+                                pathField.text = modelData.path
+                                scanService.start(modelData.path)
+                            }
+                        }
+                    }
+                }
                 TextField {
                     id: pathField
                     Layout.fillWidth: true
                     Layout.minimumWidth: 180
+                    implicitHeight: 28
+                    leftPadding: 9
+                    rightPadding: 9
                     text: initialScanPath
-                    placeholderText: "扫描路径，例如 D:\\"
+                    placeholderText: "输入或选择要扫描的位置"
                     selectByMouse: true
+                    onAccepted: if (text.trim().length > 0) scanService.start(text.trim())
+                }
+                ToolButton {
+                    id: browseButton
+                    implicitWidth: 30
+                    implicitHeight: 28
+                    ToolTip.visible: hovered
+                    ToolTip.text: "浏览文件夹"
+                    onClicked: {
+                        const picked = appHost.chooseFolder(pathField.text)
+                        if (picked.length > 0) {
+                            pathField.text = picked
+                            scanService.start(picked)
+                        }
+                    }
+                    contentItem: Glyph { iconName: "folder-open"; size: 16; color: theme.textMuted }
                 }
                 Button {
                     text: (scanService.state === "done" || scanService.state === "cancelled") ? "重新扫描" : "扫描"
