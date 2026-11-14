@@ -20,7 +20,7 @@ struct Batch {
     std::uint64_t done=0,total=0;
     std::uint32_t cluster=4096;
 };
-using Sink=std::function<bool(const Batch&)>;
+using Sink=std::function<bool(Batch&)>;
 inline bool eligible(const std::wstring& path) {
     if(path.size()!=3||path[1]!=L':'||path[2]!=L'\\'||::GetDriveTypeW(path.c_str())!=DRIVE_FIXED)return false;
     wchar_t fs[32]{};
@@ -60,7 +60,8 @@ inline bool read(ws::ntfs::RecordSource& reader,std::uint32_t cluster,const Sink
     if(rejected) {error=L"MFT contains unreadable records ("+std::to_wstring(rejected)+L"); use ordinary enumeration.";return false;}
     return true;
 }
-inline void build(const std::wstring& root,const std::vector<Entry>& entries,std::uint32_t cluster,ScanResult& out,bool complete=true,const ScanOptions& options={},const std::atomic<bool>* cancel=nullptr,std::vector<Entry>* consumed=nullptr) {
+template<class Entries>
+inline void build(const std::wstring& root,const Entries& entries,std::uint32_t cluster,ScanResult& out,bool complete=true,const ScanOptions& options={},const std::atomic<bool>* cancel=nullptr,Entries* consumed=nullptr) {
     out=ScanResult{};out.displayRoot=root;out.clusterBytes=cluster;out.root.name=root;out.root.dir=true;out.fast=true;
     const auto cancelled=[&]{return cancel&&cancel->load();};
     const auto excluded=[&](const std::wstring& p){return std::any_of(options.excludedPaths.begin(),options.excludedPaths.end(),[&](const auto& base){return sameOrBelow(p,base);});};

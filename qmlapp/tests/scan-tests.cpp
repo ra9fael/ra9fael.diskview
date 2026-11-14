@@ -209,6 +209,22 @@ int main(int argc, char** argv)
     testUnreadableDirectoryIsReported();
     testFastScanFallback();
     {
+        diskview::mft::Batch batch;
+        diskview::mft::Entry entry;
+        entry.name=std::wstring(256,L'x');entry.known=true;entry.bytes=42;
+        batch.entries.push_back(std::move(entry));
+        const auto* originalName=batch.entries.front().name.data();
+        std::deque<diskview::mft::Entry> accumulated;
+        std::uint64_t files=0,bytes=0;
+        diskview::fastscan::appendBatch(batch,accumulated,files,bytes);
+        check(batch.entries.empty()&&accumulated.size()==1,"MFT batch is consumed");
+        check(accumulated.front().name.data()==originalName,"MFT read transfers name allocation, not const-copy");
+        check(files==1&&bytes==42,"MFT batch counters are preserved");
+        const auto* first=&accumulated.front();
+        for(int i=0;i<100000;++i)accumulated.emplace_back();
+        check(&accumulated.front()==first,"segmented MFT growth does not relocate existing entries");
+    }
+    {
         std::vector<diskview::mft::Entry> entries;
         diskview::mft::Entry folder;
         folder.id = 42; folder.parent = ws::ntfs::kRootRecord;
