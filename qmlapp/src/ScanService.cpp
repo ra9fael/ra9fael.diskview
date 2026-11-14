@@ -8,7 +8,7 @@
 // scan.h pulls in the WinShun SDK header and therefore windows.h, so it has to
 // come after the Qt headers.
 #include "scan.h"
-#include "scan_helper.h"
+#include "fast_scan.h"
 
 #include <utility>
 
@@ -34,34 +34,6 @@ QString systemErrorMessage(DWORD code)
         ::LocalFree(buffer);
     }
     return message;
-}
-
-// A restricted token — WinShun's sandbox builds one — can never be elevated:
-// Windows does not even show the consent prompt, ShellExecuteW's "runas" just
-// fails. Asking anyway only produces a silent fallback, so the caller is told
-// up front and the reason can be shown.
-bool elevationPossible()
-{
-    HANDLE token = nullptr;
-    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) {
-        return true; // unknown: let the helper try
-    }
-    struct Guard {
-        HANDLE token;
-        ~Guard() { if (token) ::CloseHandle(token); }
-    } guard{token};
-    TOKEN_ELEVATION elevation{};
-    DWORD size = 0;
-    if (::GetTokenInformation(token, TokenElevation, &elevation, sizeof elevation, &size)
-        && elevation.TokenIsElevated) {
-        return true; // already running as administrator
-    }
-    // A restricted token carries restricted SIDs, and those are exactly what
-    // blocks an elevation request.
-    DWORD bytes = 0;
-    ::SetLastError(ERROR_SUCCESS);
-    ::GetTokenInformation(token, TokenRestrictedSids, nullptr, 0, &bytes);
-    return !(::GetLastError() == ERROR_INSUFFICIENT_BUFFER && bytes > 0);
 }
 
 // The tree without per-node maps: one pass, appending to parallel arrays. The
@@ -100,7 +72,24 @@ FlatTree flatten(diskview::Node& root)
 
 } // namespace
 
-ScanService::ScanService(QObject* parent) : QObject(parent) {}
+// The text a fast scan that could not run leaves for the window. The expected
+// fallback is a normal Win顺 start: without the administrator token the MFT
+// cannot be read, and the window says how it becomes available. An elevated
+// process whose reader still failed speaks for itself.
+QString ScanService::fastScanFallbackText(bool elevated, const std::wstring& readerReason)
+{
+    if (elevated) {
+        return QString::fromStdWString(readerReason);
+    }
+    return QStringLiteral("当前 Win顺 未以管理员身份运行，无法读取 MFT：已改用普通遍历（以管理员身份运行 Win顺 并允许本插件的 elevated 权限后可用快扫）");
+}
+
+ScanService::ScanService(QObject* parent) : QObject(parent)
+{
+    // The token is fixed for the process's lifetime: the elevated runner's
+    // plugins are born elevated, every other start stays ordinary.
+    m_elevated = diskview::fastscan::processElevated();
+}
 
 ScanService::~ScanService()
 {
@@ -182,11 +171,9 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
     options.paused = &m_pause;
     options.previewNodeLimit = kPreviewNodeLimit;
 
-    // If this scan needs the elevated helper, Windows has to be able to hand
-    // the foreground from this GUI process to its consent prompt. Ask before
-    // starting the worker: ShellExecuteEx runs there, but this call is made on
-    // the thread that owns the window (and may own the foreground).
-    if (m_ownerWindow) ::AllowSetForegroundWindow(ASFW_ANY);
+    // The elevated helper's consent prompt used to need the foreground here;
+    // the in-process fast scan has no prompt and no other process, so the
+    // window's foreground role is gone with it.
     m_thread = std::thread([this, path, options, scanMode] {
       // A scan can run out of memory (the host caps the process) or fail any
       // other way; an exception escaping a thread ends the whole process, so
@@ -234,25 +221,22 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
                   Qt::QueuedConnection);
           };
           const std::wstring wide = path.toStdWString();
-          // The fast scan reads the NTFS MFT through an elevated helper. It only
-          // works on a fixed NTFS drive root; anything else, and any failure of
-          // the helper, falls back to the ordinary enumeration.
+          // The fast scan reads the NTFS MFT, which needs the administrator
+          // token an elevated Win顺 gives its `elevated` plugins. This process
+          // never elevates itself: without the token the reader cannot open
+          // the volume and the scan falls back to the ordinary enumeration,
+          // saying so.
           bool ordinary = true;
           std::wstring fallback;
           if (scanMode != 2 && diskview::mft::eligible(diskview::normalizePath(wide, nullptr))) {
-              if (!elevationPossible()) {
-                  fallback = L"当前由 WinShun 的受限进程运行，无法申请管理员权限：已改用普通遍历";
-              } else {
-                  std::wstring reason;
-                  const auto outcome = diskview::helper::scan(
-                      reinterpret_cast<HWND>(m_ownerWindow), wide, progress, snapshot, m_cancel, result, reason, options);
-                  ordinary = outcome == diskview::helper::Outcome::Fallback;
-                  if (outcome == diskview::helper::Outcome::Cancelled) {
-                      result.cancelled = true;
-                  }
-                  if (ordinary) {
-                      fallback = reason;
-                  }
+              std::wstring reason;
+              const auto outcome = diskview::fastscan::scanDirect(wide, progress, snapshot, m_cancel, result, reason, options);
+              ordinary = outcome == diskview::fastscan::Outcome::Fallback;
+              if (outcome == diskview::fastscan::Outcome::Cancelled) {
+                  result.cancelled = true;
+              }
+              if (ordinary) {
+                  fallback = ScanService::fastScanFallbackText(diskview::fastscan::processElevated(), reason).toStdWString();
               }
           }
           if (ordinary && !m_cancel.load()) {

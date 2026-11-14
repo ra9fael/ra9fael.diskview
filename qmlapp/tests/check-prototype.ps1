@@ -130,11 +130,25 @@ if ($status -notmatch 'state=paused') { throw "The scan was not held: $status" }
 if (-not (Test-Path $pauseImage)) { throw "Missing screenshot $pauseImage" }
 "PASS qml-scan-paused.png, status: $($status.Trim())"
 
-# The elevated helper is this same executable: with the scan session
-# arguments it does the helper's work instead of opening a window.
-$output = & $exe --scan-helper 'Z:' '\\.\pipe\DiskView.Scan.not-a-session' 1 2>&1
+# The fast scan no longer starts a helper or shows a prompt of its own: the
+# process either may read the MFT (an elevated Win顺 runner's plugin) or the
+# scan walks the tree the ordinary way and says so. A status line therefore
+# always carries the elevation state, and a fixture directory is never MFT
+# eligible, so the fast flag stays off here no matter how the test runs.
+$fastData = Join-Path $build 'check-data-fast'
+Remove-Item $fastData -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $fastData | Out-Null
+'{ "scanMode": 0 }' | Set-Content -Path (Join-Path $fastData 'diskview-qml.json') -Encoding utf8
+$env:WS_DATA_DIR = $fastData
+$output = & $exe --scan $scanTarget --screenshot (Join-Path $build 'qml-scan-fast-fallback.png') --delay 1200 2>&1
 $exitCode = $LASTEXITCODE
 $text = ($output | Out-String)
-if ($text -match 'Usage:') { throw "The helper dispatch did not take over: $text" }
-if ($exitCode -ne 2) { throw "The helper dispatch returned $exitCode instead of 2" }
-"PASS scan-helper dispatch"
+if ($exitCode -ne 0) { throw "Launcher failed on the fast-scan check: $text" }
+$errors = $text -split "`r?`n" | Where-Object { $_ -match 'failed to load|TypeError|ReferenceError|is not defined|QSG.*error' }
+if ($errors) { throw "Runtime error on the fast-scan check: $($errors -join '; ')" }
+$status = ($text -split "`r?`n" | Where-Object { $_ -match '^scan\s' }) | Select-Object -First 1
+if (-not $status) { throw "No scan status line on the fast-scan check: $text" }
+if ($status -notmatch 'state=done') { throw "The fast-scan check did not finish: $status" }
+if ($status -notmatch 'elevated=(true|false)') { throw "The status line does not say whether the process may read the MFT: $status" }
+if ($status -match 'fast=true') { throw "A fixture scan claimed to be a fast scan: $status" }
+"PASS fast-scan fallback, status: $($status.Trim())"

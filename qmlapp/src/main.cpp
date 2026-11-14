@@ -10,13 +10,6 @@
 
 #include <windows.h>
 
-// The elevated scan helper: it reads the NTFS MFT and needs no window, but it
-// does need the scanner. The include has to come after the Qt headers,
-// because it pulls in windows.h.
-#include "scan_helper.h"
-
-#include <string>
-
 namespace {
 
 // The offscreen platform uses the FreeType font database instead of the
@@ -60,19 +53,6 @@ void ensureApplicationFont()
 
 int main(int argc, char** argv)
 {
-    // The scan helper is this same executable, started by the scan session
-    // with the pipe and the caller's process id. It runs before any GUI
-    // exists: it is a short-lived reader and nothing else.
-    if (argc == 5 && std::string(argv[1]) == "--scan-helper") {
-        try {
-            return diskview::helper::run(diskview::normalizePath(winshun::wide(argv[2]), nullptr),
-                                         winshun::wide(argv[3]),
-                                         static_cast<DWORD>(std::stoul(argv[4])));
-        } catch (...) {
-            return 2;
-        }
-    }
-
     ensureFontDir();
     QGuiApplication app(argc, argv);
     ensureApplicationFont();

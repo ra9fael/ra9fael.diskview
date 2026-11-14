@@ -91,10 +91,7 @@ bool QmlHost::load(QString* error)
         }
         return false;
     }
-    // The elevated helper asks for its authorization with our window as the
-    // parent, so the prompt belongs to the window the user is looking at.
     if (auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0))) {
-        m_scanService->setOwnerWindow(window->winId());
         // The same icon the native (GDI) edition shows: it embeds app.ico in
         // its rc and picks it up through WM_SETICON. The resource is compiled
         // into this binary, so both editions show one icon.
@@ -179,6 +176,9 @@ QString QmlHost::scanStatusLine() const
                        .arg(m_scanService->fileCount())
                        .arg(m_scanService->dirCount())
                        .arg(m_scanService->skippedDirs());
+    // Whether the process could read the MFT at all: the fast scan exists
+    // only for the elevated Win顺 runner's plugins.
+    line += QStringLiteral("\televated=%1").arg(m_scanService->elevated() ? QStringLiteral("true") : QStringLiteral("false"));
     if (!m_scanService->fallbackReason().isEmpty()) {
         line += QStringLiteral("\tfallback=%1").arg(m_scanService->fallbackReason());
     }

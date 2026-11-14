@@ -6,6 +6,8 @@
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
+#include <string>
+
 #include "ScanTree.h"
 
 #include <atomic>
@@ -39,9 +41,14 @@ class ScanService : public QObject {
     Q_PROPERTY(quint32 excludedItems READ excludedItems NOTIFY stateChanged)
     // The scan is holding still: the workers wait until it is resumed.
     Q_PROPERTY(bool paused READ paused NOTIFY stateChanged)
-    // The fast scan (the NTFS MFT through the elevated helper) was the one that
+    // The fast scan (the NTFS MFT read in this process) was the one that
     // produced the result.
     Q_PROPERTY(bool fast READ fast NOTIFY stateChanged)
+    // Whether this process holds an administrator token: the elevated Win顺
+    // runner's plugins do, a normal start does not. The fast scan exists only
+    // when this is true; the window shows the state so the reason for a
+    // fallback is not a mystery.
+    Q_PROPERTY(bool elevated READ elevated NOTIFY stateChanged)
     // Why the fast scan was not used, when it was asked for and could not run.
     Q_PROPERTY(QString fallbackReason READ fallbackReason NOTIFY stateChanged)
     // The directories the scan could not read, and the files whose size it
@@ -56,6 +63,11 @@ class ScanService : public QObject {
 public:
     explicit ScanService(QObject* parent = nullptr);
     ~ScanService() override;
+
+    // The text a fast scan that could not run leaves for the window: the
+    // how-to-get-it hint on a normal start, the reader's own error when the
+    // token was there but the volume still refused.
+    static QString fastScanFallbackText(bool elevated, const std::wstring& readerReason);
 
     QString state() const { return m_state; }
     QString statusText() const { return m_statusText; }
@@ -72,6 +84,7 @@ public:
     quint32 excludedItems() const { return m_excludedItems; }
     bool paused() const { return m_pause.load(); }
     bool fast() const { return m_fast; }
+    bool elevated() const { return m_elevated; }
     QString fallbackReason() const { return m_fallbackReason; }
     int skippedDirs() const { return m_skippedDirs; }
     int skippedLinks() const { return m_skippedLinks; }
@@ -83,9 +96,6 @@ public:
     // and the excluded paths of the next scan.
     void setSettings(ScanSettings* settings) { m_settings = settings; }
     ScanSettings* settings() const { return m_settings; }
-
-    // The window the elevated helper's authorization prompt belongs to.
-    void setOwnerWindow(quintptr window) { m_ownerWindow = window; }
 
     // Starts a scan of the given path. False when a scan is already running.
     Q_INVOKABLE bool start(const QString& path);
@@ -131,6 +141,7 @@ private:
     int m_scanWorkers = 0;
     quint32 m_excludedItems = 0;
     bool m_fast = false;
+    bool m_elevated = false;
     QString m_fallbackReason;
     int m_skippedDirs = 0;
     int m_skippedLinks = 0;
@@ -138,7 +149,6 @@ private:
     int m_orphanRecords = 0;
     QVariantList m_issues;
     ScanSettings* m_settings = nullptr;
-    quintptr m_ownerWindow = 0;
 
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_running{false};

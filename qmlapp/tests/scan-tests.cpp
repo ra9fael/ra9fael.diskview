@@ -12,6 +12,8 @@
 #include <QTimer>
 
 #include "scan.h"
+// The in-process fast scan: declared after scan.h, which pulls windows.h.
+#include "fast_scan.h"
 
 #include <atomic>
 #include <cstdio>
@@ -158,12 +160,54 @@ void testUnreadableDirectoryIsReported()
 
 } // namespace
 
+// The fast scan runs in this process now: no helper, no prompt of its own.
+// What can be tested without an administrator token is the plumbing around
+// it — the elevation probe, the fallback text and the reader refusing a
+// path that is not a fixed NTFS drive root.
+void testFastScanFallback()
+{
+    // The probe answers for this process, whatever it is; both answers are
+    // valid, the point is that it does not crash and agrees with itself.
+    const bool elevated = diskview::fastscan::processElevated();
+    check(diskview::fastscan::processElevated() == elevated, "the elevation probe is stable");
+
+    // Without the token the window is told how the fast scan becomes
+    // available; with it, the reader's own error is passed through.
+    const QString hint = ScanService::fastScanFallbackText(false, L"volume open failed");
+    check(hint.contains(QStringLiteral("未以管理员")), "the fallback text tells a normal start why the fast scan is off");
+    check(!ScanService::fastScanFallbackText(true, L"volume open failed").contains(QStringLiteral("未以管理员")),
+          "an elevated process keeps the reader's own fallback reason");
+
+    // A directory below the root is not a drive root, so the reader refuses
+    // it and the outcome is a fallback with a reason, never a crash.
+    const QString root = makeTree(QDir::current().filePath(QStringLiteral("dv-scan-fast")));
+    std::atomic<bool> cancel {false};
+    diskview::ScanResult result;
+    std::wstring reason;
+    const diskview::ProgressFn progress = [](const diskview::ScanProgress&) { return true; };
+    const auto outcome = diskview::fastscan::scanDirect(
+        root.toStdWString(), progress, {}, cancel, result, reason, {});
+    check(outcome == diskview::fastscan::Outcome::Fallback, "the in-process fast scan refuses a non-root path");
+    check(!reason.empty(), "the refused fast scan says why");
+
+    // A cancelled scan reports the cancellation, whatever the path.
+    std::atomic<bool> cancelled {true};
+    diskview::ScanResult cancelledResult;
+    std::wstring cancelledReason;
+    const auto cancelledOutcome = diskview::fastscan::scanDirect(
+        root.toStdWString(), progress, {}, cancelled, cancelledResult, cancelledReason, {});
+    check(cancelledOutcome == diskview::fastscan::Outcome::Fallback || cancelledOutcome == diskview::fastscan::Outcome::Cancelled,
+          "a cancelled fast scan ends without completing");
+    (void)elevated;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testHeldScanReadsNothing();
     testServiceResumes();
     testUnreadableDirectoryIsReported();
+    testFastScanFallback();
     if (failures == 0) {
         std::printf("scan tests: PASS\n");
         return 0;
