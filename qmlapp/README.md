@@ -193,3 +193,11 @@ wrapper 的可执行文件同时是管理员快扫 helper：`--scan-helper <盘�
 - **offscreen 的通用字族名不可信**：那套 FreeType 字体库把通用的 "Sans Serif" 解析成了 Agency Gothic CT，拉丁字母的字形是错的（"QML" 显示成 "D4"）。wrapper 在 offscreen/minimal 下把应用字体显式定为 Segoe UI，并留 Microsoft YaHei 等中文字体兜底。原生（windows/D3D11）路径不受影响。
 
 详见 [迁移执行记录](design/migration-status.md)。
+# 0.1.4 使用与同步状态
+
+自由 Dock、Tab 拆合、独立全屏与本地布局保存见 [0.1.4 说明](../docs/qml-0.1.4.md)。
+本轮暂不同步宿主外观和扫描设置（等待上游桥接合并），窗口使用本地配置；不会替换或重启当前 WinShun。
+旧文中的管理员 helper / runas 说明仅适用于历史版本：0.1.4 QML 快扫在插件进程内执行，不自行弹 UAC。
+
+Free Dock and local persistence are documented in [the 0.1.4 notes](../docs/qml-0.1.4.md).
+Host appearance/scan-setting sync is deferred pending upstream support. This delivery does not replace or restart WinShun.

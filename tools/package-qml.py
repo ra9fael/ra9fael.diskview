@@ -78,7 +78,9 @@ def main() -> int:
         if not (controls / name).is_file():
             return fail(f"{name} not found under {controls}: is this the Qt the DLL was built against?")
 
-    with tempfile.TemporaryDirectory(prefix="diskview-qml-pkg-") as tmp:
+    staging_root = ROOT / "build" / "qml-package"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="stage-", dir=staging_root) as tmp:
         staging = Path(tmp) / "stage"
         staging.mkdir()
         shutil.copy2(build / program, staging / program)
@@ -87,6 +89,8 @@ def main() -> int:
             source = APP / name if (APP / name).is_file() else ROOT / name
             if source.is_file():
                 shutil.copy2(source, staging / name)
+        license_path = APP / "resources" / "fonts" / "Phosphor-LICENSE.txt"
+        shutil.copy2(license_path, staging / "Phosphor-LICENSE.txt")
         target_dir = staging / "qml" / "QtQuick" / "Controls"
         target_dir.mkdir(parents=True)
         for name in CONTROLS_FILES:
