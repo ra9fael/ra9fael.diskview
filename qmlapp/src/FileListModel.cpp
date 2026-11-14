@@ -90,7 +90,7 @@ void FileListModel::rebuild()
     if (!filter.isEmpty()) {
         if (m_model->m_fuzzyMatch) {
             m_rows.erase(std::remove_if(m_rows.begin(), m_rows.end(), [this, &filter](int node) {
-                return !fuzzyContains(m_model->nameOf(node), filter);
+                return !fuzzyContains(m_model->nameViewOf(node), filter);
             }), m_rows.end());
         } else {
             m_rows.erase(std::remove_if(m_rows.begin(), m_rows.end(), [this, &filter](int node) {
@@ -110,7 +110,7 @@ void FileListModel::rebuild()
     // too).
     if (!filter.isEmpty() && m_model->m_fuzzyMatch) {
         std::stable_sort(m_rows.begin(), m_rows.end(), [this, &filter](int a, int b) {
-            return fuzzyRank(m_model->nameOf(a), filter) < fuzzyRank(m_model->nameOf(b), filter);
+            return fuzzyRank(m_model->nameViewOf(a), filter) < fuzzyRank(m_model->nameViewOf(b), filter);
         });
     } else {
         // Compare the actual values. The old key built two base-36 QStrings
@@ -120,7 +120,7 @@ void FileListModel::rebuild()
             int order = 0;
             switch (m_model->m_sortKey) {
             case DiskViewModel::SortByName:
-                order = QString::compare(m_model->nameOf(a), m_model->nameOf(b), Qt::CaseInsensitive);
+                order = m_model->nameViewOf(a).compare(m_model->nameViewOf(b), Qt::CaseInsensitive);
                 break;
             case DiskViewModel::SortByModified: {
                 const quint64 x = m_model->hasModifiedOf(a) ? m_model->modifiedOf(a) : 0;
@@ -145,7 +145,7 @@ void FileListModel::rebuild()
 
 int FileListModel::fuzzyScore(int node) const
 {
-    return fuzzyRank(m_model->nameOf(node), m_model->m_filter);
+    return fuzzyRank(m_model->nameViewOf(node), m_model->m_filter);
 }
 
 int FileListModel::selectedRow() const

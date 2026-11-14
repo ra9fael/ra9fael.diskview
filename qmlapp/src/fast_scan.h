@@ -143,14 +143,14 @@ inline Outcome buildFlat(std::deque<mft::Entry>& entries,
 
     out = FlatTree{};
     out.names.reserve(entryCount + 1);
-    out.parents.reserve(out.names.capacity());
-    out.sizes.reserve(out.names.capacity());
-    out.allocs.reserve(out.names.capacity());
-    out.modified.reserve(out.names.capacity());
-    out.attributes.reserve(out.names.capacity());
-    out.fileCounts.reserve(out.names.capacity());
-    out.dirCounts.reserve(out.names.capacity());
-    out.flags.reserve(out.names.capacity());
+    out.parents.reserve(entryCount + 1);
+    out.sizes.reserve(entryCount + 1);
+    out.allocs.reserve(entryCount + 1);
+    out.modified.reserve(entryCount + 1);
+    out.attributes.reserve(entryCount + 1);
+    out.fileCounts.reserve(entryCount + 1);
+    out.dirCounts.reserve(entryCount + 1);
+    out.flags.reserve(entryCount + 1);
 
     out.names.append(QString::fromStdWString(path));
     out.parents.append(-1);

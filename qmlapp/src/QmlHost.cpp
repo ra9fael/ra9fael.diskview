@@ -410,12 +410,14 @@ bool QmlHost::runChartBenchmark(int nodes, QString* report)
     chart->setDepth(2);
     const QString deep = chart->benchmark(runs);
     chart->setDepth(1);
-    *report = QStringLiteral("bench model flat=%1ms nested=%2ms export=%3ms enter=%4ms reset=%5ms\nbench depth=1 %6\nbench depth=2 %7\n")
+    const double nameMB = double(flat.nameBytes()) / (1024.0 * 1024.0);
+    *report = QStringLiteral("bench model flat=%1ms nested=%2ms export=%3ms enter=%4ms reset=%5ms names=%6MB\nbench depth=1 %7\nbench depth=2 %8\n")
                   .arg(modelMs, 0, 'f', 1)
                   .arg(nestedMs, 0, 'f', 1)
                   .arg(exportMs, 0, 'f', 1)
                   .arg(navMs, 0, 'f', 1)
                   .arg(resetMs, 0, 'f', 1)
+                  .arg(nameMB, 0, 'f', 1)
                   .arg(shallow, deep);
     return true;
 }

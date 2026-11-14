@@ -173,7 +173,10 @@ private:
     // The file panel (FileListModel) builds its rows from the same arrays, so
     // the accessors are shared through friendship.
     int nodeCount() const { return m_tree.names.size(); }
-    const QString& nameOf(int index) const { return m_tree.names.at(index); }
+    // A view reads straight out of the packed name table; use it in the hot
+    // comparisons. nameOf builds a QString for the places that need one.
+    QStringView nameViewOf(int index) const { return m_tree.names.viewAt(index); }
+    QString nameOf(int index) const { return m_tree.names.at(index); }
     int parentOf(int index) const { return m_tree.parents.at(index); }
     bool directoryOf(int index) const { return (m_tree.flags.at(index) & 1) != 0; }
     quint64 sizeOf(int index) const { return static_cast<quint64>(std::max<qint64>(0, m_tree.sizes.at(index))); }

@@ -60,12 +60,12 @@ QColor DiskViewModel::extensionColorOf(int index) const
 // predictable than an edit distance, and it is what a fuzzy file finder
 // means in practice. The file panel's whole-tree search walks the same
 // matcher, so the two stay one.
-bool fuzzyContains(const QString& haystack, const QString& needle)
+bool fuzzyContains(QStringView haystack, QStringView needle)
 {
     if (needle.isEmpty()) return true;
-    int at = 0;
+    qsizetype at = 0;
     for (const QChar ch : needle) {
-        const int found = haystack.indexOf(ch, at, Qt::CaseInsensitive);
+        const qsizetype found = haystack.indexOf(ch, at, Qt::CaseInsensitive);
         if (found < 0) return false;
         at = found + 1;
     }
@@ -75,15 +75,15 @@ bool fuzzyContains(const QString& haystack, const QString& needle)
 // The score of the same match: how far into the name the needle's last
 // character landed, lower is tighter. A file finder sorts its best matches
 // first; the order of a whole-tree search is this.
-int fuzzyRank(const QString& haystack, const QString& needle)
+int fuzzyRank(QStringView haystack, QStringView needle)
 {
-    int at = 0;
+    qsizetype at = 0;
     for (const QChar ch : needle) {
-        const int found = haystack.indexOf(ch, at, Qt::CaseInsensitive);
+        const qsizetype found = haystack.indexOf(ch, at, Qt::CaseInsensitive);
         if (found < 0) return std::numeric_limits<int>::max();
         at = found + 1;
     }
-    return at;
+    return int(at);
 }
 
 DiskViewModel::DiskViewModel(QObject* parent) : QAbstractListModel(parent)
@@ -455,7 +455,7 @@ void DiskViewModel::sortEntries(QVector<int>& entries) const
         int order = 0;
         switch (m_sortKey) {
         case SortByName:
-            order = QString::compare(nameOf(a), nameOf(b), Qt::CaseInsensitive);
+            order = nameViewOf(a).compare(nameViewOf(b), Qt::CaseInsensitive);
             break;
         case SortByModified: {
             const quint64 x = hasModifiedOf(a) ? modifiedOf(a) : 0;
@@ -496,7 +496,7 @@ QString DiskViewModel::pathOf(int index) const
     for (int i = index; i >= 0; i = parentOf(i)) chain.push_back(i);
     QString path;
     for (int i = chain.size() - 1; i >= 0; --i) {
-        const QString& name = nameOf(chain[i]);
+        const QString name = nameOf(chain[i]);
         if (path.isEmpty()) path = name;
         else if (path.endsWith('\\')) path += name;
         else path += '\\' + name;
@@ -506,7 +506,7 @@ QString DiskViewModel::pathOf(int index) const
 
 QString DiskViewModel::extOf(int index) const
 {
-    return directoryOf(index) ? QString() : diskviewqml::extensionOf(nameOf(index));
+    return directoryOf(index) ? QString() : diskviewqml::extensionOf(nameViewOf(index));
 }
 
 QSet<int> DiskViewModel::filterKeepSet() const

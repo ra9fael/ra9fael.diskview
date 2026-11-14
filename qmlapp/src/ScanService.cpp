@@ -79,14 +79,14 @@ FlatTree flatten(diskview::Node& root)
     const int safeCapacity = capacity > std::numeric_limits<int>::max()
         ? std::numeric_limits<int>::max() : static_cast<int>(capacity);
     out.names.reserve(safeCapacity);
-    out.parents.reserve(out.names.capacity());
-    out.sizes.reserve(out.names.capacity());
-    out.allocs.reserve(out.names.capacity());
-    out.modified.reserve(out.names.capacity());
-    out.attributes.reserve(out.names.capacity());
-    out.fileCounts.reserve(out.names.capacity());
-    out.dirCounts.reserve(out.names.capacity());
-    out.flags.reserve(out.names.capacity());
+    out.parents.reserve(safeCapacity);
+    out.sizes.reserve(safeCapacity);
+    out.allocs.reserve(safeCapacity);
+    out.modified.reserve(safeCapacity);
+    out.attributes.reserve(safeCapacity);
+    out.fileCounts.reserve(safeCapacity);
+    out.dirCounts.reserve(safeCapacity);
+    out.flags.reserve(safeCapacity);
     flattenInto(root, -1, out);
     return out;
 }

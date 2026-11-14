@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QHash>
 #include <QString>
+#include <QStringView>
 
 #include <iterator>
 
@@ -70,10 +71,10 @@ inline QString extensionLabel(const QString& extension)
     return labels.value(extension, QStringLiteral("其他"));
 }
 
-inline QString extensionOf(const QString& name)
+inline QString extensionOf(QStringView name)
 {
-    const int dot = name.lastIndexOf(QLatin1Char('.'));
-    return dot <= 0 ? QString() : name.mid(dot).toLower();
+    const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+    return dot <= 0 ? QString() : name.sliced(dot).toString().toLower();
 }
 
 } // namespace diskviewqml

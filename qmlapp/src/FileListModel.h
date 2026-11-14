@@ -11,8 +11,8 @@
 // The matcher the two panels share: the subsequence test a fuzzy file finder
 // means, and its rank (how far into the name the last character landed,
 // lower is tighter).
-bool fuzzyContains(const QString& haystack, const QString& needle);
-int fuzzyRank(const QString& haystack, const QString& needle);
+bool fuzzyContains(QStringView haystack, QStringView needle);
+int fuzzyRank(QStringView haystack, QStringView needle);
 
 // The file view as its own panel: the files of the whole scan or of the
 // folder the chart is on, sorted and filtered the way the file view always
