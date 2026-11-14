@@ -368,6 +368,40 @@ void testFormatting()
 
 } // namespace
 
+// A double click on a folder inserts or removes just its block; the visible
+// rows must match the full rebuild the old path produced.
+void testIncrementalExpand()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    const auto idOf = [&model](const QString& name) {
+        for (int row = 0; row < model.rowCount(); ++row)
+            if (model.data(model.index(row), DiskViewModel::NameRole).toString() == name)
+                return model.data(model.index(row), DiskViewModel::IdRole).toString();
+        return QString();
+    };
+    const QString zulu = idOf(QStringLiteral("zulu"));
+    check(!zulu.isEmpty(), "the folder is visible before expanding");
+    const QStringList collapsed = namesOf(model);
+    model.toggleExpanded(zulu);
+    const QStringList expanded = namesOf(model);
+    check(expanded.size() == collapsed.size() + 2 && expanded.contains(QStringLiteral("big.bin")),
+          "expanding inserts the folder's children in place");
+    check(expanded.indexOf(QStringLiteral("big.bin")) == expanded.indexOf(QStringLiteral("zulu")) + 1,
+          "children follow their folder");
+    model.toggleExpanded(zulu);
+    check(namesOf(model) == collapsed, "collapsing removes exactly the inserted block");
+    // Expanding twice in a row is idempotent in shape, not duplicated.
+    model.toggleExpanded(zulu);
+    model.toggleExpanded(zulu);
+    model.toggleExpanded(zulu);
+    check(namesOf(model) == expanded, "repeated toggles do not duplicate rows");
+    const int revision = model.chartTree().value(QStringLiteral("revision")).toInt();
+    model.enterNode(idOf(QStringLiteral("alpha")));
+    check(model.chartTree().value(QStringLiteral("revision")).toInt() != revision,
+          "navigating advances the chart revision");
+}
+
 int main()
 {
     {
@@ -400,6 +434,7 @@ int main()
     testFormatting();
     testExtensionFilter();
     testEnterAndResetChart();
+    testIncrementalExpand();
     if (g_failures == 0) {
         std::cout << "PASS\n";
         return 0;

@@ -199,11 +199,15 @@ private:
     int indexForId(const QString& id) const;
     void resetAt(int index);
     void rebuildRows();
+    // The same row set, written into a caller's buffer, so a navigation can
+    // tell whether the visible outline actually changed before resetting the
+    // model (a reset makes every delegate rebuild).
+    void buildRows(QVector<int>& out) const;
     // The set of visible rows changed (a folder opened, the sort flipped, a
     // letter went into the filter). The view only learns about that from the
     // model's own reset, so this is the one way to rebuild the rows.
     void applyRowChange();
-    void appendTreeRows(int parent, const QSet<int>& keep, bool filtering);
+    void appendTreeRows(int parent, const QSet<int>& keep, bool filtering, QVector<int>& out) const;
     void collectFiles(int node, QVector<int>& out) const;
     // The path is derived from the parents instead of kept per node: a real
     // drive has millions of nodes, and one string each is a great deal of
@@ -211,6 +215,11 @@ private:
     QString pathOf(int index) const;
     QString extOf(int index) const;
     void filterWalk(int index, QString& path, QSet<int>& keep) const;
+    // Row of a node in the outline, or -1. A folder's descendants are the
+    // contiguous rows right after it, which is what lets a double click insert
+    // or remove just that block instead of rebuilding every visible row.
+    int rowOfNode(int index) const;
+    void collectSubtreeRows(int index, QVector<int>& out) const;
     void collectFilesFiltered(int node, QString& path, QVector<int>& out) const;
     QSet<int> filterKeepSet() const;
     void sortEntries(QVector<int>& entries) const;
@@ -244,6 +253,9 @@ private:
     bool m_ascending = false;
     int m_viewMode = TreeView;
     int m_chartDepth = 2;
+    // Bumped with every chartChanged, and written into the exported map, so
+    // ChartItem can tell a new payload by one integer.
+    int m_chartRevision = 0;
     bool m_partial = false;
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;

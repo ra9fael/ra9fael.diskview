@@ -126,6 +126,9 @@ private:
     QColor accentColor(bool selected) const;
 
     QVariantMap m_treeData;
+    // The payload's revision from the model, so identical data is not parsed
+    // twice and different data is never mistaken for the same.
+    int m_revision = -1;
     QVector<HitRegion> m_regions;
     diskview::Node m_chartRoot;
     QHash<std::wstring, QString> m_pathIds;

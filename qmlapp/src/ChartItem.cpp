@@ -52,7 +52,11 @@ diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QStri
 
 void ChartItem::setTreeData(const QVariantMap& data)
 {
-    if (m_treeData == data) return;
+    // One integer, not a deep comparison of thousands of nested maps: the
+    // comparison used to cost as much as parsing the payload.
+    const int revision = data.value(QStringLiteral("revision")).toInt();
+    if (revision == m_revision && !m_treeData.isEmpty()) return;
+    m_revision = revision;
     m_treeData=data; m_pathIds.clear(); m_nodeInfo.clear();
     m_chartRoot=nodeFromVariant(data,m_pathIds,m_nodeInfo); m_tiles.clear(); m_slices.clear();
     emit treeDataChanged(); rebuildGeometry();
@@ -244,7 +248,11 @@ QString ChartItem::benchmark(int iterations)
     QElapsedTimer timer;
     // The payload the model hands over, turned into the chart's own tree.
     timer.start();
-    for (int i = 0; i < iterations; ++i) setTreeData(m_treeData);
+    // The revision guard skips identical payloads, which is what the live
+    // window wants; the benchmark resets it so each run parses for real.
+    const int revision = m_revision;
+    for (int i = 0; i < iterations; ++i) { m_revision = -1; setTreeData(m_treeData); }
+    m_revision = revision;
     const double prepare = double(timer.nsecsElapsed()) / 1e6 / iterations;
 
     timer.restart();

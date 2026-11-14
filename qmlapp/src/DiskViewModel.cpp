@@ -91,6 +91,9 @@ DiskViewModel::DiskViewModel(QObject* parent) : QAbstractListModel(parent)
     // The chart's payload follows the folder the window is in; one signal for
     // both keeps the QML binding simple.
     connect(this, &DiskViewModel::currentPathChanged, this, &DiskViewModel::chartChanged);
+    // One integer tells the chart's item whether the payload it is handed is
+    // new. Comparing the whole nested map was itself as expensive as parsing.
+    connect(this, &DiskViewModel::chartChanged, this, [this] { ++m_chartRevision; });
 }
 
 void DiskViewModel::setChartDepth(int depth)
@@ -540,18 +543,18 @@ void DiskViewModel::collectFilesFiltered(int node, QString& path, QVector<int>& 
     path.truncate(mark);
 }
 
-void DiskViewModel::appendTreeRows(int parent, const QSet<int>& keep, bool filtering)
+void DiskViewModel::appendTreeRows(int parent, const QSet<int>& keep, bool filtering, QVector<int>& out) const
 {
     QVector<int> kids = childrenOf(parent);
     sortEntries(kids);
     for (int child : kids) {
         if (filtering && !keep.contains(child)) continue;
-        m_visible.push_back(child);
+        out.push_back(child);
         // While a filter is on, the path to every match is shown open; the
         // folders the user opened by hand are left exactly as they were.
         const bool open = m_expanded.contains(child) || filtering;
         if (directoryOf(child) && open) {
-            appendTreeRows(child, keep, filtering);
+            appendTreeRows(child, keep, filtering, out);
         }
     }
 }
@@ -567,8 +570,9 @@ void DiskViewModel::applyRowChange()
     emit listChanged();
 }
 
-void DiskViewModel::rebuildRows()
-{    m_visible.clear();
+void DiskViewModel::buildRows(QVector<int>& out) const
+{
+    out.clear();
     if (m_current < 0) return;
     if (m_viewMode == FileView) {
         QVector<int> files;
@@ -595,11 +599,16 @@ void DiskViewModel::rebuildRows()
             }), files.end());
         }
         sortEntries(files);
-        m_visible = files;
+        out = std::move(files);
         return;
     }
     const QSet<int> keep = filterKeepSet();
-    appendTreeRows(m_current, keep, !m_filter.isEmpty());
+    appendTreeRows(m_current, keep, !m_filter.isEmpty(), out);
+}
+
+void DiskViewModel::rebuildRows()
+{
+    buildRows(m_visible);
 }
 
 void DiskViewModel::pushHistory(int index)
@@ -614,7 +623,6 @@ void DiskViewModel::pushHistory(int index)
 void DiskViewModel::resetAt(int index)
 {
     if (index < 0 || index >= nodeCount()) return;
-    beginResetModel();
     // The chart is what moves; the list only opens down to it, so the outline
     // the user built stays where it is.
     m_chartRoot = index;
@@ -623,15 +631,22 @@ void DiskViewModel::resetAt(int index)
     }
     // Navigating clears the filter, the way the native panel does — and the
     // extension pick with it, since the folder the chart was on is left
-    // behind. The fields are cleared directly: the row rebuild happens in
-    // this function's own reset, so the filter's helper must not nest one.
+    // behind.
     const bool hadExtensionFilter = m_extensionFilterOn;
     m_filter.clear();
     m_extensionFilter.clear();
     m_extensionFilterOn = false;
     m_selectedId = QString::number(index + 1);
-    rebuildRows();
-    endResetModel();
+    // Entering a folder that is already open changes no row. Resetting the
+    // model then would rebuild every delegate for nothing, which is what made
+    // a chart double click feel slow on a large outline.
+    QVector<int> rows;
+    buildRows(rows);
+    if (rows != m_visible) {
+        beginResetModel();
+        m_visible = std::move(rows);
+        endResetModel();
+    }
     if (hadExtensionFilter) emit extensionFilterChanged();
     emit currentPathChanged();
     emit selectedChanged();
@@ -794,9 +809,57 @@ void DiskViewModel::toggleExpanded(const QString& id)
 {
     const int i = indexForId(id);
     if (i < 0 || !directoryOf(i)) return;
-    if (m_expanded.contains(i)) m_expanded.remove(i);
-    else m_expanded.insert(i);
-    applyRowChange();
+    // With a filter on, the visible set is a different shape; rebuild it the
+    // cheap-and-correct way. The file panel has its own rows entirely.
+    if (m_viewMode != TreeView || !m_filter.isEmpty()) {
+        if (m_expanded.contains(i)) m_expanded.remove(i);
+        else m_expanded.insert(i);
+        applyRowChange();
+        return;
+    }
+    const int row = rowOfNode(i);
+    if (m_expanded.contains(i)) {
+        m_expanded.remove(i);
+        if (row < 0) { applyRowChange(); return; }
+        // Every descendant sits contiguously after the folder.
+        const int depth = depthOf(i);
+        int count = 0;
+        while (row + 1 + count < m_visible.size()
+               && depthOf(m_visible.at(row + 1 + count)) > depth) ++count;
+        if (count > 0) {
+            beginRemoveRows({}, row + 1, row + count);
+            m_visible.remove(row + 1, count);
+            endRemoveRows();
+        }
+    } else {
+        m_expanded.insert(i);
+        if (row < 0) { applyRowChange(); return; }
+        QVector<int> rows;
+        collectSubtreeRows(i, rows);
+        if (!rows.isEmpty()) {
+            beginInsertRows({}, row + 1, row + rows.size());
+            for (int at = 0; at < rows.size(); ++at) m_visible.insert(row + 1 + at, rows.at(at));
+            endInsertRows();
+        }
+    }
+    emit listChanged();
+}
+
+int DiskViewModel::rowOfNode(int index) const
+{
+    for (int row = 0; row < m_visible.size(); ++row)
+        if (m_visible.at(row) == index) return row;
+    return -1;
+}
+
+void DiskViewModel::collectSubtreeRows(int index, QVector<int>& out) const
+{
+    QVector<int> kids = childrenOf(index);
+    sortEntries(kids);
+    for (int child : kids) {
+        out.push_back(child);
+        if (directoryOf(child) && m_expanded.contains(child)) collectSubtreeRows(child, out);
+    }
 }
 
 
@@ -952,5 +1015,6 @@ QVariantMap DiskViewModel::chartTree() const
     QElapsedTimer timer;
     timer.start();
     QVariantMap map = exportNode(exportNode, m_chartRoot, 0);
+    map.insert(QStringLiteral("revision"), m_chartRevision);
     return map;
 }
