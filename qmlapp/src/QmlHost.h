@@ -28,6 +28,10 @@ public:
         // Starts the scan and leaves it paused, so the held state can be
         // looked at.
         bool pauseOnStart = false;
+        // The pane to maximize on startup ("tables" or "chart"), so the
+        // fullscreen layer can be looked at without a pointer. Empty leaves
+        // the window as it opens.
+        QString maximizeOnStart;
         // How many nodes the chart benchmark builds; 0 means no benchmark.
         int benchNodes = 0;
         // Where the QtQuick modules live when the app runs on a host's Qt

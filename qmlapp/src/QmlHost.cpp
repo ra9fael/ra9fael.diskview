@@ -15,6 +15,7 @@
 #include <QHoverEvent>
 #include <QMouseEvent>
 #include <QQmlContext>
+#include <QQmlExpression>
 #include <QQmlError>
 #include <QQuickWindow>
 #include <QTimer>
@@ -103,6 +104,13 @@ bool QmlHost::load(QString* error)
         // its rc and picks it up through WM_SETICON. The resource is compiled
         // into this binary, so both editions show one icon.
         window->setIcon(QIcon(QStringLiteral(":/app.ico")));
+        // --maximize drives the window's own function, so the fullscreen layer
+        // is exercised the way a press on the toolbar would.
+        if (!m_options.maximizeOnStart.isEmpty()) {
+            QQmlExpression expression(m_engine.rootContext(), window,
+                                      QStringLiteral("maximizePane(\"%1\")").arg(m_options.maximizeOnStart));
+            expression.evaluate();
+        }
     }
     return true;
 }
@@ -690,6 +698,13 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->openSettings = true;
         } else if (argument == QStringLiteral("--pause")) {
             options->pauseOnStart = true;
+        } else if (argument == QStringLiteral("--maximize")) {
+            const QString group = value(argument);
+            if (group != QStringLiteral("tables") && group != QStringLiteral("chart")) {
+                *error = QStringLiteral("--maximize takes tables or chart");
+                return false;
+            }
+            options->maximizeOnStart = group;
         } else if (argument == QStringLiteral("--bench-chart")) {
             bool ok = false;
             const int nodes = value(argument).toInt(&ok);
@@ -720,6 +735,7 @@ QString QmlHost::usage()
         "  --delay <ms>       wait before the grab (default 1200)\n"
         "  --settings         open the scan settings dialog on startup\n"
         "  --pause            start the scan and hold it there\n"
+        "  --maximize <tables|chart>  open with that pane in the fullscreen layer\n"
         "  --bench-chart <n>  build a tree of n nodes and time the chart pipeline\n"
         "  --self-test        run the interaction checks and print the verdict\n"
         "  -h, --help         show this help\n");

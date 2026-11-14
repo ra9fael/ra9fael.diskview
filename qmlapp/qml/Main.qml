@@ -69,6 +69,48 @@ ApplicationWindow {
     property string maximizedPane: ""
     function layoutVertical() { return chartLayout === "tablesTop" || chartLayout === "tablesBottom" }
     function layoutTablesFirst() { return chartLayout === "tablesTop" || chartLayout === "tablesLeft" }
+    // Fullscreen: the named group is lifted into a layer of its own, over the
+    // split, so no other panel can cover it. The pane is reparented into the
+    // layer (it can only have one parent) and put back where the layout wants
+    // it on the way out. "tables" is the whole tree|files|legend split, so a
+    // table fullscreen is one move, not three.
+    function maximizePane(group) {
+        const current = maximizedPane === "chart" ? chartPane : maximizedPane === "tables" ? topSplit : null
+        const target = group === "chart" ? chartPane : group === "tables" ? topSplit : null
+        // The same group again: back to the split.
+        if (maximizedPane === group) {
+            maximizedPane = ""
+            restorePanes()
+            return
+        }
+        // A different group first goes home, so the layer holds one pane.
+        if (current && current !== target) {
+            current.anchors.fill = null
+            current.parent = null
+            verticalSplit.addItem(current)
+            verticalSplit.applyLayoutOrder()
+        }
+        if (!target) {
+            maximizedPane = ""
+            return
+        }
+        maximizedPane = group
+        // The slot is the layer's only child; the pane fills it.
+        target.parent = fullscreenSlot
+        target.anchors.fill = fullscreenSlot
+    }
+    // Put the maximized pane back into the split, in the order the layout
+    // asks for, and let the layout set the size budgets again.
+    function restorePanes() {
+        for (const pane of [topSplit, chartPane]) {
+            if (pane.parent === fullscreenSlot) {
+                pane.anchors.fill = null
+                pane.parent = null
+                verticalSplit.addItem(pane)
+            }
+        }
+        verticalSplit.applyLayoutOrder()
+    }
     // The host's look, through the theme tokens: one object holds every
     // colour, so the window, the chart and the dialogs follow the host's
     // light/dark choice and the system accent together.
@@ -132,7 +174,11 @@ ApplicationWindow {
     Shortcut { sequence: "F5"; onActivated: scanService.start(pathField.text.trim()) }
     Shortcut { sequence: "Alt+Left"; onActivated: diskModel.goBack() }
     Shortcut { sequence: "Alt+Right"; onActivated: diskModel.goForward() }
-    Shortcut { sequence: "Esc"; onActivated: { diskModel.filter = ""; filterField.text = "" } }
+    Shortcut { sequence: "Esc"; onActivated: {
+        // Out of the fullscreen first, then the text filter.
+        if (window.maximizedPane) { window.maximizePane(window.maximizedPane); return }
+        diskModel.filter = ""; filterField.text = ""
+    } }
 
     ColumnLayout {
         anchors.fill: parent
@@ -284,11 +330,18 @@ ApplicationWindow {
         }
 
         // ---- tables and the chart, in the order the user picked ----------
+        // A plain Item is the dock workspace: the split fills it, and the
+        // fullscreen layer draws over the split when a pane is maximized, so
+        // a maximized panel is never covered by another one.
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+
         SplitView {
             id: verticalSplit
             orientation: Qt.Vertical
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            anchors.fill: parent
             handle: Rectangle { implicitHeight: 5; color: theme.handleFill; border.color: theme.border }
 
             // A SplitView's pane order is the order its children were added in.
@@ -351,8 +404,8 @@ ApplicationWindow {
                     legendPane.SplitView.minimumWidth = 220
                     legendPane.SplitView.minimumHeight = -1
                 }
-                topSplit.visible = window.maximizedPane !== "chart"
-                chartPane.visible = window.maximizedPane !== "tables"
+                // The fullscreen layer holds a maximized pane now; the split
+                // keeps its own children, so nothing is hidden here.
             }
 
             // folder table | extension legend — a third panel, the file list,
@@ -481,13 +534,10 @@ ApplicationWindow {
                                     Item {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
-                                        Item {
-                                            Layout.fillWidth: true
-                                            Layout.fillHeight: true
-                                            RowLayout {
-                                                anchors.fill: parent
-                                                anchors.leftMargin: 6 + depth * 12
-                                                spacing: 4
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 6 + depth * 12
+                                            spacing: 4
                                                 Label {
                                                     Layout.preferredWidth: 12
                                                     visible: rowItem.hasChildren
@@ -508,7 +558,6 @@ ApplicationWindow {
                                                     color: theme.text; font.pixelSize: 11
                                                 }
                                             }
-                                        }
                                     }
                                     Item {
                                         visible: !window.columnHidden("pct")
@@ -972,7 +1021,7 @@ ApplicationWindow {
                             window.chartLayout = names[index]
                             scanSettings.chartLayout = window.chartLayout
                             scanSettings.save()
-                            window.maximizedPane = ""
+                            if (window.maximizedPane) window.maximizePane(window.maximizedPane)
                             verticalSplit.applyLayoutOrder()
                         }
                     }
@@ -981,15 +1030,12 @@ ApplicationWindow {
                         implicitHeight: 26
                         ToolTip.visible: hovered
                         ToolTip.text: window.maximizedPane === "tables" ? "还原表格" : "表格全屏"
-                        onClicked: {
-                            window.maximizedPane = window.maximizedPane === "tables" ? "" : "tables"
-                            verticalSplit.applyLayoutOrder()
-                        }
+                        onClicked: window.maximizePane("tables")
                         contentItem: Row {
                             spacing: 4
                             Glyph { iconName: window.maximizedPane === "tables" ? "arrows-in" : "arrows-out"; size: 14; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
                             Label {
-                                text: tablesFullscreenButton.checked ? "还原" : "表格全屏"
+                                text: window.maximizedPane === "tables" ? "还原" : "表格全屏"
                                 font.pixelSize: 11
                                 color: theme.textMuted
                                 anchors.verticalCenter: parent.verticalCenter
@@ -1001,15 +1047,12 @@ ApplicationWindow {
                         implicitHeight: 26
                         ToolTip.visible: hovered
                         ToolTip.text: window.maximizedPane === "chart" ? "还原图表" : "图表全屏"
-                        onClicked: {
-                            window.maximizedPane = window.maximizedPane === "chart" ? "" : "chart"
-                            verticalSplit.applyLayoutOrder()
-                        }
+                        onClicked: window.maximizePane("chart")
                         contentItem: Row {
                             spacing: 4
                             Glyph { iconName: window.maximizedPane === "chart" ? "arrows-in" : "arrows-out"; size: 14; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
                             Label {
-                                text: chartFullscreenButton.checked ? "还原" : "图表全屏"
+                                text: window.maximizedPane === "chart" ? "还原" : "图表全屏"
                                 font.pixelSize: 11
                                 color: theme.textMuted
                                 anchors.verticalCenter: parent.verticalCenter
@@ -1088,6 +1131,41 @@ ApplicationWindow {
                 }
             }
         }
+
+            // The fullscreen layer: the maximized pane lives here, above the
+            // split, so nothing behind it can cover it. It is a layer of its
+            // own rather than a hidden sibling, which is what the old
+            // visibility toggle got wrong.
+            Item {
+                id: fullscreenLayer
+                anchors.fill: parent
+                z: 10000
+                visible: window.maximizedPane !== ""
+                Rectangle {
+                    anchors.fill: parent
+                    color: theme.window
+                    border.color: theme.border
+                }
+                Item { id: fullscreenSlot; anchors.fill: parent }
+                ToolButton {
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.margins: 8
+                    z: 10001
+                    implicitWidth: 32
+                    implicitHeight: 32
+                    ToolTip.visible: hovered
+                    ToolTip.text: "还原 (Esc)"
+                    onClicked: window.maximizePane(window.maximizedPane)
+                    contentItem: Glyph { iconName: "arrows-in"; size: 16; color: theme.text }
+                    background: Rectangle {
+                        radius: 4
+                        color: parent.hovered ? theme.hoverRow : theme.surface
+                        border.color: theme.border
+                    }
+                }
+            }
+        } // the dock workspace
 
         // ---- status bar --------------------------------------------------
         Rectangle {

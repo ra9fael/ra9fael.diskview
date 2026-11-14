@@ -152,3 +152,20 @@ if ($status -notmatch 'state=done') { throw "The fast-scan check did not finish:
 if ($status -notmatch 'elevated=(true|false)') { throw "The status line does not say whether the process may read the MFT: $status" }
 if ($status -match 'fast=true') { throw "A fixture scan claimed to be a fast scan: $status" }
 "PASS fast-scan fallback, status: $($status.Trim())"
+
+# The fullscreen layer: a maximized pane is drawn in a layer of its own, over
+# the split, so no other panel can cover it. --maximize drives the window's
+# own function, the same one the toolbar button calls.
+foreach ($group in 'chart','tables') {
+    $image = Join-Path $build "qml-fullscreen-$group.png"
+    Remove-Item $image -ErrorAction SilentlyContinue
+    $env:WS_DATA_DIR = $scanData
+    $output = & $exe --maximize $group --screenshot $image --delay 900 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = ($output | Out-String)
+    if ($exitCode -ne 0) { throw "Launcher failed on the $group fullscreen: $text" }
+    if (-not (Test-Path $image)) { throw "Missing fullscreen screenshot $image" }
+    $item = Get-Item $image
+    if ($item.Length -lt 20000) { throw "The $group fullscreen screenshot seems blank: $($item.Length) bytes" }
+    "PASS qml-fullscreen-$group.png ($($item.Length) bytes)"
+}
