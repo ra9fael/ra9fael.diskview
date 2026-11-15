@@ -827,6 +827,9 @@ void DiskViewModel::toggleExpanded(const QString& id)
             m_visible.remove(row + 1, count);
             endRemoveRows();
         }
+        // The triangle reads ExpandedRole; inserting or removing rows does not
+        // tell the view that the folder row itself changed.
+        if (row >= 0) emit dataChanged(index(row), index(row), {ExpandedRole});
     } else {
         m_expanded.insert(i);
         if (row < 0) { applyRowChange(); return; }
@@ -837,6 +840,7 @@ void DiskViewModel::toggleExpanded(const QString& id)
             for (int at = 0; at < rows.size(); ++at) m_visible.insert(row + 1 + at, rows.at(at));
             endInsertRows();
         }
+        if (row >= 0) emit dataChanged(index(row), index(row), {ExpandedRole});
     }
     emit listChanged();
 }

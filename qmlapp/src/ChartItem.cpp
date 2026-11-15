@@ -107,6 +107,9 @@ void ChartItem::resetView()
     emit hoverChanged();
     setZoom(1.0);
     setPan(QPointF(0, 0));
+    // The setters skip work when the value is already the default; a reset
+    // must still re-lay out, so the picture fills the item after a resize.
+    rebuildGeometry();
     update();
 }
 void ChartItem::setCenterLabel(const QString& label)

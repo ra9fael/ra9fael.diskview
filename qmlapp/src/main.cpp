@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFont>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTextStream>
@@ -57,6 +58,9 @@ int main(int argc, char** argv)
     QGuiApplication app(argc, argv);
     ensureApplicationFont();
     QGuiApplication::setApplicationName("Disk View QML");
+    // Dialogs and secondary windows take it from here; the taskbar icon comes
+    // from the .rc resource compiled into the executable.
+    QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/app.ico")));
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(qEnvironmentVariable("QT_QUICK_BACKEND") == "software"
                                      ? QSGRendererInterface::Software

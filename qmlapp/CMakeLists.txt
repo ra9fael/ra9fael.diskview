@@ -8,6 +8,7 @@ qt_policy(SET QTP0001 NEW)
 qt_standard_project_setup(REQUIRES 6.12)
 
 qt_add_executable(diskview-qml
+    diskview-qml.rc
     src/main.cpp
     src/QmlHost.cpp src/QmlHost.h
     src/ScanService.cpp src/ScanService.h
@@ -97,6 +98,7 @@ if(DISKVIEW_BUILD_PLUGIN)
     endif()
 
     qt_add_library(diskview-qml-app SHARED
+        diskview-qml.rc
         src/plugin_main.cpp
         src/QmlHost.cpp src/QmlHost.h
         src/ScanService.cpp src/ScanService.h

@@ -1402,7 +1402,6 @@ ApplicationWindow {
                             id: chart
                             objectName: "diskViewChart"
                             anchors.fill: parent
-                            anchors.margins: 8
                             treeData: diskModel.chartTree
                             selectedId: diskModel.selectedId
                             viewMode: window.chartKind
@@ -1491,23 +1490,6 @@ ApplicationWindow {
                     border.color: theme.border
                 }
                 Item { id: fullscreenSlot; anchors.fill: parent }
-                ToolButton {
-                    anchors.top: parent.top
-                    anchors.right: parent.right
-                    anchors.margins: 8
-                    z: 10001
-                    implicitWidth: 32
-                    implicitHeight: 32
-                    ToolTip.visible: hovered
-                    ToolTip.text: "还原 (Esc)"
-                    onClicked: window.maximizePane(window.maximizedPane)
-                    contentItem: Glyph { iconName: "arrows-in"; size: 16; color: theme.text }
-                    background: Rectangle {
-                        radius: 4
-                        color: parent.hovered ? theme.hoverRow : theme.surface
-                        border.color: theme.border
-                    }
-                }
             }
         } // the dock workspace
 
