@@ -1,5 +1,7 @@
 #include "ChartItem.h"
 
+#include <iterator>
+
 #include <QColor>
 #include <QDebug>
 #include <QElapsedTimer>
@@ -152,7 +154,47 @@ void ChartItem::setAccent(const QColor& accent)
     update();
 }
 
-QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
+QColor ChartItem::segmentColor(double hue, int depth, bool isFile) const
+{
+    // A cyclic hue wheel: red → orange → amber → olive → green → teal → blue →
+    // indigo → purple → magenta → pink → red. The wheel only supplies the hue;
+    // saturation and lightness are fixed per theme, so neighbouring tiles stay
+    // in one coherent family instead of random extension colours.
+    static const double anchors[] = {0.00, 0.08, 0.15, 0.28, 0.40, 0.50,
+                                     0.58, 0.66, 0.75, 0.85, 0.93};
+    constexpr int count = int(std::size(anchors));
+    // Start the first folder at blue rather than red: the first slice then
+    // reads as the "main" one instead of a warning colour.
+    double t = hue - std::floor(hue) + 0.58;
+    t -= std::floor(t);
+    if (!(t >= 0.0)) t = 0.0;
+    const double pos = t * count;
+    const int i = int(pos) % count;
+    const int j = (i + 1) % count;
+    const double f = pos - std::floor(pos);
+    double h0 = anchors[i];
+    double h1 = anchors[j];
+    if (h1 <= h0) h1 += 1.0; // wrap pink -> red
+    double h = std::fmod(h0 + (h1 - h0) * f, 1.0);
+    const bool dark = m_theme == QStringLiteral("dark");
+    const double d = std::max(0, depth - 1);
+    // The wheel only supplies the hue. Saturation and lightness are held to a
+    // narrow band, otherwise the vivid anchors turn into neon on a light
+    // window. Deep rings step lighter (dark) or darker (light); files are a
+    // little softer than their folders.
+    const double delta = dark ? 0.03 : -0.015;
+    double l = (dark ? 0.50 : 0.62) + d * delta;
+    double s = (dark ? 0.62 : 0.52) * (1.0 - d * 0.03);
+    if (isFile) {
+        l += dark ? 0.04 : -0.02;
+        s *= 0.92;
+    }
+    l = std::clamp(l, 0.24, 0.84);
+    s = std::clamp(s, 0.10, 0.72);
+    return QColor::fromHslF(float(h < 0 ? 0 : h), float(s), float(l), 1.0f);
+}
+
+QColor ChartItem::fillFor(const diskview::Node& node, double hue, int depth, bool* dimmed) const
 {
     // The small-files aggregate has no single extension: a neutral block, and
     // it steps back whenever an extension filter is on.
@@ -171,8 +213,12 @@ QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
         && (nonePick ? !extension.isEmpty() : extension != m_highlightExtension);
     if (dimmed)*dimmed=hidden;
     if(hidden)return kDimmedFill;
-    if(node.dir)return m_theme=="dark"?QColor("#4a5568"):QColor("#8f9aa8");
-    return diskviewqml::extensionColor(extension);
+    // Layout normally supplies the hue; the extension colour is the fallback
+    // for anything without a position (and matches the legend).
+    if (hue < 0)
+        return node.dir ? (m_theme=="dark"?QColor("#4a5568"):QColor("#8f9aa8"))
+                        : diskviewqml::extensionColor(extension);
+    return segmentColor(hue, depth, !node.dir);
 }
 
 // The quiet outline every tile and slice carries: a hairline in the window's
@@ -195,9 +241,9 @@ QColor ChartItem::accentColor(bool selected) const
 // colour, plus a soft highlight band across the upper third. Flat fills read
 // as one grey mass; the fade gives every block the depth the native chart's
 // colour ramp has.
-QBrush ChartItem::fillBrush(const diskview::Node& node, const QRectF& rect, bool* dimmed) const
+QBrush ChartItem::fillBrush(const diskview::Node& node, const QRectF& rect, double hue, int depth, bool* dimmed) const
 {
-    const QColor base = fillFor(node, dimmed);
+    const QColor base = fillFor(node, hue, depth, dimmed);
     if (rect.width() < 4 || rect.height() < 4) return base;
     // A gentle fade: a strong ramp pushed the saturated palette into neon.
     QColor top = base.lighter(node.dir ? 106 : 112);
@@ -239,7 +285,7 @@ void ChartItem::rebuildGeometry()
         // its radius is kept for the hit test.
         m_innerRadius=innerRadius;
         const qreal ringWidth=(maxR-innerRadius)/4.0;
-        diskview::sunburstSlices(m_chartRoot,area.center().x(),area.center().y(),innerRadius,ringWidth,-M_PI_2,3*M_PI_2,0,0.0,m_slices,m_chartRoot.name,maxDepth);
+        diskview::sunburstSlices(m_chartRoot,area.center().x(),area.center().y(),innerRadius,ringWidth,-M_PI_2,3*M_PI_2,0,4.0/std::max<qreal>(1.0,maxR),m_slices,m_chartRoot.name,maxDepth);
         const QPointF center=area.center();
         for(const auto& slice:m_slices){
             const QString id=m_pathIds.value(slice.path);
@@ -440,12 +486,12 @@ void ChartItem::paint(QPainter* painter)
             const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             bool dimmed=false;
-            QBrush fill=fillBrush(*tile.node,rect,&dimmed);
+            QBrush fill=fillBrush(*tile.node,rect,tile.hue,tile.depth,&dimmed);
             const bool lit=id==m_selectedId||id==m_hoverId;
             // The lit tile takes a lighter ramp so the selection stays inside
             // the same colour family instead of jumping to another.
             if(lit){
-                QColor base=fillFor(*tile.node);
+                QColor base=fillFor(*tile.node,tile.hue,tile.depth);
                 QLinearGradient g(rect.topLeft(),rect.bottomLeft());
                 g.setColorAt(0.0,base.lighter(150));
                 g.setColorAt(1.0,base.lighter(118));
@@ -473,7 +519,7 @@ void ChartItem::paint(QPainter* painter)
             if(!tile.node->dir)continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             if(rect.width()<24||rect.height()<18)continue;
-            const qreal band=std::min<qreal>(10.0,rect.height()*0.45);
+            const qreal band=std::min<qreal>(12.0,rect.height()*0.45);
             const QRectF strip(rect.left(),rect.top(),rect.width(),band);
             painter->fillRect(strip,QColor(0,0,0,m_theme=="dark"?165:120));
             painter->setPen(QPen(QColor(255,255,255,42),1));
@@ -495,7 +541,7 @@ void ChartItem::paint(QPainter* painter)
             path.arcTo(outer,startDeg,sweepDeg);
             path.arcTo(inner,startDeg+sweepDeg,-sweepDeg);
             path.closeSubpath();
-            painter->fillPath(path,fillFor(*slice.node));
+            painter->fillPath(path,fillFor(*slice.node,slice.hue,slice.depth));
             if(id==m_selectedId||id==m_hoverId){
                 painter->setPen(QPen(accentColor(id==m_selectedId),id==m_selectedId?2:1));
                 painter->setBrush(Qt::NoBrush);
@@ -534,7 +580,7 @@ void ChartItem::paint(QPainter* painter)
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
             bool dimmed=false;
-            const QColor fill=fillFor(*tile.node,&dimmed);
+            const QColor fill=fillFor(*tile.node,tile.hue,tile.depth,&dimmed);
             QColor ink=diskviewqml::textOnColor(fill);
             if(tile.node->dir){
                 // A folder's name sits in its title strip, in white on the dark
@@ -579,7 +625,7 @@ void ChartItem::paint(QPainter* painter)
             const qreal half=std::min<qreal>(50,thickness*0.42);
             const QRectF box(point.x()-half,point.y()-10,half*2,20);
             bool dimmed=false;
-            const QColor fill=fillFor(*slice.node,&dimmed);
+            const QColor fill=fillFor(*slice.node,slice.hue,slice.depth,&dimmed);
             QColor ink=diskviewqml::textOnColor(fill);
             if(dimmed)ink.setAlphaF(0.45);
             painter->setPen(ink);

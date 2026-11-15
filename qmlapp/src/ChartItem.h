@@ -117,9 +117,13 @@ private:
     QString hitTest(const QPointF& position) const;
     // The fill of a tile or slice: folders are neutral, files take the colour
     // of their extension.
-    QColor fillFor(const diskview::Node& node, bool* dimmed = nullptr) const;
+    // `hue` is the tile's position on the colour wheel (0..1, -1 for the
+    // small-files aggregate); depth lightens each nested level.
+    QColor fillFor(const diskview::Node& node, double hue = -1, int depth = 0, bool* dimmed = nullptr) const;
     // The same, as a vertical gradient over the tile's own rectangle.
-    QBrush fillBrush(const diskview::Node& node, const QRectF& rect, bool* dimmed = nullptr) const;
+    QBrush fillBrush(const diskview::Node& node, const QRectF& rect, double hue = -1, int depth = 0, bool* dimmed = nullptr) const;
+    // A segment colour from the wheel at `hue`, adjusted for depth and kind.
+    QColor segmentColor(double hue, int depth, bool isFile) const;
     // The quiet outline every shape carries, and the stronger accent stroke
     // of a hover or a selection.
     QColor strokeColor() const;

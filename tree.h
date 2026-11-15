@@ -106,6 +106,9 @@ struct Tile {
     const Node* node = nullptr;
     int depth = 0;
     std::wstring path; // display path; the recursion threads it through
+    // Position on the colour wheel, inherited from the parent's span so
+    // neighbouring tiles stay in the same colour family.
+    double hue = -1;
 };
 
 namespace detail {
@@ -160,7 +163,8 @@ inline double rowWorstExtra(const std::vector<double>& areas, double side, doubl
 // the display path of `node` itself; every tile carries its full path.
 inline void treemapTiles(const Node& node, const Rect& area, int depth, double minArea,
                          std::vector<Tile>& out, std::wstring basePath = {},
-                         int maxDepth = 24, const std::vector<const Node*>* visible = nullptr)
+                         int maxDepth = 24, const std::vector<const Node*>* visible = nullptr,
+                         double hue0 = 0.0, double hue1 = 1.0)
 {
     if (depth > maxDepth || node.children.empty() || area.w <= 0 || area.h <= 0)
         return;
@@ -179,6 +183,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
     double x = area.x, y = area.y, w = area.w, h = area.h;
     std::vector<const Node*> row;
     std::vector<double> rowAreas;
+    std::vector<double> rowHues, rowHue0, rowHue1;
     double rowSum = 0;
     const auto flushRow = [&] {
         if (row.empty())
@@ -187,6 +192,9 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         if (s <= 0 || w <= 0 || h <= 0) {
             row.clear();
             rowAreas.clear();
+            rowHues.clear();
+            rowHue0.clear();
+            rowHue1.clear();
             rowSum = 0;
             return;
         }
@@ -197,14 +205,20 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                 const double hh = rowAreas[i] / t;
                 Rect r {x, cy, t, hh};
                 Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
+                tile.hue = rowHues.empty() ? -1 : rowHues[i];
                 out.push_back(std::move(tile));
-                // Children sit 10 px inside their parent on every side, so the
-                // parent stays a visible frame around them at any depth — the
-                // way WizTree nests its blocks — instead of covering it.
-                const double pad = std::min({10.0, (t - 2) / 2, (hh - 2) / 2});
-                if (row[i]->dir && hh > 0 && t > 0 && 2 * pad + 8 < std::min(t, hh))
-                    treemapTiles(*row[i], Rect {x + 1 + pad, cy + 1 + pad, std::max(0.0, t - 2 - 2 * pad), std::max(0.0, hh - 2 - 2 * pad)},
-                                 depth + 1, minArea, out, out.back().path, maxDepth);
+                // The parent keeps a title strip along its top and a thin
+                // frame on the other sides; children fill the rest. This is
+                // the SpaceSniffer/SquirrelDisk nesting, and it spends far
+                // less area on padding than an equal inset.
+                constexpr double pad = 2.0;
+                constexpr double header = 12.0;
+                if (row[i]->dir && t > 2 * pad + 8 && hh > header + pad + 8)
+                    treemapTiles(*row[i], Rect {x + pad, cy + header,
+                                                std::max(0.0, t - 2 * pad),
+                                                std::max(0.0, hh - header - pad)},
+                                 depth + 1, minArea, out, out.back().path, maxDepth, nullptr,
+                                 rowHue0[i], rowHue1[i]);
                 cy += hh;
             }
             x += t;
@@ -216,11 +230,16 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                 const double ww = rowAreas[i] / t;
                 Rect r {cx, y, ww, t};
                 Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
+                tile.hue = rowHues.empty() ? -1 : rowHues[i];
                 out.push_back(std::move(tile));
-                const double pad = std::min({10.0, (t - 2) / 2, (ww - 2) / 2});
-                if (row[i]->dir && ww > 0 && t > 0 && 2 * pad + 8 < std::min(ww, t))
-                    treemapTiles(*row[i], Rect {cx + 1 + pad, y + 1 + pad, std::max(0.0, ww - 2 - 2 * pad), std::max(0.0, t - 2 - 2 * pad)},
-                                 depth + 1, minArea, out, out.back().path, maxDepth);
+                constexpr double pad = 2.0;
+                constexpr double header = 12.0;
+                if (row[i]->dir && ww > 2 * pad + 8 && t > header + pad + 8)
+                    treemapTiles(*row[i], Rect {cx + pad, y + header,
+                                                std::max(0.0, ww - 2 * pad),
+                                                std::max(0.0, t - header - pad)},
+                                 depth + 1, minArea, out, out.back().path, maxDepth, nullptr,
+                                 rowHue0[i], rowHue1[i]);
                 cx += ww;
             }
             y += t;
@@ -228,10 +247,18 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         }
         row.clear();
         rowAreas.clear();
+        rowHues.clear();
+        rowHue0.clear();
+        rowHue1.clear();
         rowSum = 0;
     };
 
+    double hueAcc = 0;
     for (const Node* kid : kids) {
+        const double fraction = static_cast<double>(kid->logical) / total;
+        const double c0 = hue0 + (hue1 - hue0) * hueAcc;
+        const double c1 = hue0 + (hue1 - hue0) * (hueAcc + fraction);
+        hueAcc += fraction;
         const double a = static_cast<double>(kid->logical) * scale;
         if (a < minArea)
             continue; // culled: the parent keeps its whole area
@@ -241,6 +268,9 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         if (row.empty()) {
             row.push_back(kid);
             rowAreas.push_back(a);
+            rowHues.push_back((c0 + c1) / 2);
+            rowHue0.push_back(c0);
+            rowHue1.push_back(c1);
             rowSum = a;
             continue;
         }
@@ -249,11 +279,17 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         if (after <= before) {
             row.push_back(kid);
             rowAreas.push_back(a);
+            rowHues.push_back((c0 + c1) / 2);
+            rowHue0.push_back(c0);
+            rowHue1.push_back(c1);
             rowSum += a;
         } else {
             flushRow();
             row.push_back(kid);
             rowAreas.push_back(a);
+            rowHues.push_back((c0 + c1) / 2);
+            rowHue0.push_back(c0);
+            rowHue1.push_back(c1);
             rowSum = a;
         }
     }
@@ -269,6 +305,8 @@ struct Slice {
     double r0 = 0, r1 = 0; // the ring's radii
     bool dir = false;
     std::wstring path; // display path; the recursion threads it through
+    // Position on the colour wheel (0..1) from the slice's angle.
+    double hue = -1;
 };
 
 inline void sunburstSlices(const Node& node, double cx, double cy, double r0, double ringWidth,
@@ -305,6 +343,8 @@ inline void sunburstSlices(const Node& node, double cx, double cy, double r0, do
         s.r1 = r1;
         s.dir = kid->dir;
         s.path = childPath(basePath, kid->name);
+        const double turn = (s.a0 + s.a1) / 2.0 / 6.283185307179586;
+        s.hue = turn - std::floor(turn);
         out.push_back(std::move(s));
         if (kid->dir)
             sunburstSlices(*kid, cx, cy, r1, ringWidth, a, a + span, depth + 1, minAngle, out,
