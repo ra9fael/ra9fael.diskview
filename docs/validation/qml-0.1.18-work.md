@@ -55,7 +55,7 @@
 - `--self-test` 树图与圆环两种视图：
   `... drag chart=double columns=84->108 reset=84 PASS`；圆环 `chart=double,center ... PASS`。
 - `check-dock.ps1`：4 档缩放 × 2 视图共 8 轮通过（含重启）。
-- 视觉检查（截图在 `build/stage-a|b|c/`，不入库）：夹具浅色/深色、真实扫描
+- 视觉检查（截图留在 `build/qml-0.1.18-check/`，不入库）：夹具浅色/深色、真实扫描
   `D:\dev\github\winshun-dev\ra9fael.diskview-qml`、Dock 布局 1:1 与 1.25、选中文件夹、
   选中文件、悬停、窄面板（文件面板只剩 名称/%/大小/已分配）、宽列持久化。
 - 深色用 `WS_APPEARANCE` 注入 `nativeLook`（颜色必须 `#AARRGGBB`）；选中截图用
