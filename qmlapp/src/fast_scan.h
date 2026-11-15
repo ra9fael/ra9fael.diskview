@@ -194,6 +194,49 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
     }
     std::vector<std::pair<quint32, quint64>>().swap(nodes.baseSizes);
 
+    // A hard link has one record but several $FILE_NAME attributes, so the read
+    // produced one entry per name with the same size. Count the bytes once:
+    // the first name keeps the size, later names are marked duplicate and are
+    // not emitted (an alias would otherwise double the folder total).
+    {
+        std::vector<quint8> counted;
+        const bool direct = highest < (64u * 1024u * 1024u);
+        if (direct) counted.assign(static_cast<std::size_t>(highest) + 1, 0);
+        std::vector<int> sparse;
+        if (!direct) {
+            sparse.reserve(static_cast<std::size_t>(count));
+            for (int i = 0; i < count; ++i)
+                if (!(nodes.flags[static_cast<std::size_t>(i)] & 1)) sparse.push_back(i);
+            std::sort(sparse.begin(), sparse.end(), [&nodes](int a, int b) {
+                return nodes.record[static_cast<std::size_t>(a)] < nodes.record[static_cast<std::size_t>(b)];
+            });
+        }
+        quint32 previous = 0;
+        bool havePrevious = false;
+        for (int k = 0; k < (direct ? count : static_cast<int>(sparse.size())); ++k) {
+            const int i = direct ? k : sparse[static_cast<std::size_t>(k)];
+            if (i < 0) continue;
+            if (nodes.flags[static_cast<std::size_t>(i)] & 1) continue;
+            if (nodes.logical[static_cast<std::size_t>(i)] == 0) continue;
+            const quint32 record = nodes.record[static_cast<std::size_t>(i)];
+            bool duplicate = false;
+            if (direct) {
+                if (record < counted.size()) {
+                    duplicate = counted[record] != 0;
+                    counted[record] = 1;
+                }
+            } else {
+                duplicate = havePrevious && previous == record;
+                previous = record;
+                havePrevious = true;
+            }
+            if (duplicate) {
+                nodes.logical[static_cast<std::size_t>(i)] = 0;
+                nodes.flags[static_cast<std::size_t>(i)] |= 8; // duplicate hard link
+            }
+        }
+    }
+
     const int rootNode = count;
     std::vector<std::int32_t> parentOf(static_cast<std::size_t>(count), rootNode);
     orphanTotal = 0;
@@ -249,6 +292,7 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
         ++frame.childPos;
         if (child < 0 || visited[static_cast<std::size_t>(child)]) continue;
         visited[static_cast<std::size_t>(child)] = 1;
+        if (nodes.flags[static_cast<std::size_t>(child)] & 8) continue; // hard-link alias
         const QStringView name = nodes.nameAt(child);
         const bool dir = (nodes.flags[static_cast<std::size_t>(child)] & 1) != 0;
         // Only directories can match an excluded folder, and only directories

@@ -273,6 +273,18 @@ void testFlatBuild()
                                   mergedExcluded, mergedOrphans, mergedUnknown);
     check(merged.sizes.at(0) == 4096 && mergedUnknown == 0,
           "base-record size fills an extension-only name");
+
+    // A hard link is one record with two names; the bytes must be counted once.
+    auto hardLinks = diskview::fastscan::nodesFromEntries({
+        entry(60, root, L"first.bin", false, true, 100),
+        entry(60, root, L"second.bin", false, true, 100),
+    });
+    FlatTree linked;
+    std::uint64_t linkedExcluded = 0, linkedOrphans = 0, linkedUnknown = 0;
+    diskview::fastscan::buildFlat(hardLinks, 4096, L"C:\\", {}, linked,
+                                  linkedExcluded, linkedOrphans, linkedUnknown);
+    check(linked.count() == 2, "a hard-link alias is not emitted twice");
+    check(linked.sizes.at(0) == 100, "hard-linked bytes are counted once");
 }
 
 int main(int argc, char** argv)
