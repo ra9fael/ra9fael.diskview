@@ -118,45 +118,74 @@
 
 ---
 
-## 5. 主题背景与 WinShun 一致
+## 5. 主题背景与 WinShun 一致（照 tio 的 appearance 契约）
 
-### 现状
-颜色写死在 `ThemeBridge::apply()` 的浅/深两套；宿主只传 `light`/`dark`，
-拿不到 WinShun 四种风格的窗口色。
+### 关键发现（看 ra9fael.tio 的实现）
+宿主**已经**在 `initialize` / `appearance` 里下发完整的 `nativeLook`，不是等
+上游：
 
-### 方案
-分两层：
-1. **现在可做**：从系统 `QPalette` 取值（`Window`、`Base`、`AlternateBase`、
-   `Mid`、`Text`、`PlaceholderText`、`Highlight`、`Accent`），映射到窗口/面板/
-   边框/文本/选中色。WinShun 的浅深两层也跟随系统，普通 Fluent/Windows 主题下
-   会基本一致；accent 已同源。
-2. **上游合并后**：`appearance` 里增加 `tokens`（window/surface/border/text/
-   accent/radius），`ThemeBridge` 优先用宿主 token，缺失才回退到系统调色板。
-   这一步等协议支持，不臆造字段。
-3. 深色标题栏：给窗口加 `DWMWA_USE_IMMERSIVE_DARK_MODE`（Windows 10 20H1+）。
+- `winshun::Plugin::appearance()` 返回整个 params；
+- 字段：`uiStyle`（fluent/brand/tactile/liquid）、`uiSize`
+  （compact/normal/roomy，文档示例也有 standard）、`corners`、`transparency`、
+  `nativeLook.style/dark/rounded`；
+- 颜色（`#AARRGGBB`）：`background` `layer` `page` `windowEdge` `divider`
+  `text` `subtext` `faint` `hover` `pressed` `tagFill` `control`
+  `controlHover` `controlBorder` `inputFocused` `menuBackground` `menuHover`
+  `menuEdge` `accent` `accentFill` `accentLine` `accentText` `textSelection`
+  `caret` `danger` `dangerFill`；
+- 圆角：`cardRadius` `controlRadius` `largeControlRadius` `smallControlRadius`
+  `menuRadius` `menuItemRadius` `menuPadding`。
+- 透明效果下 `layer`/`hover` 可能是半透明，要先叠到 `background` 上。
+
+tio 的做法（`qmlapp/ThemeBridge.*`、`qmlapp/qml/DesignTokens.qml`）：
+1. `initialized()` 和 `appearanceChanged()` 里 `core().setAppearance(appearance())`；
+2. `Look` 结构保存所有字段，缺失的用一套 fluent 近似值兜底；
+3. `ThemeBridge` 把 `background/layer/page/divider/...` 映射成窗口/卡片/边框/
+   文本等 QML 属性，半透明色用 `over(color, base)` 合成；
+4. 圆角在“直角”设置下返回 0；
+5. QML 用 `DesignTokens` 单例读取，一处 `changed()` 全窗口重绘。
+
+### 我们的落地方案（不再等上游）
+1. `ScanSettings` 之外新增 `AppearanceTokens`（或直接扩展 `ThemeBridge`）：
+   - 用现有 `winshun::Plugin::appearance()` 解析，不引入新权限；
+   - 保留 `appearance` 当前值，窗口重开仍能立即用上（tio 就是这么做的）。
+2. `plugin_main.cpp`：恢复 `appearanceChanged()`（之前为了“设置同步”被我们关掉，
+   但外观 token 不受该限制），调用 `QmlHost::setAppearance(json)`。
+3. `ThemeBridge::apply()` 改为优先用 `nativeLook`：
+   - `window = over(background, page)`、`surface=over(layer, window)`、
+     `border=over(divider, surface)`、`hoverRow=over(hover,surface)`、
+     `selection=over(tagFill,surface)`、`accent/accentFill/accentText`、
+     `error=danger`；
+   - `radius`/`controlHeight`/`fontSize` 由 `corners`、`uiSize` 决定；
+   - 缺失字段回退现有浅/深表。
+4. 深色标题栏：`DWMWA_USE_IMMERSIVE_DARK_MODE`（Windows 10 20H1+）。
+5. 不碰宿主设置同步（那是另一件事，仍按你的要求关闭）。
 
 ### 验收
-- 浅色/深色切换后，窗口背景与系统设置页/资源管理器主窗口肉眼接近。
-- 四种 WinShun 风格在上游 token 到位后逐项比对（暂不作为本轮验收）。
+- 四种 style × 深/浅：窗口背景、卡片、边框、文字、选中色与 WinShun 一致；
+- 切换“圆角/直角”“界面大小”后窗口跟着变；
+- 老宿主没有 `nativeLook` 时回退到现有配色，不崩。
 
 ### 涉及
-`ThemeBridge.*`、`plugin_main.cpp`（appearance）、`QmlHost.cpp`（DWM）。
+`ThemeBridge.*`、`plugin_main.cpp`、`QmlHost.*`、`ScanTree` 无关。
 
 ---
 
-## 6. ComboBox 图标太大且丑
+## 6. ComboBox 图标太大且丑（照 tio 的 TokenComboBox）
 
-### 现状
-Qt Basic 风格的默认指示器是一个大三角，与 PH 图标体系不一致。
+tio 的 `qmlapp/qml/TokenComboBox.qml` 已经解决了同一问题，直接采用其结构：
 
-### 方案
-1. 新增 `ThemedComboBox.qml`（或统一 `indicator`/`contentItem`/`background`）：
-   - 高度 24；背景 `theme.surfaceAlt`、1 px 边框、圆角 4；
-   - 文本 11 px、左右内边距 8/22；
-   - 指示器用 `Glyph { iconName: "caret-down"; size: 12 }`，右侧 20 px 区域；
-   - 弹出菜单：圆角 4、边框 `theme.border`、每项高 26、悬停 `theme.hoverRow`。
-2. 把所有 `ComboBox`（布局、搜索范围、匹配方式、图层数）替换成该组件。
-3. 下拉项文字超长省略，右侧显示当前值提示。
+- `background`: `controlRadius` 圆角，`control`/`inputFocused` 底色，
+  `controlBorder`/`accent` 1 px 边框；
+- `contentItem`: 文本左 10、右预留指示器，`fontCaption`，省略；
+- `indicator`: 10×6 的线条箭头，用 `muted` 色、1.5 px 描边（不是大三角）；
+- 弹出：`card` 底、`border` 边框、`controlRadius` 圆角、4 px 内边距、
+  每项 `smallRadius` 悬停 `hover`、最高 320 px、带滚动条。
+
+我们落地时把 `muted`/`card`/`hover` 换成第 5 项的 token；若想保留 PH 图标，
+把 `indicator` 换成 `Glyph caret-down` 12 px，二者视觉一致，优先用 PH 以统一。
+
+把所有 `ComboBox`（布局、搜索范围、匹配方式、层级数）替换成该组件。
 
 ### 验收
 - 任何缩放下箭头 12 px、不糊；与工具栏其他 PH 图标同风格。
@@ -250,4 +279,5 @@ SDK 提供 `Plugin::tool("search_files", args)`，受 `winshun:search` 权限控
 ## 需要你确认
 1. 文件面板默认是否改为“只列当前目录的直接文件”（提供“包含子目录”开关）？
 2. 地址栏搜索先用 `ws` CLI（方案 A），还是等协议桥（方案 B）？
-3. 主题先用系统调色板近似，还是必须等上游 token？
+3. ~~主题等上游~~ 已确认宿主现在就下发 `nativeLook`（tio 在用），无需等上游；
+   直接照 tio 接入。
