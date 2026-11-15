@@ -80,6 +80,9 @@ public:
     Q_INVOKABLE QVariantList drives() const;
     // The system folder picker. Empty when the user cancels.
     Q_INVOKABLE QString chooseFolder(const QString& initial) const;
+    // WinShun's own fuzzy search (the ws CLI over its index), as
+    // [{path, name, dir, parent}]. Empty when ws or the index is unavailable.
+    Q_INVOKABLE QVariantList searchPaths(const QString& text) const;
     // Builds a tree of that many nodes and times the whole chart pipeline.
     bool runChartBenchmark(int nodes, QString* report);
 

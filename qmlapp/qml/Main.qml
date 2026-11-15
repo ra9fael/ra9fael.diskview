@@ -48,6 +48,7 @@ ApplicationWindow {
         // The file view remembers how it was left.
         diskModel.fuzzyMatch = scanSettings.fuzzyMatch
         fileListModel.wholeTree = scanSettings.wholeTree
+        fileListModel.recursive = scanSettings.fileRecursive
         // ... and so does the chart: how many levels of blocks it draws.
         diskModel.chartDepth = scanSettings.chartDepth
         chart.depth = scanSettings.chartDepth
@@ -72,12 +73,6 @@ ApplicationWindow {
         scanSettings.hiddenColumns = hidden
         scanSettings.save()
     }
-    function resizeColumn(which, key, delta) {
-        const box = which === "file" ? fileColumns : columns
-        const minimum = key === "pct" ? 48 : key === "modified" ? 80 : key === "attrs" ? 42 : 52
-        box[key] = Math.max(minimum, box[key] + delta)
-    }
-
     // The breadcrumb of the current folder, shortened when it gets long the
     // way the native panel shortens it.
     property var crumbs: {
@@ -95,6 +90,8 @@ ApplicationWindow {
     // Which picture the chart draws: 0 treemap, 1 sunburst. The startup value
     // is the host's default view; the toolbar switches it for this window.
     property int chartKind: diskViewMode
+    // Address-bar suggestions from WinShun's own index (the ws CLI).
+    property var pathSuggestions: []
     // The two panels' arrangement: "tablesTop" (default), "tablesBottom",
     // "tablesLeft" or "tablesRight". The tables keep their tree|legend split,
     // turned to match (side by side above/below, stacked left/right).
@@ -363,7 +360,83 @@ ApplicationWindow {
                     text: initialScanPath
                     placeholderText: "输入或选择要扫描的位置"
                     selectByMouse: true
-                    onAccepted: if (text.trim().length > 0) scanService.start(text.trim())
+                    onTextEdited: searchTimer.restart()
+                    onAccepted: {
+                        searchTimer.stop()
+                        window.pathSuggestions = []
+                        if (text.trim().length > 0) scanService.start(text.trim())
+                    }
+                }
+                Popup {
+                    id: suggestPopup
+                    parent: pathField
+                    x: 0
+                    y: pathField.height + 3
+                    width: pathField.width
+                    padding: 4
+                    visible: pathField.activeFocus && window.pathSuggestions.length > 0
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    background: Rectangle {
+                        radius: theme.radius
+                        color: theme.surface
+                        border.width: 1
+                        border.color: theme.border
+                    }
+                    contentItem: ListView {
+                        implicitHeight: Math.min(contentHeight + 8, 260)
+                        clip: true
+                        model: window.pathSuggestions
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: ItemDelegate {
+                            required property var modelData
+                            width: ListView.view.width
+                            height: 28
+                            background: Rectangle {
+                                radius: theme.radius
+                                color: parent.hovered ? theme.hoverRow : "transparent"
+                            }
+                            contentItem: RowLayout {
+                                spacing: 6
+                                Glyph {
+                                    iconName: modelData.dir ? "folder" : "file"
+                                    size: 14
+                                    color: theme.textMuted
+                                    Layout.alignment: Qt.AlignVCenter
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData.name.length ? modelData.name : modelData.path
+                                        font.pixelSize: 11
+                                        color: theme.text
+                                        elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData.dir ? modelData.path : modelData.parent
+                                        font.pixelSize: 10
+                                        color: theme.textMuted
+                                        elide: Text.ElideMiddle
+                                    }
+                                }
+                            }
+                            onClicked: {
+                                const target = modelData.dir ? modelData.path : modelData.parent
+                                pathField.text = target
+                                window.pathSuggestions = []
+                                scanService.start(target)
+                            }
+                        }
+                    }
+                }
+                Timer {
+                    id: searchTimer
+                    interval: 250
+                    onTriggered: window.pathSuggestions = pathField.text.trim().length > 0
+                                 ? appHost.searchPaths(pathField.text) : []
                 }
                 ToolButton {
                     id: browseButton
@@ -479,6 +552,48 @@ ApplicationWindow {
                     placeholderText: "筛选名称或文件…"
                     selectByMouse: true
                     onTextEdited: diskModel.filter = text
+                }
+            }
+        }
+
+        // ---- workspace bar: fullscreen lives here, not in a pane -------
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 34
+            color: theme.surface
+            border.color: theme.border
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 6
+                Label { text: "全屏"; font.pixelSize: 11; color: theme.textMuted }
+                Button {
+                    visible: window.chartLayout !== "dock"
+                    text: window.maximizedPane === "tables" ? "还原表格" : "表格全屏"
+                    onClicked: window.maximizePane("tables")
+                }
+                Button {
+                    visible: window.chartLayout !== "dock"
+                    text: window.maximizedPane === "chart" ? "还原图表" : "图表全屏"
+                    onClicked: window.maximizePane("chart")
+                }
+                Repeater {
+                    model: window.chartLayout === "dock"
+                           ? [{ id: "tree", label: "树" }, { id: "files", label: "文件" },
+                              { id: "legend", label: "扩展名" }, { id: "chart", label: "可视化" }]
+                           : []
+                    delegate: Button {
+                        required property var modelData
+                        text: window.maximizedPane === modelData.id ? "还原" : modelData.label + "全屏"
+                        onClicked: window.maximizePane(modelData.id)
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    visible: window.maximizedPane !== ""
+                    text: "全部还原"
+                    onClicked: window.maximizePane(window.maximizedPane)
                 }
             }
         }
@@ -600,23 +715,13 @@ ApplicationWindow {
                                     elide: Text.ElideRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(1) }
                                 }
-                                Item {
-                                    Layout.preferredWidth: 12
-                                    Layout.fillHeight: true
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.SizeHorCursor
-                                        property real startX
-                                        onPressed: startX = mouse.x
-                                        onPositionChanged: if (pressed) window.resizeColumn("tree", "pct", mouse.x - startX)
-                                    }
-                                }
                                 Label {
                                     visible: !window.columnHidden("pct")
                                     Layout.preferredWidth: columns.pct
                                     text: "% 父级"
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "pct"; defaultWidth: 78; minimum: 48 }
                                 }
                                 Label {
                                     Layout.preferredWidth: columns.size
@@ -624,11 +729,16 @@ ApplicationWindow {
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(0) }
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "size"; defaultWidth: 84 }
                                 }
-                                Label { visible: !window.treeColumnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.treeColumnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.treeColumnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { visible: !window.treeColumnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "alloc"; defaultWidth: 84 } }
+                                Label { visible: !window.treeColumnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "items"; defaultWidth: 62 } }
+                                Label { visible: !window.treeColumnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "files"; defaultWidth: 62 } }
+                                Label { visible: !window.treeColumnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "dirs"; defaultWidth: 58 } }
                                 Label {
                                     visible: !window.treeColumnHidden("modified")
                                     Layout.preferredWidth: columns.modified
@@ -636,8 +746,10 @@ ApplicationWindow {
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                     horizontalAlignment: Text.AlignRight
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(2) }
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "modified"; defaultWidth: 118; minimum: 80 }
                                 }
-                                Label { visible: !window.treeColumnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { visible: !window.treeColumnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "attrs"; defaultWidth: 64; minimum: 42 } }
                             }
                         }
                         ListView {
@@ -820,16 +932,16 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label {
                                     Layout.fillWidth: true
-                                    text: "文件" + (fileListModel.wholeTree ? " · 整个扫描" : "")
+                                    text: "文件" + (fileListModel.wholeTree ? " · 整个扫描"
+                                            : fileListModel.recursive ? " · 含子目录" : "")
                                     font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
                                 }
                                 // Where the files come from: the folder the
                                 // chart is on, or the whole scan.
-                                ComboBox {
-                                    implicitWidth: 78
+                                ThemedComboBox {
+                                    implicitWidth: 76
                                     implicitHeight: 22
-                                    font.pixelSize: 10
-                                    model: ["当前目录", "整个扫描"]
+                                    model: ["当前", "整个扫描"]
                                     currentIndex: fileListModel.wholeTree ? 1 : 0
                                     onActivated: {
                                         fileListModel.wholeTree = (index === 1)
@@ -837,20 +949,87 @@ ApplicationWindow {
                                         scanSettings.save()
                                     }
                                 }
+                                // Walk the folder's subtree. Off by default: a
+                                // big folder's recursive listing is what made
+                                // the first paint slow.
+                                ToolButton {
+                                    id: recursiveButton
+                                    implicitWidth: 26
+                                    implicitHeight: 22
+                                    checkable: true
+                                    checked: fileListModel.recursive
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: "包含子目录（大目录会慢）"
+                                    onToggled: {
+                                        fileListModel.recursive = checked
+                                        scanSettings.fileRecursive = checked
+                                        scanSettings.save()
+                                    }
+                                    background: Rectangle {
+                                        radius: 3
+                                        color: recursiveButton.checked ? theme.selection : "transparent"
+                                        border.color: theme.border
+                                    }
+                                    contentItem: Glyph {
+                                        iconName: "folders"
+                                        size: 13
+                                        color: recursiveButton.checked ? theme.text : theme.textMuted
+                                    }
+                                }
                                 // How loosely a text matches: a substring of
                                 // the path, or the fuzzy subsequence of the
                                 // name.
-                                ComboBox {
-                                    implicitWidth: 78
+                                ThemedComboBox {
+                                    implicitWidth: 62
                                     implicitHeight: 22
-                                    font.pixelSize: 10
-                                    model: ["子串匹配", "模糊匹配"]
+                                    model: ["子串", "模糊"]
                                     currentIndex: diskModel.fuzzyMatch ? 1 : 0
                                     onActivated: {
                                         diskModel.fuzzyMatch = (index === 1)
                                         scanSettings.fuzzyMatch = diskModel.fuzzyMatch
                                         scanSettings.save()
                                     }
+                                }
+                            }
+                        }
+                        // Column headers, with the same drag strips as the
+                        // tree table; widths live in fileColumns.
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 22
+                            color: theme.surfaceAlt
+                            border.color: theme.border
+                            RowLayout {
+                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
+                                Label { Layout.fillWidth: true; text: "名称"; font.pixelSize: 10; color: theme.textMuted; elide: Text.ElideRight }
+                                Label {
+                                    visible: !window.columnHidden("pct")
+                                    Layout.preferredWidth: fileColumns.pct
+                                    text: "% 父级"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "pct"; defaultWidth: 78; minimum: 48 }
+                                }
+                                Label {
+                                    Layout.preferredWidth: fileColumns.size
+                                    text: "大小"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "size"; defaultWidth: 84 }
+                                }
+                                Label {
+                                    visible: !window.columnHidden("alloc") && filePane.width > 460
+                                    Layout.preferredWidth: fileColumns.alloc
+                                    text: "已分配"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "alloc"; defaultWidth: 84 }
+                                }
+                                Label {
+                                    visible: !window.columnHidden("modified") && filePane.width > 560
+                                    Layout.preferredWidth: fileColumns.modified
+                                    text: "修改时间"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "modified"; defaultWidth: 118; minimum: 80 }
+                                }
+                                Label {
+                                    visible: !window.columnHidden("attributes") && filePane.width > 640
+                                    Layout.preferredWidth: fileColumns.attrs
+                                    text: "属性"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "attrs"; defaultWidth: 64; minimum: 42 }
                                 }
                             }
                         }
@@ -962,10 +1141,14 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label { Layout.preferredWidth: 18; text: "" }
                                 Label { Layout.fillWidth: true; Layout.minimumWidth: 70; text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted }
-                                Label { Layout.preferredWidth: 52; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 66; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 66; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: 52; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: legendColumns.percent; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "percent"; defaultWidth: 52; minimum: 40 } }
+                                Label { Layout.preferredWidth: legendColumns.size; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "size"; defaultWidth: 66; minimum: 48 } }
+                                Label { Layout.preferredWidth: legendColumns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "alloc"; defaultWidth: 66; minimum: 48 } }
+                                Label { Layout.preferredWidth: legendColumns.files; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
+                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "files"; defaultWidth: 52; minimum: 40 } }
                             }
                         }
                         ListView {
@@ -1000,7 +1183,7 @@ ApplicationWindow {
                                         color: theme.text; font.pixelSize: 11
                                     }
                                     Item {
-                                        Layout.preferredWidth: 52
+                                        Layout.preferredWidth: legendColumns.percent
                                         Layout.fillHeight: true
                                         Rectangle {
                                             x: 2
@@ -1020,9 +1203,9 @@ ApplicationWindow {
                                             color: theme.text; font.pixelSize: 11
                                         }
                                     }
-                                    Label { Layout.preferredWidth: 66; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: 66; text: modelData.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: 52; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: legendColumns.size; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: legendColumns.alloc; text: modelData.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Label { Layout.preferredWidth: legendColumns.files; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
                                 }
                             }
                         }
@@ -1161,11 +1344,10 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     Label { text: "层级"; font.pixelSize: 11; color: theme.textMuted }
-                    ComboBox {
+                    ThemedComboBox {
                         id: depthBox
                         implicitWidth: 76
                         implicitHeight: 26
-                        font.pixelSize: 11
                         model: ["1", "2", "3", "4", "5"]
                         currentIndex: chart.depth - 1
                         ToolTip.visible: hovered
@@ -1186,11 +1368,10 @@ ApplicationWindow {
                         contentItem: Glyph { iconName: "layout"; size: 15; color: theme.textMuted }
                     }
                     Label { text: "布局"; font.pixelSize: 11; color: theme.textMuted }
-                    ComboBox {
+                    ThemedComboBox {
                         id: layoutBox
                         implicitWidth: 104
                         implicitHeight: 26
-                        font.pixelSize: 11
                         model: ["表格在上", "图表在上", "表格在左", "图表在左", "自由 Dock"]
                         currentIndex: Math.max(0, ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight", "dock"].indexOf(window.chartLayout))
                         ToolTip.visible: hovered
@@ -1204,40 +1385,6 @@ ApplicationWindow {
                             scanSettings.chartLayout = window.chartLayout
                             scanSettings.save()
                             verticalSplit.applyLayoutOrder()
-                        }
-                    }
-                    ToolButton {
-                        id: tablesFullscreenButton
-                        implicitHeight: 26
-                        ToolTip.visible: hovered
-                        ToolTip.text: window.maximizedPane === "tables" ? "还原表格" : "表格全屏"
-                        onClicked: window.maximizePane("tables")
-                        contentItem: Row {
-                            spacing: 4
-                            Glyph { iconName: window.maximizedPane === "tables" ? "arrows-in" : "arrows-out"; size: 14; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
-                            Label {
-                                text: window.maximizedPane === "tables" ? "还原" : "表格全屏"
-                                font.pixelSize: 11
-                                color: theme.textMuted
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-                    }
-                    ToolButton {
-                        id: chartFullscreenButton
-                        implicitHeight: 26
-                        ToolTip.visible: hovered
-                        ToolTip.text: window.maximizedPane === "chart" ? "还原图表" : "图表全屏"
-                        onClicked: window.maximizePane("chart")
-                        contentItem: Row {
-                            spacing: 4
-                            Glyph { iconName: window.maximizedPane === "chart" ? "arrows-in" : "arrows-out"; size: 14; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
-                            Label {
-                                text: window.maximizedPane === "chart" ? "还原" : "图表全屏"
-                                font.pixelSize: 11
-                                color: theme.textMuted
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
                         }
                     }
                 }
@@ -1415,5 +1562,12 @@ ApplicationWindow {
         property int alloc: 84
         property int modified: 118
         property int attrs: 64
+    }
+    QtObject {
+        id: legendColumns
+        property int percent: 52
+        property int size: 66
+        property int alloc: 66
+        property int files: 52
     }
 }

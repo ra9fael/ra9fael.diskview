@@ -26,6 +26,9 @@ class ScanSettings : public QObject {
     // through the whole scan instead of the folder that is open.
     Q_PROPERTY(bool fuzzyMatch READ fuzzyMatch WRITE setFuzzyMatch NOTIFY changed)
     Q_PROPERTY(bool wholeTree READ wholeTree WRITE setWholeTree NOTIFY changed)
+    // Whether the file panel lists the folder's whole subtree. Off by default;
+    // the recursive walk is what made a big folder's first paint slow.
+    Q_PROPERTY(bool fileRecursive READ fileRecursive WRITE setFileRecursive NOTIFY changed)
     // How many levels the chart draws, 1 (folders as whole tiles) to 5. The
     // native plugin offers the same switch; a deeper chart is what makes a
     // drive readable at a glance.
@@ -62,6 +65,8 @@ public:
     void setFuzzyMatch(bool fuzzy);
     bool wholeTree() const { return m_wholeTree; }
     void setWholeTree(bool whole);
+    bool fileRecursive() const { return m_fileRecursive; }
+    void setFileRecursive(bool recursive);
     int chartDepth() const { return m_chartDepth; }
     void setChartDepth(int depth);
     bool chartOnTop() const { return m_chartOnTop; }
@@ -90,6 +95,7 @@ private:
     QStringList m_hiddenColumns;
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;
+    bool m_fileRecursive = false;
     int m_chartDepth = 2;
     bool m_chartOnTop = false;
     QString m_chartLayout = QStringLiteral("tablesTop");

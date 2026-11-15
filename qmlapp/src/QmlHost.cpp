@@ -10,8 +10,10 @@
 
 #include <QClipboard>
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QStorageInfo>
 
 #include <windows.h>
@@ -557,6 +559,18 @@ bool QmlHost::runSelfTest(QString* report)
         return false;
     }
 
+    // Zoom only magnifies: the whole picture fills the item at 1:1 and cannot
+    // be shrunk away.
+    chart->setZoom(0.25);
+    const bool zoomFloor = qFuzzyCompare(chart->zoom(), 1.0);
+    chart->setZoom(50.0);
+    const bool zoomCeiling = chart->zoom() <= 12.0 && chart->zoom() > 1.0;
+    chart->resetView();
+    if (!zoomFloor || !zoomCeiling) {
+        *report = QStringLiteral("FAIL\tchart zoom range\n");
+        return false;
+    }
+
     const QString hit = chart->firstRegionHit();
     const bool regions = chart->validateHitTest();
     const bool transform = !hit.isEmpty() && chart->validateHitTransform();
@@ -743,6 +757,45 @@ QVariantList QmlHost::drives() const
             {"path", root},
             {"label", root},
             {"detail", QStringLiteral("%1 可用 / %2").arg(gb(storage.bytesAvailable()), gb(storage.bytesTotal()))},
+        });
+    }
+    return rows;
+}
+
+QVariantList QmlHost::searchPaths(const QString& text) const
+{
+    QVariantList rows;
+    const QString query = text.trimmed();
+    if (query.isEmpty()) return rows;
+    // `ws` indexes names (pinyin included) and is already the host's own
+    // search. It is started on demand; a missing CLI or a cold index simply
+    // leaves the suggestions empty and the field keeps working by hand.
+    QProcess process;
+    process.setProgram(QStringLiteral("ws"));
+    process.setArguments({QStringLiteral("find"), query, QStringLiteral("--json"),
+                          QStringLiteral("-n"), QStringLiteral("12")});
+    process.start();
+    if (!process.waitForFinished(3000)) {
+        process.kill();
+        process.waitForFinished(500);
+        return rows;
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+        return rows;
+    const QJsonDocument document = QJsonDocument::fromJson(process.readAllStandardOutput());
+    if (!document.isArray()) return rows;
+    for (const QJsonValue& value : document.array()) {
+        const QJsonObject object = value.toObject();
+        const QString path = object.value(QStringLiteral("path")).toString();
+        if (path.isEmpty()) continue;
+        const QString type = object.value(QStringLiteral("type")).toString();
+        const bool dir = type == QStringLiteral("folder") || type == QStringLiteral("dir")
+                      || type == QStringLiteral("directory");
+        rows.append(QVariantMap{
+            {"path", path},
+            {"name", QFileInfo(path).fileName()},
+            {"dir", dir},
+            {"parent", QFileInfo(path).absolutePath()},
         });
     }
     return rows;

@@ -169,6 +169,13 @@ void ScanSettings::setWholeTree(bool whole)
     emit changed();
 }
 
+void ScanSettings::setFileRecursive(bool recursive)
+{
+    if (recursive == m_fileRecursive) return;
+    m_fileRecursive = recursive;
+    emit changed();
+}
+
 void ScanSettings::setChartDepth(int depth)
 {
     // One level means the folders stay whole tiles, five is as deep as the
@@ -282,6 +289,7 @@ bool ScanSettings::load()
     setHiddenColumns(hidden);
     m_fuzzyMatch = object.value(QStringLiteral("fuzzyMatch")).toBool(false);
     m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
+    m_fileRecursive = object.value(QStringLiteral("fileRecursive")).toBool(false);
     m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(2), 1, 5);
     m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
     const QString layout = object.value(QStringLiteral("chartLayout")).toString();
@@ -306,6 +314,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("hiddenColumns"), hidden);
     object.insert(QStringLiteral("fuzzyMatch"), m_fuzzyMatch);
     object.insert(QStringLiteral("wholeTree"), m_wholeTree);
+    object.insert(QStringLiteral("fileRecursive"), m_fileRecursive);
     object.insert(QStringLiteral("chartDepth"), m_chartDepth);
     object.insert(QStringLiteral("chartOnTop"), m_chartOnTop);
     object.insert(QStringLiteral("chartLayout"), m_chartLayout);

@@ -82,7 +82,9 @@ void ChartItem::setSelectedId(const QString& id)
 }
 void ChartItem::setZoom(qreal zoom)
 {
-    zoom = std::clamp(zoom, 0.5, 4.0);
+    // Never shrink the whole picture: 1:1 fills the item, and zoom is only for
+    // inspecting a part of it.
+    zoom = std::clamp(zoom, 1.0, 12.0);
     if (qFuzzyCompare(m_zoom, zoom)) return;
     m_zoom = zoom;
     emit zoomChanged();
@@ -184,8 +186,9 @@ QBrush ChartItem::fillBrush(const diskview::Node& node, const QRectF& rect, bool
 {
     const QColor base = fillFor(node, dimmed);
     if (rect.width() < 4 || rect.height() < 4) return base;
-    QColor top = base.lighter(node.dir ? 108 : 128);
-    QColor bottom = base.darker(node.dir ? 104 : 112);
+    // A gentle fade: a strong ramp pushed the saturated palette into neon.
+    QColor top = base.lighter(node.dir ? 106 : 112);
+    QColor bottom = base.darker(node.dir ? 104 : 110);
     top.setAlphaF(base.alphaF());
     bottom.setAlphaF(base.alphaF());
     QLinearGradient g(rect.topLeft(), rect.bottomLeft());
@@ -203,7 +206,9 @@ void ChartItem::rebuildGeometry()
 {
     m_regions.clear(); m_tiles.clear(); m_slices.clear();
     if(m_chartRoot.logical<=0||width()<2||height()<2){update();return;}
-    const qreal inset=8;
+    // The picture fills the item; only the sunburst keeps a hair of room for
+    // its outermost stroke.
+    const qreal inset = m_viewMode == 0 ? 0.0 : 2.0;
     const QRectF area(inset,inset,width()-2*inset,height()-2*inset);
     m_innerRadius=0;
     // The top level is depth 0, so one level means no recursion at all.
@@ -406,7 +411,8 @@ QString ChartItem::hitTest(const QPointF& position) const
 void ChartItem::paint(QPainter* painter)
 {
     if(m_chartRoot.logical==0||width()<2||height()<2)return;
-    const qreal inset=8; const QRectF area(inset,inset,width()-2*inset,height()-2*inset);
+    const qreal inset = m_viewMode == 0 ? 0.0 : 2.0;
+    const QRectF area(inset,inset,width()-2*inset,height()-2*inset);
     const QPointF origin=area.topLeft();
     const QPointF center=area.center();
     painter->save();
@@ -635,6 +641,21 @@ void ChartItem::hoverLeaveEvent(QHoverEvent* e)
 }
 void ChartItem::wheelEvent(QWheelEvent* e)
 {
-    const qreal factor = e->angleDelta().y() > 0 ? 1.15 : 1.0/1.15;
-    setZoom(m_zoom*factor); e->accept();
+    const qreal factor = e->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
+    const qreal wanted = std::clamp(m_zoom * factor, 1.0, 12.0);
+    if (qFuzzyCompare(wanted, m_zoom)) { e->accept(); return; }
+    // Keep the point under the pointer where it is, so a wheel turn inspects
+    // that spot instead of drifting the whole picture.
+    const QPointF position = e->position();
+    const QPointF transformCenter(width() / 2, height() / 2);
+    const QPointF local = (position - m_pan - transformCenter) / m_zoom + transformCenter;
+    setZoom(wanted);
+    QPointF pan = position - transformCenter - (local - transformCenter) * m_zoom;
+    // Do not let the picture be dragged completely out of view.
+    const qreal limitX = std::max<qreal>(0, (m_zoom - 1) * width() / 2);
+    const qreal limitY = std::max<qreal>(0, (m_zoom - 1) * height() / 2);
+    pan.setX(std::clamp(pan.x(), -limitX, limitX));
+    pan.setY(std::clamp(pan.y(), -limitY, limitY));
+    setPan(pan);
+    e->accept();
 }

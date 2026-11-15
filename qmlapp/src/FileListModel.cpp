@@ -44,6 +44,14 @@ void FileListModel::setWholeTree(bool whole)
     rebuild();
 }
 
+void FileListModel::setRecursive(bool recursive)
+{
+    if (m_recursive == recursive) return;
+    m_recursive = recursive;
+    emit recursiveChanged();
+    rebuild();
+}
+
 void FileListModel::rebuild()
 {
     if (!m_model || m_model->m_current < 0) {
@@ -64,7 +72,8 @@ void FileListModel::rebuild()
         ^ (quint64(m_model->m_sortKey + 1) << 55)
         ^ (m_model->m_ascending ? (1ull << 59) : 0ull)
         ^ (m_model->m_extensionFilterOn ? (quint64(qHash(m_model->m_extensionFilter)) << 40 | (1ull << 32)) : 0ull)
-        ^ (m_model->m_partial ? (1ull << 62) : 0ull);
+        ^ (m_model->m_partial ? (1ull << 62) : 0ull)
+        ^ (m_recursive ? (1ull << 61) : 0ull);
     if (m_cacheValid && signature == m_signature && !m_rows.isEmpty()) return;
     m_signature = signature;
     m_cacheValid = true;
@@ -73,15 +82,24 @@ void FileListModel::rebuild()
     m_rows.clear();
     // The whole-tree search walks everything; a folder's list walks its own
     // subtree. Either way only files are rows.
-    QVector<int> stack{root};
-    QString path;
-    while (!stack.isEmpty()) {
-        const int node = stack.takeLast();
-        const int count = m_model->childCountOf(node);
+    if (m_recursive || m_wholeTree) {
+        QVector<int> stack{root};
+        while (!stack.isEmpty()) {
+            const int node = stack.takeLast();
+            const int count = m_model->childCountOf(node);
+            for (int position = 0; position < count; ++position) {
+                const int child = m_model->childAt(node, position);
+                if (m_model->directoryOf(child)) stack.push_back(child);
+                else m_rows.push_back(child);
+            }
+        }
+    } else {
+        // The default: the folder's own files. Walking a large subtree on every
+        // navigation was the remaining second of a double click.
+        const int count = m_model->childCountOf(root);
         for (int position = 0; position < count; ++position) {
-            const int child = m_model->childAt(node, position);
-            if (m_model->directoryOf(child)) stack.push_back(child);
-            else m_rows.push_back(child);
+            const int child = m_model->childAt(root, position);
+            if (!m_model->directoryOf(child)) m_rows.push_back(child);
         }
     }
     // The text filter: a substring of the path, or the fuzzy subsequence of

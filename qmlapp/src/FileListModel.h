@@ -27,6 +27,9 @@ class FileListModel : public QAbstractListModel {
     // Where the files come from: the folder the chart is on, or the whole
     // scan (the old file view's "整个扫描").
     Q_PROPERTY(bool wholeTree READ wholeTree WRITE setWholeTree NOTIFY wholeTreeChanged)
+    // Walk the folder's whole subtree. Off by default: listing a folder with
+    // hundreds of thousands of descendants is what made a double click stall.
+    Q_PROPERTY(bool recursive READ recursive WRITE setRecursive NOTIFY recursiveChanged)
     Q_PROPERTY(int itemCount READ itemCount NOTIFY countChanged)
     Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectionChanged)
 
@@ -44,6 +47,8 @@ public:
     void setModel(DiskViewModel* model);
     bool wholeTree() const { return m_wholeTree; }
     void setWholeTree(bool whole);
+    bool recursive() const { return m_recursive; }
+    void setRecursive(bool recursive);
     int itemCount() const { return m_rows.size(); }
     int selectedRow() const;
 
@@ -62,6 +67,7 @@ public:
 signals:
     void modelChanged();
     void wholeTreeChanged();
+    void recursiveChanged();
     void countChanged();
     void selectionChanged();
 
@@ -72,6 +78,7 @@ private:
     DiskViewModel* m_model = nullptr;
     QVector<int> m_rows;
     bool m_wholeTree = false;
+    bool m_recursive = false;
     bool m_connected = false;
     quint64 m_signature = 0;
     bool m_cacheValid = false;

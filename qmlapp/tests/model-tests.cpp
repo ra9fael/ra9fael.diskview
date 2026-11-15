@@ -409,7 +409,9 @@ int main()
         shared.loadTree(tree());
         FileListModel files;
         files.setModel(&shared);
-        check(files.rowCount() == 4, "independent file panel loads existing scan");
+        check(files.rowCount() == 1, "the file panel lists the folder's own files by default");
+        files.setRecursive(true);
+        check(files.rowCount() == 4, "independent file panel loads existing scan when recursive");
         shared.selectExtension(QStringLiteral(".txt"));
         check(files.rowCount() == 1, "independent file panel follows extension pick");
         shared.loadTree(folder(QStringLiteral("D:\\"), 42, {file(QStringLiteral("replacement.txt"), 42)}));

@@ -12,11 +12,16 @@
 // always be traced back to its row.
 namespace diskviewqml {
 
+// A categorical palette with similar chroma and lightness: Okabe–Ito's
+// colour-blind-safe core first, then a second ring at the same weight. Adjacent
+// entries differ in hue, and the grey is reserved for folders so a big tile is
+// never mistaken for one.
 inline const QColor kExtensionPalette[] = {
-    QColor("#2f7ed8"), QColor("#16a085"), QColor("#e67e22"), QColor("#8e67c7"),
-    QColor("#d65b6b"), QColor("#0f9fb4"), QColor("#c4932d"), QColor("#6d9d3b"),
-    QColor("#c45b96"), QColor("#547ec3"), QColor("#e0a52d"), QColor("#2b9b91"),
-    QColor("#b85e5e"), QColor("#78a83e"), QColor("#526fae"), QColor("#c17a43"),
+    QColor("#0072B2"), QColor("#E69F00"), QColor("#009E73"), QColor("#CC79A7"),
+    QColor("#56B4E9"), QColor("#D55E00"), QColor("#4D4D4D"), QColor("#8C6D31"),
+    QColor("#5F4690"), QColor("#1C7C54"), QColor("#B03A5B"), QColor("#2E86AB"),
+    QColor("#C58B00"), QColor("#6B8E23"), QColor("#A0522D"), QColor("#3D5A80"),
+    QColor("#EE6C4D"), QColor("#7B2CBF"), QColor("#2A9D8F"), QColor("#E9C46A"),
 };
 
 inline QColor extensionColor(const QString& extension)
