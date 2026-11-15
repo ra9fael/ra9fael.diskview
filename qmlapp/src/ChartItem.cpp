@@ -36,6 +36,7 @@ diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QStri
     diskview::Node node; node.name=map.value("name").toString().toStdWString();
     node.logical=static_cast<std::uint64_t>(std::max(0.0,map.value("size").toDouble()));
     node.dir=map.value("directory").toBool();
+    node.group=map.value("group").toBool();
     const std::wstring path=parentPath.empty()?node.name:diskview::childPath(parentPath,node.name);
     const QString id=map.value("id").toString();
     ids.insert(path,id);
@@ -153,6 +154,15 @@ void ChartItem::setAccent(const QColor& accent)
 
 QColor ChartItem::fillFor(const diskview::Node& node, bool* dimmed) const
 {
+    // The small-files aggregate has no single extension: a neutral block, and
+    // it steps back whenever an extension filter is on.
+    if (node.group) {
+        const bool hidden = !m_highlightExtension.isEmpty();
+        if (dimmed) *dimmed = hidden;
+        return hidden ? kDimmedFill : (m_theme == QStringLiteral("dark")
+                                       ? QColor(QStringLiteral("#3A4150"))
+                                       : QColor(QStringLiteral("#B9BFC8")));
+    }
     // "(none)" is the legend's "(无)" pick: files without an extension stay
     // lit, everything else dims.
     const bool nonePick = m_highlightExtension == QStringLiteral("(none)");

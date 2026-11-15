@@ -25,6 +25,8 @@ Dialog {
             workersBox.currentIndex = scanSettings.workers === 0 ? 0 : [1, 2, 4, 8].indexOf(scanSettings.workers) + 1
             mediaBox.currentIndex = scanSettings.media
             previewBox.currentIndex = scanSettings.previewIntervalMs > 1500 ? 1 : 0
+            const sizes = [0, 16 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024]
+            smallFilesBox.currentIndex = Math.max(0, sizes.indexOf(scanSettings.smallFileThreshold))
         }
         draftExcluded.clear()
         const saved = scanSettings.excludedPaths
@@ -41,6 +43,8 @@ Dialog {
             scanSettings.workers = values[workersBox.currentIndex]
             scanSettings.media = mediaBox.currentIndex
             scanSettings.previewIntervalMs = previewBox.currentIndex === 1 ? 5000 : 1500
+            const sizes = [0, 16 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024]
+            scanSettings.smallFileThreshold = sizes[smallFilesBox.currentIndex] || 0
         }
         const paths = []
         for (let i = 0; i < draftExcluded.count; ++i) {
@@ -121,6 +125,16 @@ Dialog {
                 visible: !hostManagedSettings
                 Layout.fillWidth: true
                 model: ["平衡", "更少更新"]
+            }
+
+            // Files below this are folded into one row per folder, which is
+            // the biggest memory saving on a volume with millions of files.
+            Label { text: "小文件忽略"; color: theme.text; visible: !hostManagedSettings }
+            ThemedComboBox {
+                id: smallFilesBox
+                visible: !hostManagedSettings
+                Layout.fillWidth: true
+                model: ["不忽略", "16 KB", "64 KB", "256 KB", "1 MB"]
             }
         }
 

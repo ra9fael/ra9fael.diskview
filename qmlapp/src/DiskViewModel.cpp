@@ -490,6 +490,9 @@ QString DiskViewModel::pathOf(int index) const
     for (int i = index; i >= 0; i = parentOf(i)) chain.push_back(i);
     QString path;
     for (int i = chain.size() - 1; i >= 0; --i) {
+        // A small-files group is a display row, not a real entry: its path is
+        // the folder it sits in.
+        if (m_tree.flags.at(chain[i]) & 32) continue;
         const QString name = nameOf(chain[i]);
         if (path.isEmpty()) path = name;
         else if (path.endsWith('\\')) path += name;
@@ -500,6 +503,7 @@ QString DiskViewModel::pathOf(int index) const
 
 QString DiskViewModel::extOf(int index) const
 {
+    if (m_tree.flags.at(index) & 32) return QStringLiteral("@small");
     return directoryOf(index) ? QString() : diskviewqml::extensionOf(nameViewOf(index));
 }
 
@@ -949,7 +953,7 @@ QVariantList DiskViewModel::extensions() const
             Agg& agg = totals[extOf(index)];
             agg.size += sizeOf(index);
             agg.alloc += allocOf(index);
-            agg.files += 1;
+            agg.files += (m_tree.flags.at(index) & 32) ? int(m_tree.fileCounts.at(index)) : 1;
         }
     }
     QVector<QPair<QString, Agg>> sorted;
@@ -1024,7 +1028,8 @@ QVariantMap DiskViewModel::chartTree() const
             }
         }
         return {{"id", QString::number(index + 1)}, {"name", nameOf(index)}, {"size", double(sizeOf(index))},
-                {"directory", directoryOf(index)}, {"children", children}};
+                {"directory", directoryOf(index)}, {"group", (m_tree.flags.at(index) & 32) != 0},
+                {"children", children}};
     };
     QElapsedTimer timer;
     timer.start();

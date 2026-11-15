@@ -26,6 +26,8 @@ inline const QColor kExtensionPalette[] = {
 
 inline QColor extensionColor(const QString& extension)
 {
+    // The small-files aggregate is a neutral, not a file type.
+    if (extension == QStringLiteral("@small")) return QColor(QStringLiteral("#8B93A1"));
     // A stable hash, so the colour of an extension does not move between
     // scans or between the chart and the legend.
     quint32 hash = 0;
@@ -46,6 +48,7 @@ inline QString extensionLabel(const QString& extension)
 {
     static const QHash<QString, QString> labels{
         {QString(), QStringLiteral("无扩展名")},
+        {QStringLiteral("@small"), QStringLiteral("较小文件")},
         {QStringLiteral(".dll"), QStringLiteral("应用程序扩展")},
         {QStringLiteral(".exe"), QStringLiteral("应用程序")},
         {QStringLiteral(".sys"), QStringLiteral("系统文件")},

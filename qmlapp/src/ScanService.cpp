@@ -12,6 +12,7 @@
 #include "scan.h"
 #include "fast_scan.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -185,6 +186,7 @@ bool ScanService::beginScan(const QString& path, bool startPaused)
         options.workers = static_cast<unsigned>(m_settings->workers());
         options.media = static_cast<diskview::ScanOptions::Media>(m_settings->media());
         options.previewIntervalMs = static_cast<unsigned>(m_settings->previewIntervalMs());
+        options.smallFileThreshold = static_cast<std::uint64_t>(std::max(0, m_settings->smallFileThreshold()));
         for (const QString& excluded : m_settings->excludedPaths()) {
             options.excludedPaths.push_back(excluded.toStdWString());
         }

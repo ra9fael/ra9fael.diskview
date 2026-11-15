@@ -89,6 +89,7 @@ void FileListModel::rebuild()
             const int count = m_model->childCountOf(node);
             for (int position = 0; position < count; ++position) {
                 const int child = m_model->childAt(node, position);
+                if (m_model->m_tree.flags.at(child) & 32) continue; // small-files group
                 if (m_model->directoryOf(child)) stack.push_back(child);
                 else m_rows.push_back(child);
             }
@@ -99,6 +100,7 @@ void FileListModel::rebuild()
         const int count = m_model->childCountOf(root);
         for (int position = 0; position < count; ++position) {
             const int child = m_model->childAt(root, position);
+            if (m_model->m_tree.flags.at(child) & 32) continue;
             if (!m_model->directoryOf(child)) m_rows.push_back(child);
         }
     }

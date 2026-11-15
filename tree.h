@@ -30,6 +30,8 @@ struct Node {
     std::uint64_t modified = 0;
     std::uint32_t attributes = 0;      // FILE_ATTRIBUTE_* of the entry itself
     bool dir = false;
+    // A display-only aggregate of files below the scan's small-file threshold.
+    bool group = false;
     std::uint32_t files = 0;           // a directory: files in its subtree (self not counted)
     std::uint32_t dirs = 0;            // a directory: folders in its subtree (self not counted)
     int skippedChildren = 0;           // immediate entries this directory could not read

@@ -17,6 +17,8 @@ class ScanSettings : public QObject {
     Q_PROPERTY(int workers READ workers WRITE setWorkers NOTIFY changed)
     Q_PROPERTY(int media READ media WRITE setMedia NOTIFY changed)
     Q_PROPERTY(int previewIntervalMs READ previewIntervalMs WRITE setPreviewIntervalMs NOTIFY changed)
+    // Files below this many bytes are folded into one row per directory.
+    Q_PROPERTY(int smallFileThreshold READ smallFileThreshold WRITE setSmallFileThreshold NOTIFY changed)
     Q_PROPERTY(QStringList excludedPaths READ excludedPaths WRITE setExcludedPaths NOTIFY changed)
     Q_PROPERTY(QString lastPath READ lastPath WRITE setLastPath NOTIFY changed)
     // The table columns the user hid. New columns default to visible, so a
@@ -55,6 +57,8 @@ public:
     void setMedia(int media);
     int previewIntervalMs() const { return m_previewIntervalMs; }
     void setPreviewIntervalMs(int intervalMs);
+    int smallFileThreshold() const { return m_smallFileThreshold; }
+    void setSmallFileThreshold(int bytes);
     QStringList excludedPaths() const { return m_excludedPaths; }
     void setExcludedPaths(const QStringList& paths);
     QString lastPath() const { return m_lastPath; }
@@ -90,6 +94,7 @@ private:
     int m_workers = 0;      // 0 lets the device decide
     int m_media = 0;        // ScanOptions::Media
     int m_previewIntervalMs = 1500;
+    int m_smallFileThreshold = 0;
     QStringList m_excludedPaths;
     QString m_lastPath;
     QStringList m_hiddenColumns;

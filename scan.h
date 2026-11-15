@@ -122,6 +122,9 @@ struct ScanOptions {
     // caps the process memory they are what pushes it over. 0 keeps previews
     // whatever the size.
     unsigned previewNodeLimit = 0;
+    // Files below this many bytes are folded into one "small files" node per
+    // directory. 0 keeps every file.
+    std::uint64_t smallFileThreshold = 0;
 };
 
 // Return false to cancel.

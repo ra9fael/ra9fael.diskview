@@ -121,6 +121,15 @@ void ScanSettings::setPreviewIntervalMs(int intervalMs)
     emit changed();
 }
 
+void ScanSettings::setSmallFileThreshold(int bytes)
+{
+    // 0 means every file; the upper bound keeps the aggregate meaningful.
+    const int clamped = std::clamp(bytes, 0, 1024 * 1024);
+    if (clamped == m_smallFileThreshold) return;
+    m_smallFileThreshold = clamped;
+    emit changed();
+}
+
 void ScanSettings::setLastPath(const QString& path)
 {
     if (path == m_lastPath) {
@@ -270,6 +279,7 @@ bool ScanSettings::load()
     m_media = std::clamp(object.value(QStringLiteral("media")).toInt(0), 0, 3);
     const int interval = object.value(QStringLiteral("previewIntervalMs")).toInt(1500);
     m_previewIntervalMs = interval >= 5000 ? 5000 : 1500;
+    m_smallFileThreshold = std::clamp(object.value(QStringLiteral("smallFileThreshold")).toInt(0), 0, 1024 * 1024);
     m_excludedPaths.clear();
     const QJsonArray excluded = object.value(QStringLiteral("excludedPaths")).toArray();
     for (const QJsonValue& item : excluded) {
@@ -307,6 +317,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("workers"), m_workers);
     object.insert(QStringLiteral("media"), m_media);
     object.insert(QStringLiteral("previewIntervalMs"), m_previewIntervalMs);
+    object.insert(QStringLiteral("smallFileThreshold"), m_smallFileThreshold);
     QJsonArray hidden;
     for (const QString& column : m_hiddenColumns) {
         hidden.append(column);

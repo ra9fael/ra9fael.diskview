@@ -285,6 +285,26 @@ void testFlatBuild()
                                   linkedExcluded, linkedOrphans, linkedUnknown);
     check(linked.count() == 2, "a hard-link alias is not emitted twice");
     check(linked.sizes.at(0) == 100, "hard-linked bytes are counted once");
+
+    // Files below the threshold fold into one row per directory; totals stay.
+    auto smallInput = diskview::fastscan::nodesFromEntries({
+        entry(70, root, L"tiny.txt", false, true, 50),
+        entry(71, root, L"big.bin", false, true, 200),
+    });
+    diskview::ScanOptions smallOptions;
+    smallOptions.smallFileThreshold = 100;
+    FlatTree folded;
+    std::uint64_t foldedExcluded = 0, foldedOrphans = 0, foldedUnknown = 0;
+    diskview::fastscan::buildFlat(smallInput, 4096, L"C:\\", smallOptions, folded,
+                                  foldedExcluded, foldedOrphans, foldedUnknown);
+    check(folded.count() == 3, "a small file is folded into the aggregate");
+    check(folded.sizes.at(0) == 250, "folding keeps the directory total");
+    bool sawGroup = false, sawBig = false;
+    for (int i = 1; i < folded.count(); ++i) {
+        if (folded.flags.at(i) & 32) { sawGroup = folded.sizes.at(i) == 50 && folded.fileCounts.at(i) == 1; }
+        if (folded.names.at(i) == QStringLiteral("big.bin")) sawBig = true;
+    }
+    check(sawGroup && sawBig, "the aggregate carries the small bytes and count");
 }
 
 int main(int argc, char** argv)

@@ -247,6 +247,27 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
         if (parentIndex >= 0 && parentIndex != i) parentOf[static_cast<std::size_t>(i)] = parentIndex;
         else ++orphanTotal;
     }
+
+    // Small files are folded into one aggregate row per directory: the totals
+    // stay exact, but millions of tiny names never reach the model.
+    std::vector<quint32> smallCount(static_cast<std::size_t>(count) + 1, 0);
+    std::vector<quint64> smallBytes(static_cast<std::size_t>(count) + 1, 0);
+    int groupCount = 0;
+    if (options.smallFileThreshold > 0) {
+        for (int i = 0; i < count; ++i) {
+            const auto flags = nodes.flags[static_cast<std::size_t>(i)];
+            if (flags & 1 || flags & 8) continue; // directory or hard-link alias
+            const quint64 size = nodes.logical[static_cast<std::size_t>(i)];
+            if (size == 0 || size >= options.smallFileThreshold) continue;
+            const int parent = parentOf[static_cast<std::size_t>(i)];
+            ++smallCount[static_cast<std::size_t>(parent)];
+            smallBytes[static_cast<std::size_t>(parent)] += size;
+            nodes.flags[static_cast<std::size_t>(i)] = static_cast<quint8>(flags | 16);
+        }
+        for (int p = 0; p <= count; ++p)
+            if (smallCount[static_cast<std::size_t>(p)] > 0) ++groupCount;
+    }
+
     std::vector<std::int32_t> childStart(static_cast<std::size_t>(count) + 2, 0);
     for (int i = 0; i < count; ++i)
         ++childStart[static_cast<std::size_t>(parentOf[static_cast<std::size_t>(i)]) + 1];
@@ -259,16 +280,17 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
     }
 
     out = FlatTree{};
-    out.names.reserve(count + 1);
-    out.names.reserveChars(static_cast<qsizetype>(nodes.chars.size()));
-    out.parents.reserve(count + 1);
-    out.sizes.reserve(count + 1);
-    out.allocs.reserve(count + 1);
-    out.modified.reserve(count + 1);
-    out.attributes.reserve(count + 1);
-    out.fileCounts.reserve(count + 1);
-    out.dirCounts.reserve(count + 1);
-    out.flags.reserve(count + 1);
+    const int totalRows = count + 1 + groupCount;
+    out.names.reserve(totalRows);
+    out.names.reserveChars(static_cast<qsizetype>(nodes.chars.size()) + qsizetype(groupCount) * 24);
+    out.parents.reserve(totalRows);
+    out.sizes.reserve(totalRows);
+    out.allocs.reserve(totalRows);
+    out.modified.reserve(totalRows);
+    out.attributes.reserve(totalRows);
+    out.fileCounts.reserve(totalRows);
+    out.dirCounts.reserve(totalRows);
+    out.flags.reserve(totalRows);
 
     out.names.append(QString::fromStdWString(path));
     out.parents.append(-1);
@@ -287,12 +309,31 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
         detail::Frame& frame = stack.back();
         const int first = childStart[static_cast<std::size_t>(frame.node)];
         const int last = childStart[static_cast<std::size_t>(frame.node) + 1];
-        if (first + frame.childPos >= last) { stack.pop_back(); continue; }
+        if (first + frame.childPos >= last) {
+            // All real children are drawn; the folded small files become one
+            // row at the end of this directory.
+            if (smallCount[static_cast<std::size_t>(frame.node)] > 0) {
+                const quint32 count = smallCount[static_cast<std::size_t>(frame.node)];
+                const quint64 bytes = smallBytes[static_cast<std::size_t>(frame.node)];
+                out.names.append(QStringLiteral("较小文件 (%1 项)").arg(count));
+                out.parents.append(frame.newIndex);
+                out.sizes.append(static_cast<qint64>(bytes));
+                out.allocs.append(static_cast<qint64>(diskview::detail::clusterRound(bytes, cluster)));
+                out.modified.append(0);
+                out.attributes.append(0);
+                out.fileCounts.append(count);
+                out.dirCounts.append(0);
+                out.flags.append(32); // small-files group
+            }
+            stack.pop_back();
+            continue;
+        }
         const int child = childList[static_cast<std::size_t>(first + frame.childPos)];
         ++frame.childPos;
         if (child < 0 || visited[static_cast<std::size_t>(child)]) continue;
         visited[static_cast<std::size_t>(child)] = 1;
         if (nodes.flags[static_cast<std::size_t>(child)] & 8) continue; // hard-link alias
+        if (nodes.flags[static_cast<std::size_t>(child)] & 16) continue; // folded small file
         const QStringView name = nodes.nameAt(child);
         const bool dir = (nodes.flags[static_cast<std::size_t>(child)] & 1) != 0;
         // Only directories can match an excluded folder, and only directories
@@ -335,6 +376,9 @@ inline Outcome buildFlat(Nodes& nodes, std::uint32_t cluster, const std::wstring
         if (parent < 0) continue;
         if (out.flags.at(i) & 1) {
             out.dirCounts[parent] += 1 + out.dirCounts.at(i);
+            out.fileCounts[parent] += out.fileCounts.at(i);
+        } else if (out.flags.at(i) & 32) {
+            // A small-files group stands for that many files.
             out.fileCounts[parent] += out.fileCounts.at(i);
         } else {
             out.fileCounts[parent] += 1;
