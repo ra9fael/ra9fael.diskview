@@ -878,6 +878,43 @@ bool QmlHost::saveScreenshot(const QString& path)
 {
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     if (!window) return false;
+    // A screenshot aid, next to WS_APPEARANCE: select a node by its display
+    // path, so the selected state can be looked at without a pointer.
+    if (const QByteArray wanted = qgetenv("WS_SELECT_PATH"); !wanted.isEmpty()) {
+        if (auto* model = window->findChild<DiskViewModel*>(QStringLiteral("diskModel"))) {
+            const QString wantedPath = QString::fromUtf8(wanted);
+            // Open the folders on the way down (the rows only list what is
+            // open), then select the node. The root's own name may carry
+            // characters a shell mangles, so a path tail is enough.
+            QString prefix;
+            QString selected;
+            bool started = false;
+            const QStringList parts = wantedPath.split(QLatin1Char('\\'), Qt::SkipEmptyParts);
+            for (const QString& part : parts) {
+                prefix = prefix.isEmpty() ? part : prefix + QLatin1Char('\\') + part;
+                selected.clear();
+                for (int row = 0; row < model->rowCount(); ++row) {
+                    const QModelIndex index = model->index(row, 0);
+                    if (model->data(index, DiskViewModel::NameRole).toString() != part) continue;
+                    const QString rowPath = model->data(index, DiskViewModel::PathRole).toString();
+                    if (rowPath != prefix && !rowPath.endsWith(QLatin1Char('\\') + prefix)) continue;
+                    selected = model->data(index, DiskViewModel::IdRole).toString();
+                    break;
+                }
+                if (selected.isEmpty()) {
+                    // The leading components may be the root's own name, which
+                    // is not a row; skip them, but stop once matching has begun.
+                    if (started) break;
+                    prefix.clear();
+                    continue;
+                }
+                started = true;
+                if (part != parts.last() && !model->isExpanded(selected)) model->toggleExpanded(selected);
+            }
+            if (!selected.isEmpty()) model->select(selected);
+            QCoreApplication::processEvents();
+        }
+    }
     return window->grabWindow().save(path);
 }
 

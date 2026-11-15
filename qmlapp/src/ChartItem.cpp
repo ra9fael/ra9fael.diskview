@@ -19,6 +19,17 @@
 namespace {
 // The colour a file gets when the legend has dimmed everything else.
 const QColor kDimmedFill("#dfe4ea");
+
+// True when `path` is `selected` itself or one of the folders above it. The
+// path is the chart's own ("D:\dir\sub\dll"), so a prefix plus a separator is
+// all it takes; the selected block and its whole branch stay lit while the
+// rest of the picture steps back.
+bool onSelectedBranch(const std::wstring& path, const std::wstring& selected)
+{
+    if (path == selected) return true;
+    if (path.size() >= selected.size()) return false;
+    return selected.compare(0, path.size(), path) == 0 && selected[path.size()] == L'\\';
+}
 }
 
 ChartItem::ChartItem(QQuickItem* parent) : QQuickPaintedItem(parent)
@@ -523,7 +534,22 @@ void ChartItem::paint(QPainter* painter)
     painter->scale(m_zoom,m_zoom);
     painter->translate(-transformCenter);
     painter->setRenderHint(QPainter::Antialiasing,true);
+    // The selection the chart can actually show: the node whose tile is
+    // drawn. A row for a file inside a folded folder has no block of its own,
+    // and dimming the whole picture for it would be worse than doing nothing.
+    std::wstring selectedPath;
+    if (!m_selectedId.isEmpty()) {
+        const std::wstring wanted = m_nodeInfo.value(m_selectedId).path.toStdWString();
+        for (const auto& tile : m_tiles)
+            if (tile.path == wanted) { selectedPath = wanted; break; }
+    }
+    const std::wstring hoverPath = !m_hoverId.isEmpty()
+        ? m_nodeInfo.value(m_hoverId).path.toStdWString() : std::wstring();
     if(m_viewMode==0){
+        // While something is selected the rest of the picture steps back, so
+        // the eye lands on the selection instead of hunting for a ring.
+        const QColor scrim=m_theme==QStringLiteral("dark")?QColor(0,0,0,46):QColor(0,0,0,26);
+        const bool dimOthers=!selectedPath.empty();
         // Pass 1: the content. Every tile is filled with its branch colour; an
         // aggregate is neutral, because it is not one thing.
         for(const auto& tile:m_tiles){
@@ -535,6 +561,14 @@ void ChartItem::paint(QPainter* painter)
             painter->setPen(QPen(strokeColor(),1));
             painter->setBrush(Qt::NoBrush);
             painter->drawRect(rect.adjusted(0.5,0.5,-0.5,-0.5));
+            if(dimOthers&&!onSelectedBranch(tile.path,selectedPath))painter->fillRect(rect,scrim);
+            // A selected file has no strip to turn: it takes a wash of the
+            // accent over its own block instead.
+            if(dimOthers&&tile.path==selectedPath&&tile.node&&!tile.node->dir){
+                QColor wash=m_accent;
+                wash.setAlphaF(0.24);
+                painter->fillRect(rect,wash);
+            }
         }
         // Pass 2: structure. A folder that keeps a title strip gets a neutral
         // frame around itself and an opaque strip across its top: the frame
@@ -550,6 +584,7 @@ void ChartItem::paint(QPainter* painter)
             painter->drawRect(rect.adjusted(1,1,-1,-1));
             const QRectF strip(rect.left(),rect.top(),rect.width(),tile.header);
             painter->fillRect(strip,chromeFill());
+            if(dimOthers&&!onSelectedBranch(tile.path,selectedPath))painter->fillRect(strip,scrim);
             painter->setPen(QPen(chromeBorder(),1));
             painter->drawLine(strip.bottomLeft(),strip.bottomRight());
             painter->setPen(QPen(strokeColor(),1));
@@ -667,13 +702,45 @@ void ChartItem::paint(QPainter* painter)
         // whole boundary, which for a folder is the frame of all it holds.
         for(const auto& tile:m_tiles){
             if(tile.remainder)continue;
-            const QString id=m_pathIds.value(tile.path);
-            if(id.isEmpty()||(id!=m_selectedId&&id!=m_hoverId))continue;
+            const bool selected=!selectedPath.empty()&&tile.path==selectedPath;
+            const bool hovered=!hoverPath.empty()&&tile.path==hoverPath;
+            if(!selected&&!hovered)continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
-            painter->setPen(QPen(accentColor(id==m_selectedId),id==m_selectedId?2:1));
+            const QRectF ring=screen.adjusted(1,1,-1,-1);
+            // A selected folder's strip turns into the accent, with the name
+            // repainted on it: the strip is what the eye follows down a
+            // nesting, so it is the clearest place to carry the state.
+            if(selected&&tile.header>0){
+                const qreal band=tile.header*m_zoom;
+                const QRectF strip(screen.left(),screen.top(),screen.width(),band);
+                painter->fillRect(strip,m_accent);
+                painter->setPen(QPen(m_accent,1));
+                painter->drawLine(strip.bottomLeft(),strip.bottomRight());
+                const QRectF innerStrip(strip.left()+5,strip.top(),strip.width()-10,band);
+                if(innerStrip.width()>0&&band>=8){
+                    painter->setPen(diskviewqml::textOnColor(m_accent));
+                    const QString label=QString::fromStdWString(tile.node->name)+"  "
+                                        +QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
+                    painter->drawText(innerStrip,Qt::AlignLeft|Qt::AlignVCenter,
+                                      metrics.elidedText(label,Qt::ElideRight,innerStrip.width()));
+                }
+            }
+            // A soft halo outside the block first: it reads on any background,
+            // and the strong ring then sits on the block's own edge.
+            QColor halo=m_accent;
+            halo.setAlphaF(selected?0.45:0.35);
+            painter->setPen(QPen(halo,4));
             painter->setBrush(Qt::NoBrush);
-            painter->drawRect(screen.adjusted(1,1,-1,-1));
+            painter->drawRect(ring.adjusted(-2,-2,2,2));
+            painter->setPen(QPen(accentColor(selected),selected?2:1));
+            painter->drawRect(ring);
+            if(selected){
+                // An inner hairline in the opposite direction keeps the ring
+                // visible even on a block of the same colour as the accent.
+                painter->setPen(QPen(m_theme==QStringLiteral("dark")?QColor(0,0,0,190):QColor(255,255,255,220),1));
+                painter->drawRect(ring.adjusted(2,2,-2,-2));
+            }
         }
     }else{
         painter->setFont(micro);
