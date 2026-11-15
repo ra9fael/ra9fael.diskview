@@ -15,6 +15,27 @@ ApplicationWindow {
     // the same switch so its greys and inks follow.
     color: theme.window
     readonly property var themeTokens: theme
+    // The Basic style's controls take their colours from the palette; feeding
+    // it the same tokens keeps a TextField, Button and ComboBox from staying
+    // light in a dark WinShun.
+    palette.window: theme.window
+    palette.windowText: theme.text
+    palette.base: theme.surface
+    palette.alternateBase: theme.surfaceAlt
+    palette.text: theme.text
+    palette.button: theme.surfaceAlt
+    palette.buttonText: theme.text
+    palette.brightText: theme.error
+    palette.highlight: theme.accent
+    palette.highlightedText: theme.accentText
+    palette.placeholderText: theme.textMuted
+    palette.toolTipBase: theme.surface
+    palette.toolTipText: theme.text
+    palette.mid: theme.border
+    palette.midlight: theme.border
+    palette.dark: theme.border
+    palette.light: theme.surface
+    palette.shadow: theme.border
 
     DiskViewModel { id: diskModel; objectName: "diskModel" }
     // The file panel is its own model over the shared tree: its rows are the

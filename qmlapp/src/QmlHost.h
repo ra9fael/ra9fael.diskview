@@ -6,6 +6,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 
 class ScanService;
 class ScanSettings;
@@ -69,6 +70,9 @@ public:
     // Puts the host's look onto the open window: the chart reads the same
     // theme the window does. Standalone runs keep the light look.
     Q_INVOKABLE void setTheme(const QString& theme) const;
+    // The host's appearance object (nativeLook, uiStyle, uiSize, corners):
+    // the window draws its colours and radii from it.
+    Q_INVOKABLE void setAppearance(const QVariantMap& appearance);
     Q_INVOKABLE void copyToClipboard(const QString& text) const;
     Q_INVOKABLE void revealInExplorer(const QString& path) const;
     // The fixed drives, for the address bar's location menu: path, label and

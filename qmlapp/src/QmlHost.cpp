@@ -10,6 +10,8 @@
 
 #include <QClipboard>
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStorageInfo>
 
 #include <windows.h>
@@ -72,6 +74,12 @@ bool QmlHost::load(QString* error)
     ws::phosphor::loadFonts();
     m_theme = new ThemeBridge(this);
     m_engine.rootContext()->setContextProperty("theme", m_theme);
+    // A standalone run can be given a real appearance object for screenshots
+    // and checks, the way the host sends it.
+    if (const QByteArray appearance = qgetenv("WS_APPEARANCE"); !appearance.isEmpty()) {
+        const QJsonDocument document = QJsonDocument::fromJson(appearance);
+        if (document.isObject()) m_theme->setAppearance(document.object().toVariantMap());
+    }
     // A path given on the command line wins over the remembered one.
     m_engine.rootContext()->setContextProperty(
         "initialScanPath",
@@ -758,6 +766,11 @@ QString QmlHost::chooseFolder(const QString& initial) const
     }
     if (SUCCEEDED(com)) ::CoUninitialize();
     return result;
+}
+
+void QmlHost::setAppearance(const QVariantMap& appearance)
+{
+    if (m_theme) m_theme->setAppearance(appearance);
 }
 
 void QmlHost::setTheme(const QString& theme) const

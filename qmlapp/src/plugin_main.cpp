@@ -18,6 +18,8 @@
 
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QQuickWindow>
 #include <QThread>
@@ -124,6 +126,10 @@ QmlHost* g_host = nullptr;
 QWindow* g_window = nullptr;
 // Where the host's QtQuick modules live: WinShun's qml folder.
 QStringList g_importPaths;
+// The last appearance object and theme string from the host, kept as JSON so a
+// window opened later still matches WinShun before the next notification.
+QString g_appearanceJson = QStringLiteral("{}");
+QString g_theme = QStringLiteral("light");
 // The host's settings, kept for windows that are opened later.
 std::atomic<bool> g_closing{false};
 
@@ -167,6 +173,14 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     if (!host->load(error)) {
         delete host;
         return false;
+    }
+    // The host's look, as the appearance contract spells it out. Applying it
+    // after load (when the bridge exists) keeps the window from flashing the
+    // fallback palette first.
+    host->setTheme(g_theme);
+    {
+        const QJsonDocument document = QJsonDocument::fromJson(g_appearanceJson.toUtf8());
+        if (document.isObject()) host->setAppearance(document.object().toVariantMap());
     }
     auto* rootWindow = qobject_cast<QQuickWindow*>(host->window());
     if (!rootWindow) {
@@ -214,6 +228,9 @@ public:
         if (!dataDir().empty()) {
             qputenv("WS_DATA_DIR", QByteArray::fromStdString(dataDir()));
         }
+        // Keep the host's look for the first window and every later one.
+        g_theme = QString::fromStdString(theme().empty() ? "light" : theme());
+        g_appearanceJson = QString::fromStdString(appearance().dump());
     }
 
     void settingsChanged(const winshun::Json& s) override
@@ -289,8 +306,20 @@ public:
 
     void appearanceChanged() override
     {
-        // Deliberately keep the standalone default palette for this release.
-        // Real host style/token synchronisation waits for upstream support.
+        // The host changed style, light/dark, corners or UI size: keep the new
+        // object for the next window and repaint the open one. This is the
+        // appearance contract, not the host settings sync that stays off.
+        g_theme = QString::fromStdString(theme().empty() ? "light" : theme());
+        g_appearanceJson = QString::fromStdString(appearance().dump());
+        if (!g_host) return;
+        const QString json = g_appearanceJson;
+        const QString look = g_theme;
+        QMetaObject::invokeMethod(qGuiApp, [json, look] {
+            if (!g_host) return;
+            g_host->setTheme(look);
+            const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8());
+            if (document.isObject()) g_host->setAppearance(document.object().toVariantMap());
+        }, Qt::BlockingQueuedConnection);
     }
 
     void shuttingDown() override
