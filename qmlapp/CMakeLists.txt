@@ -83,7 +83,7 @@ endforeach()
 option(DISKVIEW_BUILD_PLUGIN "Build the WinShun plugin variant of the QML edition" OFF)
 if(DISKVIEW_BUILD_PLUGIN)
     # The manifest has to name a program, so the stub keeps the edition's name.
-    add_executable(diskview-qml-plugin stub/main.cpp)
+    add_executable(diskview-qml-plugin diskview-qml.rc stub/main.cpp)
     set_target_properties(diskview-qml-plugin PROPERTIES OUTPUT_NAME "diskview-qml")
     target_compile_definitions(diskview-qml-plugin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     set_target_properties(diskview-qml-plugin PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin")
