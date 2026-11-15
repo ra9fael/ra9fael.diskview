@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.diskview.qml",
   "name": {"zh": "磁盘透视 · QML", "en": "Disk View · QML"},
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "QML 版磁盘占用可视化：自由 Dock 与 Tab 停靠、方块/圆盘图、独立文件列表、扩展名过滤与进程内 MFT 快扫。暂用本地设置，不同步宿主外观和扫描设置。",
   "author": "ra9fael",
   "license": "MIT",
