@@ -134,6 +134,7 @@ void testRoundTrip()
     saved.setFuzzyMatch(true);
     saved.setWholeTree(true);
     saved.setChartDepth(4);
+    saved.setColumnWidths(QStringLiteral("{\"tree\":{\"size\":140},\"file\":{},\"legend\":{\"files\":60}}"));
     check(saved.save(), "the settings are written");
 
     ScanSettings back;
@@ -148,6 +149,9 @@ void testRoundTrip()
     check(back.fuzzyMatch(), "the fuzzy mode survives the round trip");
     check(back.wholeTree(), "the whole-tree scope survives the round trip");
     check(back.chartDepth() == 4, "the chart depth survives the round trip");
+    check(back.columnWidths().contains(QStringLiteral("\"size\":140"))
+              && back.columnWidths().contains(QStringLiteral("\"files\":60")),
+          "the column widths survive the round trip");
 
     // A hand-edited file with nonsense in it must not be trusted.
     const QString file = QDir(dir.path()).filePath(QStringLiteral("diskview-qml.json"));

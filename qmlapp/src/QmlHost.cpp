@@ -27,6 +27,7 @@
 #include <QQmlContext>
 #include <QQmlExpression>
 #include <QQmlError>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
@@ -550,6 +551,69 @@ bool QmlHost::runSelfTest(QString* report)
             return false;
         }
     }
+    // The column grips: dragging the tree's "size" header has to widen that
+    // one column, and a double click has to put it back. The events go to the
+    // window, so they pass the real hit test and the real mouse area.
+    bool columnsOk = false;
+    QString columnDetail;
+    if (QObject* root = m_engine.rootObjects().value(0)) {
+        auto* columnWindow = qobject_cast<QQuickWindow*>(root);
+        // A Repeater's delegates are visual children only, so they are not in
+        // the window's QObject tree. The Repeater itself is, and itemAt(i)
+        // gives each cell, which owns its grip.
+        QQuickItem* grip = nullptr;
+        if (auto* repeater = root->findChild<QObject*>(QStringLiteral("treeColumnRepeater"))) {
+            const int count = repeater->property("count").toInt();
+            for (int i = 0; i < count && !grip; ++i) {
+                QQuickItem* cell = nullptr;
+                if (!QMetaObject::invokeMethod(repeater, "itemAt", Q_RETURN_ARG(QQuickItem*, cell),
+                                               Q_ARG(int, i)))
+                    break;
+                if (cell) grip = cell->findChild<QQuickItem*>(QStringLiteral("columnHandle:tree:size"));
+            }
+        }
+        if (!grip || !grip->isVisible() || grip->width() <= 0) {
+            // The dock layout may have the tree behind another tab; there is
+            // nothing to drag, so this check is not a failure.
+            columnsOk = true;
+            columnDetail = QStringLiteral("not-shown");
+        } else if (columnWindow) {
+            const auto widthOf = [&] {
+                QVariant result;
+                if (auto* store = grip->property("store").value<QObject*>())
+                    QMetaObject::invokeMethod(store, "width", Q_RETURN_ARG(QVariant, result),
+                                              Q_ARG(QVariant, QStringLiteral("size")));
+                return result.toInt();
+            };
+            const auto send = [&](QEvent::Type type, const QPointF& local, Qt::MouseButton button,
+                                  Qt::MouseButtons buttons) {
+                // Sent straight to the mouse area: a synthetic double click
+                // through the window does not reach its double-click handler,
+                // while the drag itself goes through the same code either way.
+                auto* area = grip->findChild<QQuickItem*>(QStringLiteral("columnHandleMouse"));
+                if (!area) return;
+                QMouseEvent event(type, local, area->mapToGlobal(local), button, buttons, Qt::NoModifier);
+                QCoreApplication::sendEvent(area, &event);
+            };
+            const QPointF center(grip->width() / 2, grip->height() / 2);
+            const int before = widthOf();
+            send(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseMove, center + QPointF(24, 0), Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, center + QPointF(24, 0), Qt::LeftButton, Qt::NoButton);
+            QCoreApplication::processEvents();
+            const int dragged = widthOf();
+            const QPointF again(grip->width() / 2, grip->height() / 2);
+            send(QEvent::MouseButtonPress, again, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, again, Qt::LeftButton, Qt::NoButton);
+            send(QEvent::MouseButtonDblClick, again, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, again, Qt::LeftButton, Qt::NoButton);
+            QCoreApplication::processEvents();
+            const int reset = widthOf();
+            columnsOk = dragged == before + 24 && reset == 84;
+            columnDetail = QStringLiteral("%1->%2 reset=%3").arg(before).arg(dragged).arg(reset);
+        }
+    }
+    if (!columnsOk && columnDetail.isEmpty()) columnDetail = QStringLiteral("no-window");
     if (!runDockChecks(report)) return false;
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     auto* chart = window ? window->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr;
@@ -710,10 +774,10 @@ bool QmlHost::runSelfTest(QString* report)
         listDetail = listDetail.isEmpty() ? QStringLiteral("bad-view") : listDetail + QStringLiteral(",bad-view");
     }
     const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list
-                      && viewFollows && drag && chartOk;
+                      && viewFollows && drag && chartOk && columnsOk;
 
 
-    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\n")
+    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\n")
                   .arg(m_options.viewMode)
                   .arg(hit)
                   .arg(regions ? QStringLiteral("regions") : QStringLiteral("no-regions"))
@@ -725,6 +789,8 @@ bool QmlHost::runSelfTest(QString* report)
                   .arg(drag ? QStringLiteral("drag") : QStringLiteral("bad-drag"))
                   .arg(chartOk ? QStringLiteral("chart=%1").arg(chartDetail.join(QLatin1Char(',')))
                                : QStringLiteral("bad-chart:%1").arg(chartDetail.join(QLatin1Char(','))))
+                  .arg(columnsOk ? QStringLiteral("columns=%1").arg(columnDetail)
+                                 : QStringLiteral("bad-columns:%1").arg(columnDetail))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
     if (!m_options.scanPath.isEmpty() && m_scanService) {
         // What the scan made of the settings, and how much of it was published

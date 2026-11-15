@@ -1,42 +1,48 @@
 import QtQuick
 
-// The 6 px strip between two column headers. Dragging changes the width on the
-// panel's own width object; double-click restores the default. `widths` is one
-// of the QtObjects in Main.qml (tree, file or legend columns), so the three
-// panels stay independent and can be persisted separately.
+// The 6 px strip at a column's right edge. Dragging changes that column's
+// width in the panel's own ColumnStore; double-click restores the spec's
+// default width for the column.
+//
+// The delta is measured in the window's coordinate space, not in the handle's
+// own: the handle is anchored to the edge it moves, so a local delta would be
+// cancelled by the handle moving with it (the drag used to stick and jitter).
 Item {
     id: handle
 
-    required property var widths
+    required property var store
     required property string column
-    property int defaultWidth: 0
     property int minimum: 40
+    property int maximum: 480
 
-    implicitWidth: 6
+    implicitWidth: 7
     implicitHeight: 20
-    LayoutMirroring.enabled: false
 
     Rectangle {
         anchors.centerIn: parent
-        width: 1
+        width: mouse.containsMouse || mouse.pressed ? 2 : 1
         height: parent.height - 6
-        color: mouse.containsMouse || mouse.pressed ? theme.accent : "transparent"
+        color: mouse.containsMouse || mouse.pressed ? theme.accent : theme.border
     }
 
     MouseArea {
         id: mouse
+        objectName: "columnHandleMouse"
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.SizeHorCursor
-        property real start: 0
-        onPressed: start = mouse.x
-        onPositionChanged: {
-            if (!pressed) return
-            const delta = mouse.x - start
-            if (delta === 0) return
-            widths[column] = Math.max(minimum, widths[column] + delta)
-            start = mouse.x
+        property real startSceneX: 0
+        property real startWidth: 0
+        onPressed: function(point) {
+            startSceneX = mapToItem(null, point.x, point.y).x
+            startWidth = handle.store.width(handle.column)
         }
-        onDoubleClicked: if (defaultWidth > 0) widths[column] = defaultWidth
+        onPositionChanged: function(point) {
+            if (!pressed) return
+            const sceneX = mapToItem(null, point.x, point.y).x
+            const wanted = Math.round(startWidth + sceneX - startSceneX)
+            handle.store.setWidth(handle.column, Math.max(handle.minimum, Math.min(handle.maximum, wanted)))
+        }
+        onDoubleClicked: handle.store.reset(handle.column)
     }
 }

@@ -54,17 +54,86 @@ ApplicationWindow {
         chart.depth = scanSettings.chartDepth
         window.chartLayout = scanSettings.chartLayout
         try { dockState.layout = JSON.parse(scanSettings.dockLayout) } catch (e) {}
+        // The column widths the user dragged last time, then the stores may
+        // persist again.
+        window.loadColumnWidths()
+        window.columnsLoaded = true
         verticalSplit.applyLayoutOrder()
         if (window.chartLayout === "dock") Qt.callLater(dockWorkspace.refresh)
     }
 
-    // Which table columns are on. The name column is not listed: it never
-    // goes away.
-    function columnHidden(key) { return scanSettings.hiddenColumns.indexOf(key) >= 0 }
-    function treeColumnHidden(key) {
-        const minimum = {pct: 320, alloc: 440, items: 540, files: 610, dirs: 680, modified: 810, attributes: 900}
-        return columnHidden(key) || treePane.width < (minimum[key] || 0)
+    // ---- table columns ------------------------------------------------------
+    // One description per table, in drawing order: the key into the width
+    // store, the header text, the default width, the narrowest it may be
+    // dragged, and (where a click sorts) the sort key. Headers, rows and the
+    // width budget all read this, so a column cannot drift out of step with its
+    // own header.
+    readonly property var treeColumnSpec: [
+        { key: "pct", label: "% 父级", width: 78, min: 48 },
+        { key: "size", label: "大小", width: 84, min: 60, sort: 0 },
+        { key: "alloc", label: "已分配", width: 84, min: 64 },
+        { key: "items", label: "项目", width: 62, min: 52 },
+        { key: "files", label: "文件", width: 62, min: 52 },
+        { key: "dirs", label: "文件夹", width: 58, min: 48 },
+        { key: "modified", label: "修改时间", width: 118, min: 92, sort: 2 },
+        { key: "attributes", label: "属性", width: 64, min: 52 }
+    ]
+    readonly property var fileColumnSpec: [
+        { key: "pct", label: "% 父级", width: 78, min: 48 },
+        { key: "size", label: "大小", width: 84, min: 60 },
+        { key: "alloc", label: "已分配", width: 84, min: 64 },
+        { key: "modified", label: "修改时间", width: 118, min: 92 },
+        { key: "attributes", label: "属性", width: 64, min: 52 }
+    ]
+    readonly property var legendColumnSpec: [
+        { key: "percent", label: "占比", width: 52, min: 40 },
+        { key: "size", label: "大小", width: 66, min: 48 },
+        { key: "alloc", label: "已分配", width: 66, min: 48 },
+        { key: "files", label: "文件数", width: 52, min: 40 }
+    ]
+
+    function columnSpec(panel) {
+        return panel === "tree" ? treeColumnSpec : (panel === "file" ? fileColumnSpec : legendColumnSpec)
     }
+    function columnStore(panel) {
+        return panel === "tree" ? columns : (panel === "file" ? fileColumns : legendColumns)
+    }
+    function columnPane(panel) {
+        return panel === "tree" ? treePane : (panel === "file" ? filePane : legendPane)
+    }
+    // The name column is not in the spec: it takes what is left, and it is the
+    // one thing a table cannot do without, so its minimum is what the fixed
+    // columns leave alone when they decide whether they still fit.
+    function nameMinimum(panel) { return panel === "tree" ? 120 : (panel === "file" ? 110 : 90) }
+    function columnWidth(panel, key) { return columnStore(panel).width(key) }
+    function columnMinimum(panel, key) {
+        const spec = columnSpec(panel)
+        for (let i = 0; i < spec.length; ++i) if (spec[i].key === key) return spec[i].min
+        return 40
+    }
+    // A column is drawn only while the fixed columns to its left still leave
+    // the name column its minimum. That replaces the hand-tuned thresholds the
+    // file panel used to carry, and it now applies to every table.
+    function columnVisible(panel, key) {
+        if (columnHidden(key)) return false
+        const spec = columnSpec(panel)
+        const store = columnStore(panel)
+        const available = columnPane(panel).width
+        let used = nameMinimum(panel)
+        for (let i = 0; i < spec.length; ++i) {
+            const column = spec[i]
+            if (columnHidden(column.key)) continue
+            used += store.width(column.key)
+            if (used > available) return false
+            if (column.key === key) return true
+        }
+        return false
+    }
+    function gridColor() { return Qt.rgba(theme.border.r, theme.border.g, theme.border.b, 0.5) }
+
+    // Which columns the user switched off. The name column is not in the list:
+    // it never goes away.
+    function columnHidden(key) { return scanSettings.hiddenColumns.indexOf(key) >= 0 }
     function toggleColumn(key) {
         const hidden = scanSettings.hiddenColumns.slice()
         const at = hidden.indexOf(key)
@@ -72,6 +141,37 @@ ApplicationWindow {
         else hidden.push(key)
         scanSettings.hiddenColumns = hidden
         scanSettings.save()
+    }
+
+    // Widths: the stores hold what was dragged, ScanSettings keeps the three of
+    // them between runs, and a reset drops the overrides back to the spec.
+    property bool columnsLoaded: false
+    function specDefaults(spec) {
+        const map = ({})
+        for (let i = 0; i < spec.length; ++i) map[spec[i].key] = spec[i].width
+        return map
+    }
+    function loadColumnWidths() {
+        let saved = {}
+        try { saved = JSON.parse(scanSettings.columnWidths) || {} } catch (e) { saved = {} }
+        columns.widths = saved.tree || ({})
+        fileColumns.widths = saved.file || ({})
+        legendColumns.widths = saved.legend || ({})
+    }
+    function saveColumnWidths() {
+        if (!columnsLoaded) return
+        scanSettings.columnWidths = JSON.stringify({
+            tree: columns.widths,
+            file: fileColumns.widths,
+            legend: legendColumns.widths
+        })
+        scanSettings.save()
+    }
+    function resetColumnWidths() {
+        columns.resetAll()
+        fileColumns.resetAll()
+        legendColumns.resetAll()
+        saveColumnWidths()
     }
     // The breadcrumb of the current folder, shortened when it gets long the
     // way the native panel shortens it.
@@ -541,6 +641,11 @@ ApplicationWindow {
                             onClicked: window.toggleColumn(modelData.key)
                         }
                     }
+                    MenuSeparator { }
+                    MenuItem {
+                        text: "列宽复位"
+                        onClicked: window.resetColumnWidths()
+                    }
                 }
                 TextField {
                     id: filterField
@@ -706,50 +811,55 @@ ApplicationWindow {
                             color: theme.surfaceAlt
                             border.color: theme.border
                             RowLayout {
-                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
-                                Label {
+                                anchors.fill: parent
+                                spacing: 0
+                                TableCell {
                                     Layout.fillWidth: true
-                                    Layout.minimumWidth: 120
-                                    text: "文件夹 / 名称" + (diskModel.sortKey === 1 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
-                                    elide: Text.ElideRight
+                                    Layout.minimumWidth: window.nameMinimum("tree")
+                                    Label {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 8
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: "文件夹 / 名称" + (diskModel.sortKey === 1 ? (diskModel.ascending ? " ↑" : " ↓") : "")
+                                        font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                        elide: Text.ElideRight
+                                    }
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(1) }
                                 }
-                                Label {
-                                    visible: !window.columnHidden("pct")
-                                    Layout.preferredWidth: columns.pct
-                                    text: "% 父级"
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
-                                    horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "pct"; defaultWidth: 78; minimum: 48 }
+                                Repeater {
+                                    objectName: "treeColumnRepeater"
+                                    model: window.treeColumnSpec
+                                    delegate: TableCell {
+                                        cellWidth: window.columnWidth("tree", modelData.key)
+                                        visible: window.columnVisible("tree", modelData.key)
+                                        lineColor: window.gridColor()
+                                        Label {
+                                            anchors.fill: parent
+                                            anchors.rightMargin: 8
+                                            verticalAlignment: Text.AlignVCenter
+                                            horizontalAlignment: Text.AlignRight
+                                            text: modelData.label + (modelData.sort !== undefined && diskModel.sortKey === modelData.sort
+                                                                     ? (diskModel.ascending ? " ↑" : " ↓") : "")
+                                            font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                            elide: Text.ElideRight
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            enabled: modelData.sort !== undefined
+                                            cursorShape: modelData.sort !== undefined ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                            onClicked: diskModel.toggleSort(modelData.sort)
+                                        }
+                                        ColumnHandle {
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.bottom: parent.bottom
+                                            objectName: "columnHandle:tree:" + modelData.key
+                                            store: window.columnStore("tree")
+                                            column: modelData.key
+                                            minimum: window.columnMinimum("tree", modelData.key)
+                                        }
+                                    }
                                 }
-                                Label {
-                                    Layout.preferredWidth: columns.size
-                                    text: "大小" + (diskModel.sortKey === 0 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
-                                    horizontalAlignment: Text.AlignRight
-                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(0) }
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "size"; defaultWidth: 84 }
-                                }
-                                Label { visible: !window.treeColumnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "alloc"; defaultWidth: 84 } }
-                                Label { visible: !window.treeColumnHidden("items"); Layout.preferredWidth: columns.items; text: "项目"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "items"; defaultWidth: 62 } }
-                                Label { visible: !window.treeColumnHidden("files"); Layout.preferredWidth: columns.files; text: "文件"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "files"; defaultWidth: 62 } }
-                                Label { visible: !window.treeColumnHidden("dirs"); Layout.preferredWidth: columns.dirs; text: "文件夹"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "dirs"; defaultWidth: 58 } }
-                                Label {
-                                    visible: !window.treeColumnHidden("modified")
-                                    Layout.preferredWidth: columns.modified
-                                    text: "修改时间" + (diskModel.sortKey === 2 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
-                                    horizontalAlignment: Text.AlignRight
-                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(2) }
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "modified"; defaultWidth: 118; minimum: 80 }
-                                }
-                                Label { visible: !window.treeColumnHidden("attributes"); Layout.preferredWidth: columns.attrs; text: "属性"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: columns; column: "attrs"; defaultWidth: 64; minimum: 42 } }
                             }
                         }
                         ListView {
@@ -811,16 +921,19 @@ ApplicationWindow {
                                         contextMenu.open()
                                     }
                                 }
-                                contentItem: RowLayout {
-                                    spacing: 0
-                                    clip: true
-                                    Item {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 6 + depth * 12
-                                            spacing: 4
+                                contentItem: Item {
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        spacing: 0
+                                        TableCell {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: window.nameMinimum("tree")
+                                            lineColor: window.gridColor()
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 6 + rowItem.depth * 12
+                                                anchors.rightMargin: 6
+                                                spacing: 4
                                                 Label {
                                                     Layout.preferredWidth: 12
                                                     visible: rowItem.hasChildren
@@ -841,63 +954,114 @@ ApplicationWindow {
                                                     color: theme.text; font.pixelSize: 11
                                                 }
                                             }
-                                    }
-                                    Item {
-                                        visible: !window.columnHidden("pct")
-                                        Layout.preferredWidth: fileColumns.pct
-                                        Layout.fillHeight: true
-                                        Rectangle {
-                                            x: 4
-                                            y: parent.height / 2 - 4
-                                            height: 8
-                                            radius: 2
-                                            color: theme.selection
-                                            width: Math.max(0, Math.min(1, rowItem.percent / 100)) * (parent.width - 8)
                                         }
-                                        Label {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 6
-                                            verticalAlignment: Text.AlignVCenter
-                                            text: rowItem.percent.toFixed(1) + "%"
-                                            color: theme.text; font.pixelSize: 11
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "pct")
+                                            cellWidth: window.columnWidth("tree", "pct")
+                                            lineColor: window.gridColor()
+                                            Rectangle {
+                                                x: 4
+                                                y: parent.height / 2 - 4
+                                                height: 8
+                                                radius: 2
+                                                color: theme.selection
+                                                width: Math.max(0, Math.min(1, rowItem.percent / 100)) * (parent.width - 8)
+                                            }
+                                            Label {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 6
+                                                anchors.rightMargin: 6
+                                                verticalAlignment: Text.AlignVCenter
+                                                text: rowItem.percent.toFixed(1) + "%"
+                                                color: theme.text; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "size")
+                                            cellWidth: window.columnWidth("tree", "size")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.sizeText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.text; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "alloc")
+                                            cellWidth: window.columnWidth("tree", "alloc")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.allocText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "items")
+                                            cellWidth: window.columnWidth("tree", "items")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.directory ? diskModel.formatCount(rowItem.items) : "—"
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "files")
+                                            cellWidth: window.columnWidth("tree", "files")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.directory ? diskModel.formatCount(rowItem.files) : "—"
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "dirs")
+                                            cellWidth: window.columnWidth("tree", "dirs")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.directory ? diskModel.formatCount(rowItem.dirs) : "—"
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "modified")
+                                            cellWidth: window.columnWidth("tree", "modified")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.modifiedText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("tree", "attributes")
+                                            cellWidth: window.columnWidth("tree", "attributes")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: rowItem.attributes
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
                                         }
                                     }
-                                    Label { Layout.preferredWidth: columns.size; text: rowItem.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
-                                    Label { visible: !window.treeColumnHidden("alloc"); Layout.preferredWidth: columns.alloc; text: rowItem.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label {
-                                        visible: !window.treeColumnHidden("items")
-                                        Layout.preferredWidth: columns.items
-                                        text: rowItem.directory ? diskModel.formatCount(rowItem.items) : "—"
-                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: theme.textMuted; font.pixelSize: 11
-                                    }
-                                    Label {
-                                        visible: !window.treeColumnHidden("files")
-                                        Layout.preferredWidth: columns.files
-                                        text: rowItem.directory ? diskModel.formatCount(rowItem.files) : "—"
-                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: theme.textMuted; font.pixelSize: 11
-                                    }
-                                    Label {
-                                        visible: !window.treeColumnHidden("dirs")
-                                        Layout.preferredWidth: columns.dirs
-                                        text: rowItem.directory ? diskModel.formatCount(rowItem.dirs) : "—"
-                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: theme.textMuted; font.pixelSize: 11
-                                    }
-                                    Label {
-                                        visible: !window.treeColumnHidden("modified")
-                                        Layout.preferredWidth: columns.modified
-                                        text: rowItem.modifiedText
-                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: theme.textMuted; font.pixelSize: 11
-                                    }
-                                    Label {
-                                        visible: !window.treeColumnHidden("attributes")
-                                        Layout.preferredWidth: columns.attrs
-                                        text: rowItem.attributes
-                                        horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                        color: theme.textMuted; font.pixelSize: 11
+                                    // One line under the whole row: the cells carry
+                                    // the vertical rules, this closes the band.
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        height: 1
+                                        color: window.gridColor()
                                     }
                                 }
                             }
@@ -1000,36 +1164,43 @@ ApplicationWindow {
                             color: theme.surfaceAlt
                             border.color: theme.border
                             RowLayout {
-                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
-                                Label { Layout.fillWidth: true; text: "名称"; font.pixelSize: 10; color: theme.textMuted; elide: Text.ElideRight }
-                                Label {
-                                    visible: !window.columnHidden("pct")
-                                    Layout.preferredWidth: fileColumns.pct
-                                    text: "% 父级"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "pct"; defaultWidth: 78; minimum: 48 }
+                                anchors.fill: parent
+                                spacing: 0
+                                TableCell {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: window.nameMinimum("file")
+                                    Label {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 8
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: "名称"; font.pixelSize: 10; color: theme.textMuted; elide: Text.ElideRight
+                                    }
                                 }
-                                Label {
-                                    Layout.preferredWidth: fileColumns.size
-                                    text: "大小"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "size"; defaultWidth: 84 }
-                                }
-                                Label {
-                                    visible: !window.columnHidden("alloc") && filePane.width > 460
-                                    Layout.preferredWidth: fileColumns.alloc
-                                    text: "已分配"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "alloc"; defaultWidth: 84 }
-                                }
-                                Label {
-                                    visible: !window.columnHidden("modified") && filePane.width > 560
-                                    Layout.preferredWidth: fileColumns.modified
-                                    text: "修改时间"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "modified"; defaultWidth: 118; minimum: 80 }
-                                }
-                                Label {
-                                    visible: !window.columnHidden("attributes") && filePane.width > 640
-                                    Layout.preferredWidth: fileColumns.attrs
-                                    text: "属性"; font.pixelSize: 10; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: fileColumns; column: "attrs"; defaultWidth: 64; minimum: 42 }
+                                Repeater {
+                                    model: window.fileColumnSpec
+                                    delegate: TableCell {
+                                        cellWidth: window.columnWidth("file", modelData.key)
+                                        visible: window.columnVisible("file", modelData.key)
+                                        lineColor: window.gridColor()
+                                        Label {
+                                            anchors.fill: parent
+                                            anchors.rightMargin: 8
+                                            verticalAlignment: Text.AlignVCenter
+                                            horizontalAlignment: Text.AlignRight
+                                            text: modelData.label
+                                            font.pixelSize: 10; color: theme.textMuted
+                                            elide: Text.ElideRight
+                                        }
+                                        ColumnHandle {
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.bottom: parent.bottom
+                                            objectName: "columnHandle:file:" + modelData.key
+                                            store: window.columnStore("file")
+                                            column: modelData.key
+                                            minimum: window.columnMinimum("file", modelData.key)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1075,50 +1246,101 @@ ApplicationWindow {
                                         contextMenu.open()
                                     }
                                 }
-                                contentItem: RowLayout {
-                                    spacing: 0
-                                    clip: true
-                                    Item {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 6
-                                            spacing: 4
-                                            Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 2; color: fileRow.extColor }
+                                contentItem: Item {
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        spacing: 0
+                                        TableCell {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: window.nameMinimum("file")
+                                            lineColor: window.gridColor()
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 6
+                                                anchors.rightMargin: 6
+                                                spacing: 4
+                                                Rectangle { Layout.preferredWidth: 9; Layout.preferredHeight: 9; radius: 2; color: fileRow.extColor }
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: fileRow.name
+                                                    elide: Text.ElideRight
+                                                    color: theme.text; font.pixelSize: 11
+                                                }
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("file", "pct")
+                                            cellWidth: window.columnWidth("file", "pct")
+                                            lineColor: window.gridColor()
+                                            Rectangle {
+                                                x: 4
+                                                y: parent.height / 2 - 4
+                                                height: 8
+                                                radius: 2
+                                                color: theme.selection
+                                                width: Math.max(0, Math.min(1, fileRow.percent / 100)) * (parent.width - 8)
+                                            }
                                             Label {
-                                                Layout.fillWidth: true
-                                                text: fileRow.name
-                                                elide: Text.ElideRight
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 6
+                                                anchors.rightMargin: 6
+                                                verticalAlignment: Text.AlignVCenter
+                                                text: fileRow.percent.toFixed(1) + "%"
                                                 color: theme.text; font.pixelSize: 11
                                             }
                                         }
-                                    }
-                                    Item {
-                                        visible: !window.columnHidden("pct")
-                                        Layout.preferredWidth: columns.pct
-                                        Layout.fillHeight: true
-                                        clip: true
-                                        Rectangle {
-                                            x: 4
-                                            y: parent.height / 2 - 4
-                                            height: 8
-                                            radius: 2
-                                            color: theme.selection
-                                            width: Math.max(0, Math.min(1, fileRow.percent / 100)) * (parent.width - 8)
+                                        TableCell {
+                                            visible: window.columnVisible("file", "size")
+                                            cellWidth: window.columnWidth("file", "size")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: fileRow.sizeText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.text; font.pixelSize: 11
+                                            }
                                         }
-                                        Label {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 6
-                                            verticalAlignment: Text.AlignVCenter
-                                            text: fileRow.percent.toFixed(1) + "%"
-                                            color: theme.text; font.pixelSize: 11
+                                        TableCell {
+                                            visible: window.columnVisible("file", "alloc")
+                                            cellWidth: window.columnWidth("file", "alloc")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: fileRow.allocText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("file", "modified")
+                                            cellWidth: window.columnWidth("file", "modified")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: fileRow.modifiedText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("file", "attributes")
+                                            cellWidth: window.columnWidth("file", "attributes")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 8
+                                                text: fileRow.attributes
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
                                         }
                                     }
-                                    Label { Layout.preferredWidth: fileColumns.size; text: fileRow.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("alloc") && filePane.width > 460; Layout.preferredWidth: fileColumns.alloc; text: fileRow.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("modified") && filePane.width > 560; Layout.preferredWidth: fileColumns.modified; text: fileRow.modifiedText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label { visible: !window.columnHidden("attributes") && filePane.width > 640; Layout.preferredWidth: fileColumns.attrs; text: fileRow.attributes; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        height: 1
+                                        color: window.gridColor()
+                                    }
                                 }
                             }
                         }
@@ -1138,17 +1360,45 @@ ApplicationWindow {
                             color: theme.surfaceAlt
                             border.color: theme.border
                             RowLayout {
-                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
-                                Label { Layout.preferredWidth: 18; text: "" }
-                                Label { Layout.fillWidth: true; Layout.minimumWidth: 70; text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted }
-                                Label { Layout.preferredWidth: legendColumns.percent; text: "占比"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "percent"; defaultWidth: 52; minimum: 40 } }
-                                Label { Layout.preferredWidth: legendColumns.size; text: "大小"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "size"; defaultWidth: 66; minimum: 48 } }
-                                Label { Layout.preferredWidth: legendColumns.alloc; text: "已分配"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "alloc"; defaultWidth: 66; minimum: 48 } }
-                                Label { Layout.preferredWidth: legendColumns.files; text: "文件数"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted; horizontalAlignment: Text.AlignRight
-                                    ColumnHandle { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; widths: legendColumns; column: "files"; defaultWidth: 52; minimum: 40 } }
+                                anchors.fill: parent
+                                spacing: 0
+                                TableCell {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: window.nameMinimum("legend")
+                                    Label {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 26
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                Repeater {
+                                    model: window.legendColumnSpec
+                                    delegate: TableCell {
+                                        cellWidth: window.columnWidth("legend", modelData.key)
+                                        visible: window.columnVisible("legend", modelData.key)
+                                        lineColor: window.gridColor()
+                                        Label {
+                                            anchors.fill: parent
+                                            anchors.rightMargin: 6
+                                            verticalAlignment: Text.AlignVCenter
+                                            horizontalAlignment: Text.AlignRight
+                                            text: modelData.label
+                                            font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                            elide: Text.ElideRight
+                                        }
+                                        ColumnHandle {
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.bottom: parent.bottom
+                                            objectName: "columnHandle:legend:" + modelData.key
+                                            store: window.columnStore("legend")
+                                            column: modelData.key
+                                            minimum: window.columnMinimum("legend", modelData.key)
+                                        }
+                                    }
+                                }
                             }
                         }
                         ListView {
@@ -1169,43 +1419,93 @@ ApplicationWindow {
                                 highlighted: (diskModel.hasExtensionFilter && diskModel.extensionFilter === modelData.ext)
                                              || (diskModel.selectedExtension.length > 0 && diskModel.selectedExtension === modelData.ext)
                                 onClicked: diskModel.selectExtension(modelData.ext)
-                                contentItem: RowLayout {
-                                    spacing: 0
-                                    clip: true
-                                    Item { Layout.preferredWidth: 18; Layout.fillHeight: true
-                                        Rectangle { anchors.centerIn: parent; width: 9; height: 9; radius: 2; color: modelData.color }
-                                    }
-                                    Label {
-                                        Layout.fillWidth: true
-                                        Layout.minimumWidth: 70
-                                        text: (modelData.ext.length ? modelData.ext : "(无)") + "  " + modelData.label
-                                        elide: Text.ElideRight
-                                        color: theme.text; font.pixelSize: 11
-                                    }
-                                    Item {
-                                        Layout.preferredWidth: legendColumns.percent
-                                        Layout.fillHeight: true
-                                        Rectangle {
-                                            x: 2
-                                            y: parent.height / 2 - 4
-                                            height: 8
-                                            radius: 2
-                                            color: modelData.color
-                                            opacity: 0.55
-                                            width: Math.max(0, Math.min(1, modelData.percent / 100)) * (parent.width - 4)
+                                contentItem: Item {
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        spacing: 0
+                                        TableCell {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: window.nameMinimum("legend")
+                                            lineColor: window.gridColor()
+                                            Rectangle {
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 5
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                width: 9; height: 9; radius: 2; color: modelData.color
+                                            }
+                                            Label {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 26
+                                                anchors.rightMargin: 6
+                                                verticalAlignment: Text.AlignVCenter
+                                                text: (modelData.ext.length ? modelData.ext : "(无)") + "  " + modelData.label
+                                                elide: Text.ElideRight
+                                                color: theme.text; font.pixelSize: 11
+                                            }
                                         }
-                                        Label {
-                                            anchors.fill: parent
-                                            anchors.rightMargin: 2
-                                            verticalAlignment: Text.AlignVCenter
-                                            horizontalAlignment: Text.AlignRight
-                                            text: modelData.percent.toFixed(1) + "%"
-                                            color: theme.text; font.pixelSize: 11
+                                        TableCell {
+                                            visible: window.columnVisible("legend", "percent")
+                                            cellWidth: window.columnWidth("legend", "percent")
+                                            lineColor: window.gridColor()
+                                            Rectangle {
+                                                x: 2
+                                                y: parent.height / 2 - 4
+                                                height: 8
+                                                radius: 2
+                                                color: modelData.color
+                                                opacity: 0.55
+                                                width: Math.max(0, Math.min(1, modelData.percent / 100)) * (parent.width - 4)
+                                            }
+                                            Label {
+                                                anchors.fill: parent
+                                                anchors.rightMargin: 6
+                                                verticalAlignment: Text.AlignVCenter
+                                                horizontalAlignment: Text.AlignRight
+                                                text: modelData.percent.toFixed(1) + "%"
+                                                color: theme.text; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("legend", "size")
+                                            cellWidth: window.columnWidth("legend", "size")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 6
+                                                text: modelData.sizeText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.text; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("legend", "alloc")
+                                            cellWidth: window.columnWidth("legend", "alloc")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 6
+                                                text: modelData.allocText
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
+                                        }
+                                        TableCell {
+                                            visible: window.columnVisible("legend", "files")
+                                            cellWidth: window.columnWidth("legend", "files")
+                                            lineColor: window.gridColor()
+                                            Label {
+                                                anchors.fill: parent; anchors.rightMargin: 6
+                                                text: diskModel.formatCount(modelData.files)
+                                                horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                color: theme.textMuted; font.pixelSize: 11
+                                            }
                                         }
                                     }
-                                    Label { Layout.preferredWidth: legendColumns.size; text: modelData.sizeText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.text; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: legendColumns.alloc; text: modelData.allocText; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
-                                    Label { Layout.preferredWidth: legendColumns.files; text: diskModel.formatCount(modelData.files); horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter; color: theme.textMuted; font.pixelSize: 11 }
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        height: 1
+                                        color: window.gridColor()
+                                    }
                                 }
                             }
                         }
@@ -1531,30 +1831,10 @@ ApplicationWindow {
         }
     }
 
-    QtObject {
-        id: columns
-        property int pct: 78
-        property int size: 84
-        property int alloc: 84
-        property int items: 62
-        property int files: 62
-        property int dirs: 58
-        property int modified: 118
-        property int attrs: 64
-    }
-    QtObject {
-        id: fileColumns
-        property int pct: 78
-        property int size: 84
-        property int alloc: 84
-        property int modified: 118
-        property int attrs: 64
-    }
-    QtObject {
-        id: legendColumns
-        property int percent: 52
-        property int size: 66
-        property int alloc: 66
-        property int files: 52
-    }
+    // The three tables' widths. Only what the user dragged lives in `widths`;
+    // the spec above supplies the defaults, and ScanSettings keeps all three
+    // between runs.
+    ColumnStore { id: columns; defaults: window.specDefaults(window.treeColumnSpec); onChanged: window.saveColumnWidths() }
+    ColumnStore { id: fileColumns; defaults: window.specDefaults(window.fileColumnSpec); onChanged: window.saveColumnWidths() }
+    ColumnStore { id: legendColumns; defaults: window.specDefaults(window.legendColumnSpec); onChanged: window.saveColumnWidths() }
 }

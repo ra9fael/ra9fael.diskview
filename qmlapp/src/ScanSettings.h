@@ -42,6 +42,10 @@ class ScanSettings : public QObject {
     // only so an older settings file still reads.
     Q_PROPERTY(QString chartLayout READ chartLayout WRITE setChartLayout NOTIFY changed)
     Q_PROPERTY(QString dockLayout READ dockLayout WRITE setDockLayout NOTIFY changed)
+    // The table column widths, one JSON object per table ("tree", "file",
+    // "legend"). Only the columns the user dragged are in it; an empty or
+    // broken value falls back to the spec defaults in Main.qml.
+    Q_PROPERTY(QString columnWidths READ columnWidths WRITE setColumnWidths NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -78,6 +82,8 @@ public:
     QString chartLayout() const { return m_chartLayout; }
     QString dockLayout() const { return m_dockLayout; }
     void setDockLayout(const QString& value) { if (m_dockLayout != value) { m_dockLayout = value; emit changed(); } }
+    QString columnWidths() const { return m_columnWidths; }
+    void setColumnWidths(const QString& value) { if (m_columnWidths != value) { m_columnWidths = value; emit changed(); } }
     void setChartLayout(const QString& layout);
     QString filePath() const;
 
@@ -105,4 +111,5 @@ private:
     bool m_chartOnTop = false;
     QString m_chartLayout = QStringLiteral("tablesTop");
     QString m_dockLayout;
+    QString m_columnWidths;
 };

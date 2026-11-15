@@ -272,6 +272,7 @@ bool ScanSettings::load()
     }
     const QJsonObject object = document.object();
     m_dockLayout = QString::fromUtf8(QJsonDocument(object.value(QStringLiteral("dockLayout")).toObject()).toJson(QJsonDocument::Compact));
+    m_columnWidths = QString::fromUtf8(QJsonDocument(object.value(QStringLiteral("columnWidths")).toObject()).toJson(QJsonDocument::Compact));
     m_lastPath = object.value(QStringLiteral("path")).toString();
     // Out-of-range values from a hand-edited file are clamped, not trusted.
     m_scanMode = std::clamp(object.value(QStringLiteral("scanMode")).toInt(0), 0, 2);
@@ -330,6 +331,7 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("chartOnTop"), m_chartOnTop);
     object.insert(QStringLiteral("chartLayout"), m_chartLayout);
     object.insert(QStringLiteral("dockLayout"), QJsonDocument::fromJson(m_dockLayout.toUtf8()).object());
+    object.insert(QStringLiteral("columnWidths"), QJsonDocument::fromJson(m_columnWidths.toUtf8()).object());
     QJsonArray excluded;
     for (const QString& path : m_excludedPaths) {
         excluded.append(path);
