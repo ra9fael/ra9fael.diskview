@@ -184,7 +184,7 @@ void testChartDepth()
 {
     DiskViewModel model;
     model.loadTree(tree());
-    check(model.chartDepth() == 2, "the chart starts at two levels");
+    check(model.chartDepth() == 0, "the chart starts on the automatic depth");
     check(!model.chartTree().isEmpty(), "the chart gets a tree");
     model.setChartDepth(1);
     const QVariantList top = model.chartTree().value("children").toList();

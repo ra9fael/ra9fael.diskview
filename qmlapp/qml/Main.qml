@@ -1348,14 +1348,14 @@ ApplicationWindow {
                         id: depthBox
                         implicitWidth: 76
                         implicitHeight: 26
-                        model: ["1", "2", "3", "4", "5"]
-                        currentIndex: chart.depth - 1
+                        model: ["自动", "1", "2", "3", "4", "5"]
+                        currentIndex: chart.depth
                         ToolTip.visible: hovered
-                        ToolTip.text: "方块里再画几层文件夹"
+                        ToolTip.text: "方块里再画几层文件夹；自动按每个文件夹的面积决定"
                         onActivated: {
-                            chart.depth = index + 1
-                            diskModel.chartDepth = index + 1
-                            scanSettings.chartDepth = index + 1
+                            chart.depth = index
+                            diskModel.chartDepth = index
+                            scanSettings.chartDepth = index
                             scanSettings.save()
                         }
                     }
@@ -1405,6 +1405,11 @@ ApplicationWindow {
                             treeData: diskModel.chartTree
                             selectedId: diskModel.selectedId
                             viewMode: window.chartKind
+                            // The chart's own greys follow the window's
+                            // light/dark choice, including a live style switch.
+                            // `window.dark`, not `theme.dark`: inside this
+                            // binding `theme` is the property being set.
+                            theme: window.dark ? "dark" : "light"
                             centerLabel: diskModel.currentName
                             highlightExtension: window.chartHighlight()
                             accent: window.themeTokens.accent

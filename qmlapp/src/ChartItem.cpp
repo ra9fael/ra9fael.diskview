@@ -124,9 +124,10 @@ void ChartItem::setCenterLabel(const QString& label)
 }
 void ChartItem::setDepth(int depth)
 {
-    // One level keeps the folders whole and clickable; five is as deep as the
-    // tiles stay readable, the way WizTree stops.
-    depth=std::clamp(depth,1,5);
+    // Zero is "auto": the area each folder gets decides how far the blocks
+    // nest, the way WizTree does it. One to five keep a fixed limit, five
+    // being as deep as the tiles stay readable.
+    depth=std::clamp(depth,0,5);
     if(m_depth==depth)return;
     m_depth=depth;
     emit depthChanged();
@@ -141,8 +142,13 @@ void ChartItem::setHighlightExtension(const QString& extension)
 }
 void ChartItem::setTheme(const QString& theme)
 {
-    if(m_theme==theme)return;
-    m_theme=theme;
+    // The host sends "dark" or "dark|style"; only the light/dark part matters
+    // here, the rest is the window's business.
+    const QString wanted = theme.trimmed().toLower().startsWith(QStringLiteral("dark"))
+                               ? QStringLiteral("dark")
+                               : QStringLiteral("light");
+    if(m_theme==wanted)return;
+    m_theme=wanted;
     emit themeChanged();
     update();
 }
@@ -237,6 +243,29 @@ QColor ChartItem::accentColor(bool selected) const
     return selected?m_accent:m_accent.lighter(118);
 }
 
+// A folder's frame and title strip. The fill is opaque on purpose: it hides
+// the folder's own block where the content does not reach, so what shows
+// through is structure rather than a colour that looks like a file.
+QColor ChartItem::chromeFill() const
+{
+    return m_theme=="dark"?QColor(QStringLiteral("#20262E")):QColor(QStringLiteral("#EDF1F6"));
+}
+
+QColor ChartItem::chromeInk() const
+{
+    return m_theme=="dark"?QColor(QStringLiteral("#D6E0EB")):QColor(QStringLiteral("#31465E"));
+}
+
+QColor ChartItem::chromeBorder() const
+{
+    return m_theme=="dark"?QColor(255,255,255,40):QColor(30,45,65,52);
+}
+
+QColor ChartItem::neutralFill() const
+{
+    return m_theme=="dark"?QColor(QStringLiteral("#3A4150")):QColor(QStringLiteral("#B9BFC8"));
+}
+
 // The tile's own gradient: a vertical fade from a lighter top to the base
 // colour, plus a soft highlight band across the upper third. Flat fills read
 // as one grey mass; the fade gives every block the depth the native chart's
@@ -270,11 +299,15 @@ void ChartItem::rebuildGeometry()
     const qreal inset = m_viewMode == 0 ? 0.0 : 2.0;
     const QRectF area(inset,inset,width()-2*inset,height()-2*inset);
     m_innerRadius=0;
-    // The top level is depth 0, so one level means no recursion at all.
-    const int maxDepth=m_depth-1;
+    // The top level is depth 0, so one level means no recursion at all; auto
+    // lets the per-folder area budget stop it instead.
+    const int maxDepth=m_depth<=0?24:m_depth-1;
     if(m_viewMode==0){
         diskview::treemapTiles(m_chartRoot,{0,0,area.width(),area.height()},0,18.0,m_tiles,m_chartRoot.name,maxDepth);
         for(const auto& tile:m_tiles){
+            // The aggregate block has no node of its own; the folder's region
+            // already covers that space, and a click on it selects the folder.
+            if(tile.remainder||!tile.node)continue;
             const QString id=m_pathIds.value(tile.path);
             if(!id.isEmpty())m_regions.push_back({QRectF(area.x()+tile.rect.x,area.y()+tile.rect.y,tile.rect.w,tile.rect.h),id,tile.node->dir});
         }
@@ -371,8 +404,17 @@ QPointF ChartItem::firstDirectoryCenter() const
             continue;
         }
         const QRectF r=region.rect;
-        // The children of a folder cover it, so only a leaf folder is
-        // clickable. A coarse grid finds one without guessing where.
+        // A folder that draws its children covers all of its inside with
+        // them, so the only spot that still belongs to the folder itself is
+        // its title strip along the top. A folded folder has no strip and is
+        // its own block throughout.
+        if(r.width()>12&&r.height()>12){
+            const QPointF title(r.left()+6,r.top()+6);
+            if(hitTest(title)==region.id)return title;
+        }
+        // The children of a folder cover it, so only the strip and a leaf
+        // folder are clickable. A coarse grid finds one without guessing
+        // where.
         for(int gy=1;gy<=4;++gy){
             for(int gx=1;gx<=4;++gx){
                 const QPointF point(r.left()+r.width()*gx/5.0,r.top()+r.height()*gy/5.0);
@@ -482,48 +524,36 @@ void ChartItem::paint(QPainter* painter)
     painter->translate(-transformCenter);
     painter->setRenderHint(QPainter::Antialiasing,true);
     if(m_viewMode==0){
+        // Pass 1: the content. Every tile is filled with its branch colour; an
+        // aggregate is neutral, because it is not one thing.
         for(const auto& tile:m_tiles){
-            const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             bool dimmed=false;
-            QBrush fill=fillBrush(*tile.node,rect,tile.hue,tile.depth,&dimmed);
-            const bool lit=id==m_selectedId||id==m_hoverId;
-            // The lit tile takes a lighter ramp so the selection stays inside
-            // the same colour family instead of jumping to another.
-            if(lit){
-                QColor base=fillFor(*tile.node,tile.hue,tile.depth);
-                QLinearGradient g(rect.topLeft(),rect.bottomLeft());
-                g.setColorAt(0.0,base.lighter(150));
-                g.setColorAt(1.0,base.lighter(118));
-                fill=QBrush(g);
-            }
+            const QBrush fill=tile.remainder?QBrush(neutralFill())
+                                            :fillBrush(*tile.node,rect,tile.hue,tile.depth,&dimmed);
             painter->fillRect(rect,fill);
-            // Every tile gets a quiet outline of its own: the nesting and the
-            // neighbouring files stay readable without a selection. The
-            // selection and the hover draw their stronger stroke over it, in
-            // the accent colour, so the two states cannot be confused.
-            if(id==m_selectedId||id==m_hoverId){
-                painter->setPen(QPen(accentColor(id==m_selectedId),id==m_selectedId?2:1));
-                painter->setBrush(Qt::NoBrush);
-                painter->drawRect(rect.adjusted(1,1,-1,-1));
-            }else{
-                painter->setPen(QPen(strokeColor(),1));
-                painter->setBrush(Qt::NoBrush);
-                painter->drawRect(rect.adjusted(0.5,0.5,-0.5,-0.5));
-            }
+            painter->setPen(QPen(strokeColor(),1));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRect(rect.adjusted(0.5,0.5,-0.5,-0.5));
         }
-        // Every folder gets a title strip along its top edge, painted after the
-        // children so it is never covered: that is what makes a nesting of
-        // blocks readable instead of a flat pile of colours.
+        // Pass 2: structure. A folder that keeps a title strip gets a neutral
+        // frame around itself and an opaque strip across its top: the frame
+        // means "folder", the colour means "content", and the two never mix.
+        // This is what makes the nesting readable instead of a flat pile of
+        // colours, and it also hides the parent's own block where its children
+        // do not reach.
         for(const auto& tile:m_tiles){
-            if(!tile.node->dir)continue;
+            if(tile.header<=0)continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
-            if(rect.width()<24||rect.height()<18)continue;
-            const qreal band=std::min<qreal>(12.0,rect.height()*0.45);
-            const QRectF strip(rect.left(),rect.top(),rect.width(),band);
-            painter->fillRect(strip,QColor(0,0,0,m_theme=="dark"?165:120));
-            painter->setPen(QPen(QColor(255,255,255,42),1));
+            painter->setPen(QPen(chromeBorder(),2));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRect(rect.adjusted(1,1,-1,-1));
+            const QRectF strip(rect.left(),rect.top(),rect.width(),tile.header);
+            painter->fillRect(strip,chromeFill());
+            painter->setPen(QPen(chromeBorder(),1));
             painter->drawLine(strip.bottomLeft(),strip.bottomRight());
+            painter->setPen(QPen(strokeColor(),1));
+            painter->drawRect(rect.adjusted(0.5,0.5,-0.5,-0.5));
         }
     }else{
         for(const auto& slice:m_slices){
@@ -579,31 +609,51 @@ void ChartItem::paint(QPainter* painter)
             const QString id=m_pathIds.value(tile.path); if(id.isEmpty())continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
+            if(tile.remainder){
+                // One neutral block standing for many small things: name it,
+                // and keep the count when the folder knows it.
+                if(screen.width()<36||screen.height()<12)continue;
+                const QString text=tile.remainderCount>0
+                    ?QStringLiteral("其余 %1 项").arg(tile.remainderCount)
+                    :QStringLiteral("其他");
+                painter->setPen(chromeInk());
+                painter->drawText(screen.adjusted(4,1,-4,-1),Qt::AlignCenter,
+                                  metrics.elidedText(text,Qt::ElideRight,screen.width()-8));
+                continue;
+            }
             bool dimmed=false;
             const QColor fill=fillFor(*tile.node,tile.hue,tile.depth,&dimmed);
-            QColor ink=diskviewqml::textOnColor(fill);
-            if(tile.node->dir){
-                // A folder's name sits in its title strip, in white on the dark
-                // band, so the label never competes with the blocks inside it.
-                if(screen.width()<40||screen.height()<12)continue;
-                const QRectF strip(screen.left()+3,screen.top(),screen.width()-6,
-                                   std::min<qreal>(10.0*m_zoom,screen.height()*0.45));
-                QColor bandInk("#eef3f8");
-                if(dimmed)bandInk.setAlphaF(0.55);
-                painter->setPen(bandInk);
-                const QString name=QString::fromStdWString(tile.node->name);
-                const QString size=QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
-                const QString label=name+"  "+size;
+            // A folder with a strip writes its name into the strip; the block
+            // underneath belongs to its children, so nothing else goes there.
+            if(tile.header>0){
+                const qreal band=tile.header*m_zoom;
+                if(screen.width()<36||band<8)continue;
+                const QRectF strip(screen.left()+5,screen.top(),screen.width()-10,band);
+                QColor ink=chromeInk();
+                if(dimmed)ink.setAlphaF(0.55);
+                painter->setPen(ink);
+                const QString label=QString::fromStdWString(tile.node->name)+"  "
+                                    +QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
                 painter->drawText(strip,Qt::AlignLeft|Qt::AlignVCenter,
                                   metrics.elidedText(label,Qt::ElideRight,strip.width()));
                 continue;
             }
-            if(screen.width()<48||screen.height()<14)continue;
+            // A collapsed folder and a file are both one block: the folder
+            // keeps its name and size on one line, the file gets two.
+            if(screen.width()<40||screen.height()<12)continue;
+            QColor ink=diskviewqml::textOnColor(fill);
             if(dimmed)ink.setAlphaF(0.45);
             painter->setPen(ink);
             const QRectF inner=screen.adjusted(5,2,-4,-2);
+            const QString name=QString::fromStdWString(tile.node->name);
+            if(tile.node->dir){
+                const QString label=name+"  "+QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
+                painter->drawText(inner,Qt::AlignLeft|Qt::AlignVCenter,
+                                  metrics.elidedText(label,Qt::ElideRight,inner.width()));
+                continue;
+            }
             painter->drawText(inner,Qt::AlignLeft|Qt::AlignTop,
-                              metrics.elidedText(QString::fromStdWString(tile.node->name),Qt::ElideRight,inner.width()));
+                              metrics.elidedText(name,Qt::ElideRight,inner.width()));
             if(screen.height()>=32&&!dimmed){
                 QRectF sub=inner;sub.setTop(inner.top()+13);
                 QColor subColor=ink;subColor.setAlphaF(0.75);
@@ -611,6 +661,19 @@ void ChartItem::paint(QPainter* painter)
                 painter->drawText(sub,Qt::AlignLeft|Qt::AlignTop,
                                   QString::fromStdString(diskview::formatBytes(tile.node->logical,true)));
             }
+        }
+        // Pass 3: the selection and the hover come last, over the strips and
+        // the labels, so neither can hide them. The ring follows the tile's
+        // whole boundary, which for a folder is the frame of all it holds.
+        for(const auto& tile:m_tiles){
+            if(tile.remainder)continue;
+            const QString id=m_pathIds.value(tile.path);
+            if(id.isEmpty()||(id!=m_selectedId&&id!=m_hoverId))continue;
+            const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
+            const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
+            painter->setPen(QPen(accentColor(id==m_selectedId),id==m_selectedId?2:1));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRect(screen.adjusted(1,1,-1,-1));
         }
     }else{
         painter->setFont(micro);

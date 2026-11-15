@@ -128,6 +128,14 @@ private:
     // of a hover or a selection.
     QColor strokeColor() const;
     QColor accentColor(bool selected) const;
+    // Structure is chrome, content is colour: a folder's frame and title strip
+    // use these neutrals, never the branch hue, so nesting stays readable.
+    QColor chromeFill() const;
+    QColor chromeInk() const;
+    QColor chromeBorder() const;
+    // The fill of the "everything else" aggregate: it is not one thing, so it
+    // carries no branch colour.
+    QColor neutralFill() const;
 
     QVariantMap m_treeData;
     // The payload's revision from the model, so identical data is not parsed

@@ -106,9 +106,18 @@ struct Tile {
     const Node* node = nullptr;
     int depth = 0;
     std::wstring path; // display path; the recursion threads it through
-    // Position on the colour wheel, inherited from the parent's span so
+    // Position on the colour wheel, inherited from the parent's branch so
     // neighbouring tiles stay in the same colour family.
     double hue = -1;
+    // A folder that keeps a title strip along its top edge (and a thin frame
+    // around itself) reports the strip's height here. Zero means the tile is
+    // one filled block with a single label: too small to nest anything.
+    double header = 0;
+    // The children too small to draw on their own, merged into one aggregate
+    // block so the folder's area stays completely covered. `path` is the
+    // folder's own, so a click on the aggregate resolves to the folder.
+    bool remainder = false;
+    std::uint32_t remainderCount = 0;
 };
 
 namespace detail {
@@ -157,14 +166,42 @@ inline double rowWorstExtra(const std::vector<double>& areas, double side, doubl
 
 } // namespace detail
 
-// Walks the tree, appending every visible tile. Children smaller than
-// `minArea` (device px^2) are skipped; their space stays inside the parent,
-// which paints its own label, so the picture remains honest. `basePath` is
-// the display path of `node` itself; every tile carries its full path.
+// A folder's title strip grows with depth: the outer levels carry the eye, the
+// inner ones need their room for content.
+inline int treemapHeaderHeight(int depth)
+{
+    return depth <= 0 ? 16 : (depth == 1 ? 13 : 11);
+}
+
+// How many of a folder's children would still be readable blocks inside
+// `area`. This is the rule that decides whether a folder splits or stays
+// whole, so the depth comes from the room rather than from a fixed number.
+inline int treemapBigChildren(const Node& node, double area, double minArea)
+{
+    if (node.logical == 0 || node.children.empty() || area <= 0)
+        return 0;
+    const double scale = area / static_cast<double>(node.logical);
+    int count = 0;
+    for (const Node& child : node.children)
+        if (static_cast<double>(child.logical) * scale >= minArea)
+            ++count;
+    return count;
+}
+
+// Walks the tree, appending every visible tile. A folder takes one of three
+// shapes, decided by the room it has rather than by a fixed depth:
+//   collapsed - one filled block with a single label;
+//   framed    - a chrome frame and title strip around its own block;
+//   expanded  - the same frame and strip, with its children laid out inside.
+// Children below `minArea` (device px^2), and any bytes the payload does not
+// account for, are folded into one aggregate tile: a folder's inside is always
+// covered by something, so its own flat colour never reads as a file.
+// `basePath` is the display path of `node` itself; every tile carries its full
+// path. `parentHue` is the position on the wheel the branch sits at.
 inline void treemapTiles(const Node& node, const Rect& area, int depth, double minArea,
                          std::vector<Tile>& out, std::wstring basePath = {},
                          int maxDepth = 24, const std::vector<const Node*>* visible = nullptr,
-                         double hue0 = 0.0, double hue1 = 1.0)
+                         double parentHue = -1.0)
 {
     if (depth > maxDepth || node.children.empty() || area.w <= 0 || area.h <= 0)
         return;
@@ -180,11 +217,68 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         return;
     const double scale = area.area() / total;
 
+    struct Entry {
+        const Node* node = nullptr;
+        double area = 0;
+        double hue = 0;
+        bool remainder = false;
+        std::uint32_t count = 0;
+    };
+    std::vector<Entry> entries;
+    entries.reserve(kids.size() + 1);
+    std::uint32_t culledCount = 0;
+    double shownArea = 0;
+    for (const Node* kid : kids) {
+        const double a = static_cast<double>(kid->logical) * scale;
+        if (a < minArea) {
+            ++culledCount; // folded into the aggregate below
+            continue;
+        }
+        Entry entry;
+        entry.node = kid;
+        entry.area = a;
+        shownArea += a;
+        entries.push_back(entry);
+    }
+    // What is left of the folder: the culled children, plus any bytes no
+    // exported child accounts for (the model keeps a bounded top-K per
+    // folder). One aggregate keeps the folder's inside completely covered.
+    const double restArea = area.area() - shownArea;
+    const bool hasRest = restArea > 4.0;
+    if (hasRest) {
+        Entry entry;
+        entry.area = restArea;
+        entry.remainder = true;
+        entry.count = culledCount;
+        entries.push_back(entry);
+    }
+    if (entries.empty())
+        return;
+
+    // Colour follows the branch, not the area share: the top level spreads
+    // folders around the wheel by the golden angle, so two large branches are
+    // never the same colour; every level below steps inside its parent's
+    // family, which keeps a subtree recognisable as one group.
+    constexpr double kGoldenAngle = 0.6180339887498949;
+    const std::size_t drawn = entries.size() - (hasRest ? 1 : 0);
+    const double step = drawn > 1 ? 0.16 / static_cast<double>(drawn - 1) : 0.0;
+    const double baseHue = parentHue < 0 ? 0.0 : parentHue;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        Entry& entry = entries[i];
+        if (entry.remainder) {
+            entry.hue = baseHue; // neutral in the fill; the position is unused
+        } else if (parentHue < 0 && entry.node->dir) {
+            entry.hue = static_cast<double>(i) * kGoldenAngle;
+        } else {
+            entry.hue = baseHue + (static_cast<double>(i) - (static_cast<double>(drawn) - 1) * 0.5) * step;
+        }
+    }
+
     double x = area.x, y = area.y, w = area.w, h = area.h;
-    std::vector<const Node*> row;
+    std::vector<const Entry*> row;
     std::vector<double> rowAreas;
-    std::vector<double> rowHues, rowHue0, rowHue1;
     double rowSum = 0;
+    const int stripHeight = treemapHeaderHeight(depth);
     const auto flushRow = [&] {
         if (row.empty())
             return;
@@ -192,33 +286,42 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         if (s <= 0 || w <= 0 || h <= 0) {
             row.clear();
             rowAreas.clear();
-            rowHues.clear();
-            rowHue0.clear();
-            rowHue1.clear();
             rowSum = 0;
             return;
         }
+        const auto place = [&](const Entry& entry, const Rect& r) {
+            Tile tile;
+            tile.rect = r;
+            tile.node = entry.node;
+            tile.depth = depth;
+            tile.path = entry.remainder ? basePath : childPath(basePath, entry.node->name);
+            tile.hue = entry.hue;
+            tile.remainder = entry.remainder;
+            tile.remainderCount = entry.count;
+            if (!entry.remainder && entry.node->dir && r.w >= 64.0 && r.h >= stripHeight + 10.0) {
+                tile.header = stripHeight;
+                const Rect inner {r.x + 2.0, r.y + stripHeight,
+                                  std::max(0.0, r.w - 4.0),
+                                  std::max(0.0, r.h - stripHeight - 2.0)};
+                // Split only when the inside can hold two blocks worth
+                // reading; otherwise the folder keeps its whole block under
+                // the strip.
+                if (inner.area() >= 1600.0 && depth + 1 <= maxDepth
+                    && treemapBigChildren(*entry.node, inner.area(), 48.0) >= 2) {
+                    out.push_back(tile);
+                    treemapTiles(*entry.node, inner, depth + 1, minArea, out, out.back().path,
+                                 maxDepth, nullptr, entry.hue);
+                    return;
+                }
+            }
+            out.push_back(tile);
+        };
         if (w >= h) {
             const double t = std::min(s / h, w);
             double cy = y;
             for (std::size_t i = 0; i < row.size(); ++i) {
                 const double hh = rowAreas[i] / t;
-                Rect r {x, cy, t, hh};
-                Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
-                tile.hue = rowHues.empty() ? -1 : rowHues[i];
-                out.push_back(std::move(tile));
-                // The parent keeps a title strip along its top and a thin
-                // frame on the other sides; children fill the rest. This is
-                // the SpaceSniffer/SquirrelDisk nesting, and it spends far
-                // less area on padding than an equal inset.
-                constexpr double pad = 2.0;
-                constexpr double header = 12.0;
-                if (row[i]->dir && t > 2 * pad + 8 && hh > header + pad + 8)
-                    treemapTiles(*row[i], Rect {x + pad, cy + header,
-                                                std::max(0.0, t - 2 * pad),
-                                                std::max(0.0, hh - header - pad)},
-                                 depth + 1, minArea, out, out.back().path, maxDepth, nullptr,
-                                 rowHue0[i], rowHue1[i]);
+                place(*row[i], Rect {x, cy, t, hh});
                 cy += hh;
             }
             x += t;
@@ -228,18 +331,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
             double cx = x;
             for (std::size_t i = 0; i < row.size(); ++i) {
                 const double ww = rowAreas[i] / t;
-                Rect r {cx, y, ww, t};
-                Tile tile {r, row[i], depth, childPath(basePath, row[i]->name)};
-                tile.hue = rowHues.empty() ? -1 : rowHues[i];
-                out.push_back(std::move(tile));
-                constexpr double pad = 2.0;
-                constexpr double header = 12.0;
-                if (row[i]->dir && ww > 2 * pad + 8 && t > header + pad + 8)
-                    treemapTiles(*row[i], Rect {cx + pad, y + header,
-                                                std::max(0.0, ww - 2 * pad),
-                                                std::max(0.0, t - header - pad)},
-                                 depth + 1, minArea, out, out.back().path, maxDepth, nullptr,
-                                 rowHue0[i], rowHue1[i]);
+                place(*row[i], Rect {cx, y, ww, t});
                 cx += ww;
             }
             y += t;
@@ -247,50 +339,32 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         }
         row.clear();
         rowAreas.clear();
-        rowHues.clear();
-        rowHue0.clear();
-        rowHue1.clear();
         rowSum = 0;
     };
 
-    double hueAcc = 0;
-    for (const Node* kid : kids) {
-        const double fraction = static_cast<double>(kid->logical) / total;
-        const double c0 = hue0 + (hue1 - hue0) * hueAcc;
-        const double c1 = hue0 + (hue1 - hue0) * (hueAcc + fraction);
-        hueAcc += fraction;
-        const double a = static_cast<double>(kid->logical) * scale;
-        if (a < minArea)
-            continue; // culled: the parent keeps its whole area
+    for (const Entry& entry : entries) {
+        if (entry.area <= 0)
+            continue;
         if (w <= 0 || h <= 0)
             break;
         const double side = std::min(w, h);
         if (row.empty()) {
-            row.push_back(kid);
-            rowAreas.push_back(a);
-            rowHues.push_back((c0 + c1) / 2);
-            rowHue0.push_back(c0);
-            rowHue1.push_back(c1);
-            rowSum = a;
+            row.push_back(&entry);
+            rowAreas.push_back(entry.area);
+            rowSum = entry.area;
             continue;
         }
         const double before = detail::rowWorst(rowAreas, side);
-        const double after = detail::rowWorstExtra(rowAreas, side, a);
+        const double after = detail::rowWorstExtra(rowAreas, side, entry.area);
         if (after <= before) {
-            row.push_back(kid);
-            rowAreas.push_back(a);
-            rowHues.push_back((c0 + c1) / 2);
-            rowHue0.push_back(c0);
-            rowHue1.push_back(c1);
-            rowSum += a;
+            row.push_back(&entry);
+            rowAreas.push_back(entry.area);
+            rowSum += entry.area;
         } else {
             flushRow();
-            row.push_back(kid);
-            rowAreas.push_back(a);
-            rowHues.push_back((c0 + c1) / 2);
-            rowHue0.push_back(c0);
-            rowHue1.push_back(c1);
-            rowSum = a;
+            row.push_back(&entry);
+            rowAreas.push_back(entry.area);
+            rowSum = entry.area;
         }
     }
     flushRow();

@@ -101,7 +101,7 @@ private:
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;
     bool m_fileRecursive = false;
-    int m_chartDepth = 2;
+    int m_chartDepth = 0; // 0 = auto: the area budget picks the depth
     bool m_chartOnTop = false;
     QString m_chartLayout = QStringLiteral("tablesTop");
     QString m_dockLayout;

@@ -154,26 +154,130 @@ static void testTreemapAspectRatio()
 
 static void testTreemapCullingKeepsParent()
 {
-    // One huge child, one below the pixel budget: the small one is culled, the
-    // big one keeps its exact share, and the leftover stays as background
-    // (the parent's total is never redistributed).
+    // One huge child, one below the pixel budget: the small one is folded into
+    // an aggregate block that keeps the folder's area completely covered, and
+    // the big one keeps its exact share.
     diskview::Node root = makeDir(L"root", {{L"big", 9900}, {L"tiny", 10}});
-    const diskview::Rect area {0, 0, 50, 50};
+    const diskview::Rect area {0, 0, 200, 200};
     std::vector<diskview::Tile> tiles;
     diskview::treemapTiles(root, area, 0, 100.0, tiles);
-    CHECK(tiles.size() == 1);
+    CHECK(tiles.size() == 2);
     CHECK(tiles[0].node->name == L"big");
+    CHECK(tiles[1].remainder);
+    CHECK(tiles[1].remainderCount == 1);
+    double sum = 0;
+    for (const diskview::Tile& t : tiles) sum += t.rect.area();
+    CHECK_MSG(std::abs(sum - area.area()) < 1e-6, "the aggregate leaves no hole in the folder");
     const double expected = area.area() * 9900.0 / 9910.0;
     CHECK(std::abs(tiles[0].rect.area() - expected) / expected < 0.005);
-    CHECK(tiles[0].rect.area() < area.area()); // the culled child's space is left empty
-    CHECK(root.logical == 9910);               // totals are untouched by culling
+    CHECK(root.logical == 9910); // totals are untouched by culling
+}
+
+static void testTreemapAggregatesUnaccountedBytes()
+{
+    // A folder whose payload only carries part of its bytes (the model keeps a
+    // bounded top-K): the rest still gets a block instead of a hole that looks
+    // like a file of its own.
+    diskview::Node root = makeDir(L"root", {{L"a", 400}});
+    root.logical = 1000;
+    const diskview::Rect area {0, 0, 100, 100};
+    std::vector<diskview::Tile> tiles;
+    diskview::treemapTiles(root, area, 0, 0.0, tiles);
+    CHECK(tiles.size() == 2);
+    CHECK(!tiles[0].remainder && tiles[0].node->name == L"a");
+    CHECK(tiles[1].remainder && tiles[1].remainderCount == 0);
+    double sum = 0;
+    for (const diskview::Tile& t : tiles) sum += t.rect.area();
+    CHECK_MSG(std::abs(sum - area.area()) < 1e-6, "unaccounted bytes stay inside the folder");
+}
+
+static void testTreemapFolderStates()
+{
+    // A folder nests only when it has the room and at least two children worth
+    // reading. Otherwise it stays one block, with or without a title strip.
+    diskview::Node sub;
+    sub.name = L"sub";
+    sub.dir = true;
+    sub.logical = 100;
+    sub.children = {makeFile(L"x", 60), makeFile(L"y", 40)};
+    diskview::Node solo;
+    solo.name = L"solo";
+    solo.dir = true;
+    solo.logical = 100;
+    solo.children = {makeFile(L"only", 100)};
+    diskview::Node root = makeDirOf(L"root", {std::move(sub), std::move(solo)});
+
+    std::vector<diskview::Tile> tiles;
+    diskview::treemapTiles(root, {0, 0, 400, 200}, 0, 18.0, tiles);
+    const diskview::Tile* subTile = nullptr;
+    const diskview::Tile* soloTile = nullptr;
+    int depth1 = 0;
+    for (const diskview::Tile& t : tiles) {
+        if (t.node && t.node->name == L"sub" && t.depth == 0) subTile = &t;
+        if (t.node && t.node->name == L"solo" && t.depth == 0) soloTile = &t;
+        if (t.depth == 1) ++depth1;
+    }
+    CHECK(subTile && subTile->header > 0);
+    CHECK(soloTile && soloTile->header > 0);   // room for a strip
+    CHECK(depth1 == 2);                        // only sub's two files nest
+    for (const diskview::Tile& t : tiles)
+        CHECK(!(t.node && t.node->name == L"only"));
+
+    // The same folders in a 60 px wide column: no strip, no nesting, and the
+    // top level is still drawn whole.
+    std::vector<diskview::Tile> narrow;
+    diskview::treemapTiles(root, {0, 0, 60, 200}, 0, 18.0, narrow);
+    CHECK(narrow.size() == 2);
+    for (const diskview::Tile& t : narrow) CHECK(t.header == 0);
+}
+
+static void testTreemapBranchHues()
+{
+    // Top-level folders spread around the wheel; a child stays in its own
+    // parent's family instead of taking a share of the wheel.
+    diskview::Node a;
+    a.name = L"a";
+    a.dir = true;
+    a.logical = 100;
+    a.children = {makeFile(L"a1", 60), makeFile(L"a2", 40)};
+    diskview::Node b;
+    b.name = L"b";
+    b.dir = true;
+    b.logical = 100;
+    b.children = {makeFile(L"b1", 50), makeFile(L"b2", 50)};
+    diskview::Node root = makeDirOf(L"root", {std::move(a), std::move(b)});
+    std::vector<diskview::Tile> tiles;
+    diskview::treemapTiles(root, {0, 0, 400, 200}, 0, 18.0, tiles);
+
+    const auto circular = [](double h0, double h1) {
+        double d = std::fabs(h0 - h1);
+        d -= std::floor(d);
+        return std::min(d, 1.0 - d);
+    };
+    const diskview::Tile* aTile = nullptr;
+    const diskview::Tile* bTile = nullptr;
+    const diskview::Tile* a1 = nullptr;
+    for (const diskview::Tile& t : tiles) {
+        if (!t.node) continue;
+        if (t.node->name == L"a" && t.depth == 0) aTile = &t;
+        if (t.node->name == L"b" && t.depth == 0) bTile = &t;
+        if (t.node->name == L"a1") a1 = &t;
+    }
+    CHECK(aTile && bTile);
+    if (aTile && bTile) {
+        CHECK_MSG(circular(aTile->hue, bTile->hue) > 0.3, "two top-level folders are far apart on the wheel");
+        CHECK(std::fabs(aTile->hue) < 1e-9); // the largest branch starts at the base hue
+    }
+    CHECK(a1);
+    if (aTile && a1) CHECK_MSG(circular(aTile->hue, a1->hue) < 0.1, "a child stays in its parent's colour family");
 }
 
 static void testTreemapNestsPaths()
 {
     diskview::Node sub = makeDir(L"sub", {{L"x", 50}, {L"y", 50}});
     diskview::Node root = makeDirOf(L"root", {sub, makeFile(L"z", 100)});
-    const diskview::Rect area {0, 0, 100, 100};
+    // 200 px wide: each top-level tile is 100 x 100, wide enough for a strip.
+    const diskview::Rect area {0, 0, 200, 100};
     std::vector<diskview::Tile> tiles;
     // The base path is the display path of the node itself ("D:\dir" in the
     // window), so every tile carries it plus its own name.
@@ -1007,6 +1111,9 @@ int main(int argc,char** argv)
     RUN(testTreemapCoversArea);
     RUN(testTreemapAspectRatio);
     RUN(testTreemapCullingKeepsParent);
+    RUN(testTreemapAggregatesUnaccountedBytes);
+    RUN(testTreemapFolderStates);
+    RUN(testTreemapBranchHues);
     RUN(testTreemapNestsPaths);
     RUN(testSunburstSpans);
     RUN(testSunburstNestsRings);

@@ -57,7 +57,7 @@ void testDefaults()
     check(settings.workers() == 0, "a fresh settings object keeps the automatic worker count");
     check(settings.media() == 0, "a fresh settings object keeps the automatic media");
     check(settings.previewIntervalMs() == 1500, "a fresh settings object keeps the 1.5 s preview interval");
-    check(settings.chartDepth() == 2, "a fresh settings object keeps the two-level chart");
+    check(settings.chartDepth() == 0, "a fresh settings object lets the chart pick its own depth");
     check(settings.excludedPaths().isEmpty(), "a fresh settings object excludes nothing");
 }
 
@@ -86,13 +86,16 @@ void testClamping()
     settings.setWorkers(0);
     check(settings.workers() == 0, "zero keeps the automatic worker count");
 
-    // The chart draws between one and five levels of blocks.
-    settings.setChartDepth(0);
-    check(settings.chartDepth() == 1, "the chart depth is clamped to one level");
+    // The chart works its depth out from the room each folder gets (0), or
+    // draws one to five fixed levels of blocks.
+    settings.setChartDepth(-4);
+    check(settings.chartDepth() == 0, "a negative depth falls back to the automatic one");
     settings.setChartDepth(9);
     check(settings.chartDepth() == 5, "the chart depth is clamped to five levels");
     settings.setChartDepth(3);
     check(settings.chartDepth() == 3, "a depth the chart draws is kept");
+    settings.setChartDepth(0);
+    check(settings.chartDepth() == 0, "zero keeps the automatic depth");
 }
 
 void testExcludedPaths()

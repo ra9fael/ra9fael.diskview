@@ -98,7 +98,9 @@ DiskViewModel::DiskViewModel(QObject* parent) : QAbstractListModel(parent)
 
 void DiskViewModel::setChartDepth(int depth)
 {
-    const int clamped = std::clamp(depth, 1, 5);
+    // Zero asks the chart to work out its own depth from the room each folder
+    // gets; one to five are the fixed limits it used to have.
+    const int clamped = std::clamp(depth, 0, 5);
     if (clamped == m_chartDepth) return;
     m_chartDepth = clamped;
     emit chartChanged();
@@ -892,7 +894,7 @@ bool DiskViewModel::expandNode(const QString& id)
         if (a < 0) return false;
         route.push_back(a);
     }
-    if (route.size() > m_chartDepth) return false;
+    if (route.size() > (m_chartDepth <= 0 ? 5 : m_chartDepth)) return false;
     std::reverse(route.begin(), route.end());
     int parent = m_chartRoot;
     for (int child : route) {
@@ -986,13 +988,14 @@ QVariantList DiskViewModel::extensions() const
 QVariantMap DiskViewModel::chartTree() const
 {
     if (m_chartRoot < 0) return {};
-    // The chart draws as many levels below the current folder as the window
-    // asked for. Only the largest children of a folder get a tile anyway, and
-    // the export is capped in total, so a folder with hundreds of big
-    // subfolders cannot turn a double click into a memory spike.
-    const int levels = std::clamp(m_chartDepth, 1, 5) + 1;
+    // "Auto" (0) exports every level the fixed maximum allows; the chart then
+    // draws fewer wherever a tile is too small to hold a frame. The export is
+    // capped in total, so a folder with hundreds of big subfolders cannot turn
+    // a double click into a memory spike.
+    const int depthSetting = m_chartDepth <= 0 ? 5 : std::clamp(m_chartDepth, 1, 5);
+    const int levels = depthSetting + 1;
     constexpr int kChartChildren = 256;
-    const int kChartNodes = 2048 * std::clamp(m_chartDepth, 1, 5);
+    const int kChartNodes = 2048 * depthSetting;
     int budget = kChartNodes;
     const auto exportNode = [&](auto&& self, int index, int level) -> QVariantMap {
         QVariantList children;

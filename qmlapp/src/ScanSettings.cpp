@@ -187,9 +187,9 @@ void ScanSettings::setFileRecursive(bool recursive)
 
 void ScanSettings::setChartDepth(int depth)
 {
-    // One level means the folders stay whole tiles, five is as deep as the
-    // chart reads well; anything else is snapped into that range.
-    const int clamped = std::clamp(depth, 1, 5);
+    // Zero is "auto": each folder nests as deep as its room allows. One to
+    // five are fixed limits; anything else snaps into that range.
+    const int clamped = std::clamp(depth, 0, 5);
     if (clamped == m_chartDepth) {
         return;
     }
@@ -300,7 +300,7 @@ bool ScanSettings::load()
     m_fuzzyMatch = object.value(QStringLiteral("fuzzyMatch")).toBool(false);
     m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
     m_fileRecursive = object.value(QStringLiteral("fileRecursive")).toBool(false);
-    m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(2), 1, 5);
+    m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(0), 0, 5);
     m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
     const QString layout = object.value(QStringLiteral("chartLayout")).toString();
     m_chartLayout = layout.isEmpty() ? (m_chartOnTop ? QStringLiteral("tablesBottom") : QStringLiteral("tablesTop"))
