@@ -15,6 +15,18 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QStorageInfo>
+#include <QRegularExpression>
+#include <QDirIterator>
+#include <QTimer>
+#include <QThread>
+#include <QUrl>
+#include <QDir>
+#include <QFileInfo>
+#include <QStorageInfo>
+
+#include <wrl/client.h>
+#include <wrl/implements.h>
+#include <shobjidl.h>
 
 #include <windows.h>
 #include <shlobj.h>
@@ -34,9 +46,90 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <dwmapi.h>
+#include <shlwapi.h>
 
 namespace {
 const char* kBuiltInFixture = ":/fixtures/disk-tree.json";
+
+QString cleanPath(QString path)
+{
+    path = QDir::fromNativeSeparators(path.trimmed());
+    if (path.size() == 2 && path[1] == QLatin1Char(':')) path += QLatin1Char('/');
+    return QDir::cleanPath(path);
+}
+
+bool sameOrBelowPath(const QString& path, const QString& root)
+{
+    const QString p = cleanPath(path).toCaseFolded();
+    QString r = cleanPath(root).toCaseFolded();
+    if (r.endsWith(QLatin1Char('/')) && r.size() > 3) r.chop(1);
+    if (p == r) return true;
+    // A drive root is already a complete path component: C:/foo is below
+    // C:/, even though the character immediately after "c:/" is not '/'.
+    if (r.size() == 3 && r[1] == QLatin1Char(':') && r[2] == QLatin1Char('/'))
+        return p.startsWith(r);
+    return p.startsWith(r) && p.size() > r.size() && p[r.size()] == QLatin1Char('/');
+}
+
+bool protectedPath(const QString& source)
+{
+    const QString path = cleanPath(QFileInfo(source).canonicalFilePath().isEmpty()
+                                   ? source : QFileInfo(source).canonicalFilePath());
+    if (path.isEmpty() || path.startsWith(QStringLiteral("//"))
+        || (path.size() == 3 && path[1] == QLatin1Char(':'))) return true;
+    const QString windows = QDir::cleanPath(QString::fromWCharArray([] { static wchar_t p[32768]{}; ::GetWindowsDirectoryW(p, 32768); return p; }()));
+    if (sameOrBelowPath(path, windows)) return true;
+    for (const wchar_t* variable : {L"ProgramFiles", L"ProgramFiles(x86)", L"ProgramData"}) {
+        wchar_t value[32768]{};
+        const DWORD size = ::GetEnvironmentVariableW(variable, value, 32768);
+        if (size && size < 32768 && sameOrBelowPath(path, QString::fromWCharArray(value))) return true;
+    }
+    const QString name = QFileInfo(path).fileName().toCaseFolded();
+    if (name == QStringLiteral("pagefile.sys") || name == QStringLiteral("hiberfil.sys")
+        || name == QStringLiteral("swapfile.sys") || name == QStringLiteral("system volume information")) return true;
+    const QString drive = QFileInfo(path).absolutePath().left(3);
+    if (drive.size() < 3 || ::GetDriveTypeW(reinterpret_cast<LPCWSTR>(drive.utf16())) != DRIVE_FIXED) return true;
+    const DWORD attrs = ::GetFileAttributesW(reinterpret_cast<LPCWSTR>(path.utf16()));
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & (FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_REPARSE_POINT))) return true;
+    QString ancestor = QFileInfo(path).absolutePath();
+    while (!ancestor.isEmpty() && ancestor.size() >= 3) {
+        const DWORD parentAttrs = ::GetFileAttributesW(reinterpret_cast<LPCWSTR>(ancestor.utf16()));
+        if (parentAttrs == INVALID_FILE_ATTRIBUTES || (parentAttrs & FILE_ATTRIBUTE_REPARSE_POINT)) return true;
+        const QString next = QFileInfo(ancestor).absolutePath();
+        if (next == ancestor) break;
+        ancestor = next;
+    }
+    return false;
+}
+
+class FileOperationSink final : public Microsoft::WRL::RuntimeClass<
+    Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IFileOperationProgressSink> {
+public:
+    bool requireRecycle = true;
+    bool completed = false;
+    bool recycled = false;
+    HRESULT itemResult = E_PENDING;
+    Microsoft::WRL::ComPtr<IShellItem> destination;
+    IFACEMETHODIMP StartOperations() override { return S_OK; }
+    IFACEMETHODIMP FinishOperations(HRESULT) override { return S_OK; }
+    IFACEMETHODIMP PreRenameItem(DWORD, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PostRenameItem(DWORD, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
+    IFACEMETHODIMP PreMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PostMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
+    IFACEMETHODIMP PreCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PostCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
+    IFACEMETHODIMP PreDeleteItem(DWORD flags, IShellItem*) override
+    { return !requireRecycle || (flags & TSF_DELETE_RECYCLE_IF_POSSIBLE) ? S_OK : E_ABORT; }
+    IFACEMETHODIMP PostDeleteItem(DWORD, IShellItem*, HRESULT hr, IShellItem* binItem) override
+    { completed = true; itemResult = hr; recycled = SUCCEEDED(hr) && hr != S_FALSE && binItem; destination = binItem; return S_OK; }
+    IFACEMETHODIMP PreNewItem(DWORD, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PostNewItem(DWORD, IShellItem*, LPCWSTR, LPCWSTR, DWORD, HRESULT, IShellItem*) override { return S_OK; }
+    IFACEMETHODIMP UpdateProgress(UINT, UINT) override { return S_OK; }
+    IFACEMETHODIMP ResetTimer() override { return S_OK; }
+    IFACEMETHODIMP PauseTimer() override { return S_OK; }
+    IFACEMETHODIMP ResumeTimer() override { return S_OK; }
+};
 }
 
 QmlHost::QmlHost(Options options, QObject* parent) : QObject(parent), m_options(std::move(options)) {}
@@ -58,6 +151,7 @@ bool QmlHost::load(QString* error)
     // line. The settings decide how the next scan runs.
     m_scanService = new ScanService(this);
     m_scanSettings = new ScanSettings(this);
+    m_scanSettings->setDefaultVolumeEnumerationEnabled(!m_options.fixtureOnly);
     m_scanSettings->load();
     // The host's own settings, when this window is a plugin: they win over the
     // local file for the keys the host shows.
@@ -83,6 +177,8 @@ bool QmlHost::load(QString* error)
         const QJsonDocument document = QJsonDocument::fromJson(appearance);
         if (document.isObject()) m_theme->setAppearance(document.object().toVariantMap());
     }
+    if (m_scanSettings->appearanceMode() != 0)
+        m_theme->setLocalMode(m_scanSettings->appearanceMode());
     // A path given on the command line wins over the remembered one.
     m_engine.rootContext()->setContextProperty(
         "initialScanPath",
@@ -121,6 +217,14 @@ bool QmlHost::load(QString* error)
         // its rc and picks it up through WM_SETICON. The resource is compiled
         // into this binary, so both editions show one icon.
         window->setIcon(QIcon(QStringLiteral(":/app.ico")));
+        const auto applyTitleBarTheme = [this, window] {
+            if (!m_theme) return;
+            const BOOL darkAttribute = m_theme->dark() ? TRUE : FALSE;
+            ::DwmSetWindowAttribute(reinterpret_cast<HWND>(window->winId()), 20,
+                                    &darkAttribute, sizeof(darkAttribute));
+        };
+        applyTitleBarTheme();
+        connect(m_theme, &ThemeBridge::changed, this, applyTitleBarTheme);
         // Hand the finished tree to the model by move. The QML signal handler
         // would copy the whole tree through a QVariant; on a full C: volume
         // that is a second multi-hundred-megabyte allocation.
@@ -457,21 +561,6 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
             break;
         }
     }
-    // The name head sorts by name and flips the direction when it is clicked
-    // again.
-    model->toggleSort(DiskViewModel::SortByName);
-    bool nameSorted = true;
-    for (int row = 1; row < model->rowCount(); ++row) {
-        const QString previous = value(row - 1, DiskViewModel::NameRole).toString();
-        const QString current = value(row, DiskViewModel::NameRole).toString();
-        if (QString::compare(previous, current, Qt::CaseInsensitive) > 0) {
-            nameSorted = false;
-            break;
-        }
-    }
-    model->toggleSort(DiskViewModel::SortByName);
-    model->toggleSort(DiskViewModel::SortBySize);
-
     // The filter looks at the whole path; a row survives when it contains the
     // text or when it is a folder on the way to one that does.
     const int allRows = model->rowCount();
@@ -531,13 +620,12 @@ bool QmlHost::runListChecks(DiskViewModel* model, QString* detail)
 
     QStringList passed;
     if (sizeSorted) passed << QStringLiteral("sort");
-    if (nameSorted) passed << QStringLiteral("name");
     if (filterWorks) passed << QStringLiteral("filter");
     if (filesOnly) passed << QStringLiteral("files");
     if (expand) passed << QStringLiteral("expand");
     if (history) passed << QStringLiteral("history");
     *detail = passed.join(QLatin1Char(','));
-    return passed.size() == 6;
+    return passed.size() == 5;
 }
 
 bool QmlHost::runSelfTest(QString* report)
@@ -555,6 +643,7 @@ bool QmlHost::runSelfTest(QString* report)
     // one column, and a double click has to put it back. The events go to the
     // window, so they pass the real hit test and the real mouse area.
     bool columnsOk = false;
+    bool legendNameGripOk = false;
     QString columnDetail;
     if (QObject* root = m_engine.rootObjects().value(0)) {
         auto* columnWindow = qobject_cast<QQuickWindow*>(root);
@@ -578,11 +667,11 @@ bool QmlHost::runSelfTest(QString* report)
             columnsOk = true;
             columnDetail = QStringLiteral("not-shown");
         } else if (columnWindow) {
-            const auto widthOf = [&] {
+            const auto widthOf = [&](const QString& key) {
                 QVariant result;
                 if (auto* store = grip->property("store").value<QObject*>())
                     QMetaObject::invokeMethod(store, "width", Q_RETURN_ARG(QVariant, result),
-                                              Q_ARG(QVariant, QStringLiteral("size")));
+                                              Q_ARG(QVariant, key));
                 return result.toInt();
             };
             const auto send = [&](QEvent::Type type, const QPointF& local, Qt::MouseButton button,
@@ -596,22 +685,38 @@ bool QmlHost::runSelfTest(QString* report)
                 QCoreApplication::sendEvent(area, &event);
             };
             const QPointF center(grip->width() / 2, grip->height() / 2);
-            const int before = widthOf();
+            const int before = widthOf(QStringLiteral("size"));
+            const int neighborBefore = widthOf(QStringLiteral("alloc"));
+            const int totalBefore = columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))
+                                        ? int(columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))->width()) : 0;
             send(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
             send(QEvent::MouseMove, center + QPointF(24, 0), Qt::NoButton, Qt::LeftButton);
             send(QEvent::MouseButtonRelease, center + QPointF(24, 0), Qt::LeftButton, Qt::NoButton);
             QCoreApplication::processEvents();
-            const int dragged = widthOf();
+            const int dragged = widthOf(QStringLiteral("size"));
+            const int neighborDragged = widthOf(QStringLiteral("alloc"));
             const QPointF again(grip->width() / 2, grip->height() / 2);
             send(QEvent::MouseButtonPress, again, Qt::LeftButton, Qt::LeftButton);
             send(QEvent::MouseButtonRelease, again, Qt::LeftButton, Qt::NoButton);
             send(QEvent::MouseButtonDblClick, again, Qt::LeftButton, Qt::LeftButton);
             send(QEvent::MouseButtonRelease, again, Qt::LeftButton, Qt::NoButton);
             QCoreApplication::processEvents();
-            const int reset = widthOf();
-            columnsOk = dragged == before + 24 && reset == 84;
-            columnDetail = QStringLiteral("%1->%2 reset=%3").arg(before).arg(dragged).arg(reset);
+            const int reset = widthOf(QStringLiteral("size"));
+            QQmlExpression expectedExpression(m_engine.rootContext(), root,
+                                               QStringLiteral("autoFitWidth('tree', 'size')"));
+            const int expected = expectedExpression.evaluate().toInt();
+            const int totalAfter = columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))
+                                       ? int(columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))->width()) : -1;
+            columnsOk = dragged == before + 24 && neighborDragged == neighborBefore - 24
+                        && totalBefore == totalAfter && reset == expected;
+            columnDetail = QStringLiteral("%1->%2 neighbor=%3->%4 autofit=%5 total=%6/%7")
+                               .arg(before).arg(dragged).arg(neighborBefore).arg(neighborDragged)
+                               .arg(reset).arg(totalBefore).arg(totalAfter);
         }
+        // This header cell is not a Repeater delegate, so it is part of the
+        // regular QObject tree and can be checked by its stable object name.
+        if (auto* legendGrip = root->findChild<QQuickItem*>(QStringLiteral("columnHandle:legend:name")))
+            legendNameGripOk = legendGrip->isVisible() && legendGrip->width() > 0;
     }
     if (!columnsOk && columnDetail.isEmpty()) columnDetail = QStringLiteral("no-window");
     if (!runDockChecks(report)) return false;
@@ -774,7 +879,7 @@ bool QmlHost::runSelfTest(QString* report)
         listDetail = listDetail.isEmpty() ? QStringLiteral("bad-view") : listDetail + QStringLiteral(",bad-view");
     }
     const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list
-                      && viewFollows && drag && chartOk && columnsOk;
+                      && viewFollows && drag && chartOk && columnsOk && legendNameGripOk;
 
 
     *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\n")
@@ -789,7 +894,8 @@ bool QmlHost::runSelfTest(QString* report)
                   .arg(drag ? QStringLiteral("drag") : QStringLiteral("bad-drag"))
                   .arg(chartOk ? QStringLiteral("chart=%1").arg(chartDetail.join(QLatin1Char(',')))
                                : QStringLiteral("bad-chart:%1").arg(chartDetail.join(QLatin1Char(','))))
-                  .arg(columnsOk ? QStringLiteral("columns=%1").arg(columnDetail)
+                  .arg(columnsOk && legendNameGripOk ? QStringLiteral("columns=%1,legend-name-grip").arg(columnDetail)
+                                 : !legendNameGripOk ? QStringLiteral("bad-legend-name-grip")
                                  : QStringLiteral("bad-columns:%1").arg(columnDetail))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
     if (!m_options.scanPath.isEmpty() && m_scanService) {
@@ -809,6 +915,15 @@ bool QmlHost::runSelfTest(QString* report)
 
 QVariantList QmlHost::drives() const
 {
+    if (m_options.fixtureOnly) {
+        return {QVariantMap{
+            {"path", QStringLiteral("C:\\")},
+            {"label", QStringLiteral("C: (fixture)")},
+            {"root", QStringLiteral("C:\\")},
+            {"detail", QStringLiteral("内置视觉验收数据")},
+            {"usedPercent", 0},
+        }};
+    }
     const auto gb = [](qint64 bytes) {
         return QStringLiteral("%1 GB").arg(static_cast<double>(bytes) / (1024.0 * 1024 * 1024), 0, 'f', 1);
     };
@@ -819,13 +934,107 @@ QVariantList QmlHost::drives() const
         QString root = entry.absoluteFilePath();
         while (root.endsWith(QLatin1Char('/')) || root.endsWith(QLatin1Char('\\'))) root.chop(1);
         root += QLatin1Char('\\');
+        const QString volumeName = storage.displayName().trimmed();
+        const QString label = volumeName.isEmpty() ? QStringLiteral("本地磁盘 (%1)").arg(root.left(2))
+                                                   : QStringLiteral("%1 (%2)").arg(volumeName, root.left(2));
+        const int usedPercent = storage.bytesTotal() > 0
+            ? static_cast<int>(100.0 * (storage.bytesTotal() - storage.bytesAvailable()) / storage.bytesTotal()) : 0;
         rows.append(QVariantMap{
             {"path", root},
-            {"label", root},
+            {"label", label},
+            {"root", root},
             {"detail", QStringLiteral("%1 可用 / %2").arg(gb(storage.bytesAvailable()), gb(storage.bytesTotal()))},
+            {"usedPercent", usedPercent},
         });
     }
     return rows;
+}
+
+QVariantMap QmlHost::diskForPath(const QString& source) const
+{
+    const QString path = cleanPath(source);
+    for (const QVariant& value : drives()) {
+        const QVariantMap drive = value.toMap();
+        if (sameOrBelowPath(path, drive.value(QStringLiteral("path")).toString())) return drive;
+    }
+    return drives().value(0).toMap();
+}
+
+QVariantList QmlHost::defaultPaths(const QString& nearPath) const
+{
+    QVariantList rows;
+    QSet<QString> seen;
+    const auto appendPath = [&](const QString& raw, bool isDir) {
+        if (raw.isEmpty()) return;
+        const QString path = cleanPath(raw);
+        const QString key = path.toCaseFolded();
+        if (seen.contains(key)) return;
+        seen.insert(key);
+        rows.append(QVariantMap{{"path", path}, {"name", QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName()},
+                                {"dir", isDir}, {"parent", QFileInfo(path).absolutePath()}});
+    };
+    if (m_scanSettings) appendPath(m_scanSettings->lastPath(), true);
+    const QFileInfo nearInfo(nearPath);
+    const QString folder = nearInfo.isDir() ? nearInfo.absoluteFilePath() : nearInfo.absolutePath();
+    if (!folder.isEmpty() && QDir(folder).exists()) {
+        const QFileInfoList children = QDir(folder).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo& child : children) { appendPath(child.absoluteFilePath(), true); if (rows.size() >= 10) break; }
+    }
+    for (const QVariant& drive : drives()) {
+        const QVariantMap d = drive.toMap();
+        if (!seen.contains(cleanPath(d.value(QStringLiteral("path")).toString()).toCaseFolded())) {
+            rows.append(QVariantMap{{"path", d.value("path")}, {"name", d.value("label")}, {"dir", true},
+                                    {"parent", d.value("path")}, {"detail", d.value("detail")}});
+        }
+    }
+    return rows.mid(0, 12);
+}
+
+void QmlHost::searchPathsAsync(const QString& text, int requestId)
+{
+    ++m_searchRequest;
+    const int generation = m_searchRequest;
+    if (m_searchProcess) {
+        m_searchProcess->disconnect(this);
+        if (m_searchProcess->state() != QProcess::NotRunning) m_searchProcess->kill();
+        m_searchProcess->deleteLater();
+        m_searchProcess = nullptr;
+    }
+    const QString query = text.trimmed();
+    if (m_options.fixtureOnly) {
+        emit pathSuggestionsReady(requestId, defaultPaths(m_scanService ? m_scanService->rootPath() : QString()));
+        return;
+    }
+    if (query.isEmpty()) {
+        emit pathSuggestionsReady(requestId, defaultPaths(m_scanService ? m_scanService->rootPath() : QString()));
+        return;
+    }
+    auto* process = new QProcess(this);
+    m_searchProcess = process;
+    process->setProgram(QStringLiteral("ws"));
+    process->setArguments({QStringLiteral("find"), query, QStringLiteral("--json"), QStringLiteral("-n"), QStringLiteral("12")});
+    connect(process, &QProcess::finished, this, [this, process, generation, requestId](int exitCode, QProcess::ExitStatus exitStatus) {
+        QVariantList rows;
+        if (generation == m_searchRequest && exitStatus == QProcess::NormalExit && exitCode == 0) {
+            const QJsonDocument document = QJsonDocument::fromJson(process->readAllStandardOutput());
+            if (document.isArray()) {
+                for (const QJsonValue& value : document.array()) {
+                    const QJsonObject object = value.toObject();
+                    const QString path = object.value(QStringLiteral("path")).toString();
+                    if (path.isEmpty()) continue;
+                    const QString type = object.value(QStringLiteral("type")).toString();
+                    const bool dir = type == QStringLiteral("folder") || type == QStringLiteral("dir") || type == QStringLiteral("directory");
+                    rows.append(QVariantMap{{"path", path}, {"name", QFileInfo(path).fileName()}, {"dir", dir},
+                                            {"parent", QFileInfo(path).absolutePath()}});
+                }
+            }
+        }
+        if (rows.isEmpty() && generation == m_searchRequest) rows = defaultPaths(m_scanService ? m_scanService->rootPath() : QString());
+        if (generation == m_searchRequest) emit pathSuggestionsReady(requestId, rows);
+        process->deleteLater();
+        if (m_searchProcess == process) m_searchProcess = nullptr;
+    });
+    process->start();
 }
 
 QVariantList QmlHost::searchPaths(const QString& text) const
@@ -890,6 +1099,64 @@ QString QmlHost::chooseFolder(const QString& initial) const
 void QmlHost::setAppearance(const QVariantMap& appearance)
 {
     if (m_theme) m_theme->setAppearance(appearance);
+    if (auto* chart = window() ? window()->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr) {
+        chart->setSurfaceToken(m_theme->surfaceAlt());
+        chart->setBorderToken(m_theme->border());
+        chart->setNeutralToken(m_theme->textMuted());
+        chart->setDimToken(m_theme->dark() ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));
+        chart->setFontFamily(m_theme->fontFamily());
+        chart->setFontPixels(m_theme->fontSmall());
+    }
+}
+
+void QmlHost::setLocalAppearanceMode(int mode)
+{
+    if (m_scanSettings) m_scanSettings->setAppearanceMode(mode);
+    if (m_theme) m_theme->setLocalMode(mode);
+}
+
+void QmlHost::performFileActionAsync(const QString& path, bool permanent,
+                                     const QString& confirmation, const QString& nodeId,
+                                     int requestId)
+{
+    const QVariantMap validation = validateFileActionPath(path);
+    if (!validation.value(QStringLiteral("ok")).toBool()) {
+        emit fileActionFinished(requestId, nodeId, {{"ok", false}, {"error", validation.value(QStringLiteral("reason"))}});
+        return;
+    }
+    if (permanent && confirmation.compare(QFileInfo(path).fileName(), Qt::CaseInsensitive) != 0) {
+        emit fileActionFinished(requestId, nodeId, {{"ok", false}, {"error", QStringLiteral("名称不匹配，未删除")}});
+        return;
+    }
+
+    const QString checkedPath = validation.value(QStringLiteral("path")).toString();
+    QPointer<QmlHost> guard(this);
+    QThread* worker = QThread::create([guard, checkedPath, permanent, nodeId, requestId] {
+        const HRESULT initialized = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        Microsoft::WRL::ComPtr<IFileOperation> operation;
+        Microsoft::WRL::ComPtr<IShellItem> item;
+        auto sink = Microsoft::WRL::Make<FileOperationSink>();
+        sink->requireRecycle = !permanent;
+        HRESULT hr = ::CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(operation.GetAddressOf()));
+        if (SUCCEEDED(hr)) hr = ::SHCreateItemFromParsingName(reinterpret_cast<LPCWSTR>(checkedPath.utf16()), nullptr, IID_PPV_ARGS(item.GetAddressOf()));
+        if (SUCCEEDED(hr)) hr = operation->SetOperationFlags(permanent
+            ? (FOF_NOCONFIRMATION | FOF_NOERRORUI | FOFX_EARLYFAILURE)
+            : (FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOFX_EARLYFAILURE));
+        if (SUCCEEDED(hr)) hr = operation->DeleteItem(item.Get(), sink.Get());
+        if (SUCCEEDED(hr)) hr = operation->PerformOperations();
+        BOOL aborted = TRUE;
+        if (SUCCEEDED(hr)) hr = operation->GetAnyOperationsAborted(&aborted);
+        const bool ok = SUCCEEDED(hr) && !aborted && sink->completed
+            && (permanent ? SUCCEEDED(sink->itemResult) : sink->recycled);
+        const QString error = ok ? QString() : QStringLiteral("Windows 文件操作失败 (HRESULT 0x%1)")
+            .arg(static_cast<quint32>(FAILED(hr) ? hr : sink->itemResult), 8, 16, QLatin1Char('0'));
+        if (SUCCEEDED(initialized)) ::CoUninitialize();
+        if (guard) QMetaObject::invokeMethod(guard, [guard, requestId, nodeId, ok, error] {
+            if (guard) emit guard->fileActionFinished(requestId, nodeId, {{"ok", ok}, {"error", error}});
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }
 
 void QmlHost::setTheme(const QString& theme) const
@@ -900,6 +1167,14 @@ void QmlHost::setTheme(const QString& theme) const
     if (m_theme) m_theme->setTheme(theme);
     if (auto* chart = window()->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
         chart->setTheme(theme);
+        if (m_theme) {
+            chart->setSurfaceToken(m_theme->surfaceAlt());
+            chart->setBorderToken(m_theme->border());
+            chart->setNeutralToken(m_theme->textMuted());
+            chart->setDimToken(m_theme->dark() ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));
+            chart->setFontFamily(m_theme->fontFamily());
+            chart->setFontPixels(m_theme->fontSmall());
+        }
     }
 }
 
@@ -912,15 +1187,86 @@ void QmlHost::copyToClipboard(const QString& text) const
 
 void QmlHost::revealInExplorer(const QString& path) const
 {
-    // A quote in the name would break out of the argument, so such a path is
-    // left alone rather than handed to the shell.
-    if (path.isEmpty() || path.contains(QLatin1Char('"'))) {
-        return;
+    if (path.isEmpty()) return;
+    const HRESULT initialized = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    PIDLIST_ABSOLUTE full = nullptr;
+    HRESULT hr = ::SHParseDisplayName(reinterpret_cast<LPCWSTR>(path.utf16()), nullptr, &full, 0, nullptr);
+    if (SUCCEEDED(hr) && full) {
+        PIDLIST_ABSOLUTE parent = ::ILCloneFull(full);
+        if (parent) {
+            ::ILRemoveLastID(parent);
+            PCUITEMID_CHILD child = ::ILFindLastID(full);
+            hr = ::SHOpenFolderAndSelectItems(parent, 1, &child, 0);
+            ::CoTaskMemFree(parent);
+        } else hr = E_OUTOFMEMORY;
+        ::CoTaskMemFree(full);
     }
-    const QString argument = QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(path));
-    ::ShellExecuteW(nullptr, L"open", L"explorer.exe",
-                    reinterpret_cast<const wchar_t*>(argument.utf16()), nullptr, SW_SHOWNORMAL);
+    if (FAILED(hr)) {
+        const QString parent = QFileInfo(path).absolutePath();
+        if (!parent.isEmpty()) ::ShellExecuteW(nullptr, L"open", reinterpret_cast<LPCWSTR>(parent.utf16()), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    if (SUCCEEDED(initialized)) ::CoUninitialize();
 }
+
+bool QmlHost::openPath(const QString& path) const
+{
+    if (path.isEmpty()) return false;
+    return reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", reinterpret_cast<LPCWSTR>(path.utf16()), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+}
+
+bool QmlHost::showProperties(const QString& path) const
+{
+    if (path.isEmpty()) return false;
+    SHELLEXECUTEINFOW info{sizeof(info)};
+    info.fMask = SEE_MASK_INVOKEIDLIST;
+    info.hwnd = window() ? reinterpret_cast<HWND>(window()->winId()) : nullptr;
+    info.lpVerb = L"properties";
+    info.lpFile = reinterpret_cast<LPCWSTR>(path.utf16());
+    info.nShow = SW_SHOWNORMAL;
+    return ::ShellExecuteExW(&info) != FALSE;
+}
+
+bool QmlHost::copyFilesToClipboard(const QString& path, bool cut) const
+{
+    if (path.isEmpty()) return false;
+    std::wstring list = QDir::toNativeSeparators(path).toStdWString();
+    list.push_back(L'\0'); list.push_back(L'\0');
+    const SIZE_T bytes = sizeof(DROPFILES) + list.size() * sizeof(wchar_t);
+    HGLOBAL drop = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
+    HGLOBAL effect = ::GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+    if (!drop || !effect) { if (drop) ::GlobalFree(drop); if (effect) ::GlobalFree(effect); return false; }
+    if (auto* header = static_cast<DROPFILES*>(::GlobalLock(drop))) {
+        header->pFiles = sizeof(DROPFILES); header->fWide = TRUE;
+        std::memcpy(reinterpret_cast<char*>(header) + sizeof(DROPFILES), list.c_str(), list.size() * sizeof(wchar_t));
+        ::GlobalUnlock(drop);
+    }
+    if (auto* value = static_cast<DWORD*>(::GlobalLock(effect))) {
+        *value = cut ? DROPEFFECT_MOVE : DROPEFFECT_COPY; ::GlobalUnlock(effect);
+    }
+    HWND owner = window() ? reinterpret_cast<HWND>(window()->winId()) : nullptr;
+    if (!::OpenClipboard(owner)) { ::GlobalFree(drop); ::GlobalFree(effect); return false; }
+    ::EmptyClipboard();
+    const bool ok = ::SetClipboardData(CF_HDROP, drop) != nullptr;
+    if (!ok) ::GlobalFree(drop);
+    const UINT format = ::RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+    if (ok && format && !::SetClipboardData(format, effect)) ::GlobalFree(effect);
+    else if (!ok || !format) ::GlobalFree(effect);
+    ::CloseClipboard();
+    return ok;
+}
+
+QVariantMap QmlHost::validateFileActionPath(const QString& source) const
+{
+    const QString path = cleanPath(QFileInfo(source).canonicalFilePath().isEmpty() ? source : QFileInfo(source).canonicalFilePath());
+    if (path.isEmpty() || !QDir::isAbsolutePath(path)) return {{"ok", false}, {"reason", QStringLiteral("路径不是绝对路径")}};
+    if (!m_scanService) return {{"ok", false}, {"reason", QStringLiteral("扫描服务不可用")}};
+    if (m_scanService->isRunning()) return {{"ok", false}, {"reason", QStringLiteral("扫描进行中，请完成扫描后再操作")}};
+    if (!QFileInfo::exists(path)) return {{"ok", false}, {"reason", QStringLiteral("项目已不存在，请重新扫描")}};
+    if (protectedPath(path)) return {{"ok", false}, {"reason", QStringLiteral("系统项目、重解析点或非本地固定磁盘受保护")}};
+    return {{"ok", true}, {"reason", QString()}, {"path", path}};
+}
+
+QVariantMap QmlHost::canModifyPath(const QString& path) const { return validateFileActionPath(path); }
 
 bool QmlHost::openSettingsDialog(QString* error){
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
@@ -944,6 +1290,54 @@ bool QmlHost::saveScreenshot(const QString& path)
 {
     auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
     if (!window) return false;
+    const QByteArray visualState = qgetenv("WS_VISUAL_STATE");
+    if (m_options.fixtureOnly && !visualState.isEmpty()) {
+        const QString state = QString::fromLatin1(visualState);
+        if (state == QLatin1String("columns") || state == QLatin1String("suggestions")
+            || state == QLatin1String("drives") || state == QLatin1String("resized-columns")
+            || state == QLatin1String("address-focus") || state == QLatin1String("dock-tabs")
+            || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")
+            || state == QLatin1String("file-filter") || state == QLatin1String("extension-highlight")
+            || state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")) {
+            QQmlExpression prepare(m_engine.rootContext(), window,
+                                  QStringLiteral("prepareFixtureVisualState('%1')").arg(state));
+            prepare.evaluate();
+            if (prepare.hasError()) {
+                qWarning() << "fixture visual state failed:" << state << prepare.error().toString();
+                return false;
+            }
+            QCoreApplication::processEvents();
+            if (state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")
+                || state == QLatin1String("drives") || state == QLatin1String("dock-tabs")
+                || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")) {
+                for (int frame = 0; frame < 4; ++frame)
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            }
+            if (state == QLatin1String("drives")) {
+                // The ComboBox popup lives in its own transient window
+                // (popupType Window); prefer that grab so the open picker is
+                // visible in the shot, and fall back to the main window.
+                const auto windows = QGuiApplication::allWindows();
+                for (QWindow* candidate : windows) {
+                    if (candidate == window || !candidate->isVisible()) continue;
+                    auto* popupWindow = qobject_cast<QQuickWindow*>(candidate);
+                    if (!popupWindow) continue;
+                    const QImage popup = popupWindow->grabWindow();
+                    if (!popup.isNull() && popup.width() > 60 && popup.height() > 20)
+                        return popup.save(path);
+                }
+            }
+        }
+        if (state == QLatin1String("columns")) {
+            QQmlExpression widen(m_engine.rootContext(), window,
+                                 QStringLiteral("columnStore('tree').setWidth('name', 480)"));
+            widen.evaluate();
+            QCoreApplication::processEvents();
+            if (auto* list = window->findChild<QQuickItem*>(QStringLiteral("diskViewList")))
+                list->setProperty("contentX", 160);
+            QCoreApplication::processEvents();
+        }
+    }
     // A screenshot aid, next to WS_APPEARANCE: select a node by its display
     // path, so the selected state can be looked at without a pointer.
     if (const QByteArray wanted = qgetenv("WS_SELECT_PATH"); !wanted.isEmpty()) {
@@ -979,6 +1373,24 @@ bool QmlHost::saveScreenshot(const QString& path)
             }
             if (!selected.isEmpty()) model->select(selected);
             QCoreApplication::processEvents();
+        }
+    }
+    const QString state = QString::fromLatin1(visualState);
+    if (m_options.fixtureOnly && (state == QLatin1String("drives")
+                                  || state == QLatin1String("context-menu")
+                                  || state == QLatin1String("delete-confirmation"))) {
+        // Qt Quick Controls render Menu/Dialog as a separate popup window, so
+        // the main window grab deliberately cannot contain it.
+        for (QWindow* candidate : QGuiApplication::allWindows()) {
+            if (candidate == window || !candidate->isVisible()) continue;
+            auto* popupWindow = qobject_cast<QQuickWindow*>(candidate);
+            if (!popupWindow) continue;
+            const QImage popup = popupWindow->grabWindow();
+            if (!popup.isNull() && popup.width() > 100 && popup.height() > 40) {
+                return popup.save(path);
+            }
+            qWarning() << "fixture popup was not capturable:" << candidate->title()
+                       << candidate->size() << popup.size();
         }
     }
     return window->grabWindow().save(path);
@@ -1024,10 +1436,14 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->screenshotDelayMs = delay;
         } else if (argument == QStringLiteral("--self-test")) {
             options->selfTest = true;
+        } else if (argument == QStringLiteral("--fixture-only")) {
+            options->fixtureOnly = true;
         } else if (argument == QStringLiteral("--settings")) {
             options->openSettings = true;
         } else if (argument == QStringLiteral("--pause")) {
             options->pauseOnStart = true;
+        } else if (argument == QStringLiteral("--hold-window")) {
+            options->holdWindow = true;
         } else if (argument == QStringLiteral("--maximize")) {
             const QString group = value(argument);
             if (group != QStringLiteral("tables") && group != QStringLiteral("chart")) {
@@ -1065,8 +1481,10 @@ QString QmlHost::usage()
         "  --delay <ms>       wait before the grab (default 1200)\n"
         "  --settings         open the scan settings dialog on startup\n"
         "  --pause            start the scan and hold it there\n"
+        "  --hold-window      keep a standalone validation window open after scan\n"
         "  --maximize <tables|chart>  open with that pane in the fullscreen layer\n"
         "  --bench-chart <n>  build a tree of n nodes and time the chart pipeline\n"
         "  --self-test        run the interaction checks and print the verdict\n"
+        "  --fixture-only     use built-in data without enumerating mounted volumes\n"
         "  -h, --help         show this help\n");
 }

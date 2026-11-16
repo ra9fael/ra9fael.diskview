@@ -11,6 +11,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUrl>
+#include <queue>
+#include <utility>
 
 #include <algorithm>
 #include <new>
@@ -450,23 +452,28 @@ void DiskViewModel::sortEntries(QVector<int>& entries) const
     std::stable_sort(entries.begin(), entries.end(), [&](int a, int b) {
         int order = 0;
         switch (m_sortKey) {
-        case SortByName:
-            order = nameViewOf(a).compare(nameViewOf(b), Qt::CaseInsensitive);
-            break;
+        case SortByName: order = nameViewOf(a).compare(nameViewOf(b), Qt::CaseInsensitive); break;
         case SortByModified: {
-            const quint64 x = hasModifiedOf(a) ? modifiedOf(a) : 0;
-            const quint64 y = hasModifiedOf(b) ? modifiedOf(b) : 0;
-            if (x != y) order = x < y ? -1 : 1;
+            const quint64 mx = hasModifiedOf(a) ? modifiedOf(a) : 0;
+            const quint64 my = hasModifiedOf(b) ? modifiedOf(b) : 0;
+            if (mx != my) order = mx < my ? -1 : 1;
             break;
         }
         default: {
-            const quint64 x = sizeOf(a);
-            const quint64 y = sizeOf(b);
+            const quint64 x = sizeOf(a), y = sizeOf(b);
             if (x != y) order = x < y ? -1 : 1;
             break;
         }
         }
         return m_ascending ? order < 0 : order > 0;
+    });
+}
+
+void DiskViewModel::sortTreeEntries(QVector<int>& entries) const
+{
+    std::stable_sort(entries.begin(), entries.end(), [this](int a, int b) {
+        const quint64 x = sizeOf(a), y = sizeOf(b);
+        return x != y ? x > y : nameViewOf(a).compare(nameViewOf(b), Qt::CaseInsensitive) < 0;
     });
 }
 
@@ -548,7 +555,7 @@ void DiskViewModel::collectFilesFiltered(int node, QString& path, QVector<int>& 
 void DiskViewModel::appendTreeRows(int parent, const QSet<int>& keep, bool filtering, QVector<int>& out) const
 {
     QVector<int> kids = childrenOf(parent);
-    sortEntries(kids);
+    sortTreeEntries(kids);
     for (int child : kids) {
         if (filtering && !keep.contains(child)) continue;
         out.push_back(child);
@@ -725,6 +732,8 @@ void DiskViewModel::selectExtension(const QString& extension)
     // its outline. A reset is how this model reshapes its rows.
     applyRowChange();
     emit extensionFilterChanged();
+    ++m_chartRevision;
+    emit chartChanged();
 }
 
 void DiskViewModel::clearExtensionFilter()
@@ -734,6 +743,8 @@ void DiskViewModel::clearExtensionFilter()
     m_extensionFilterOn = false;
     applyRowChange();
     emit extensionFilterChanged();
+    ++m_chartRevision;
+    emit chartChanged();
 }
 
 void DiskViewModel::moveSelection(int delta)
@@ -861,7 +872,7 @@ int DiskViewModel::rowOfNode(int index) const
 void DiskViewModel::collectSubtreeRows(int index, QVector<int>& out) const
 {
     QVector<int> kids = childrenOf(index);
-    sortEntries(kids);
+    sortTreeEntries(kids);
     for (int child : kids) {
         out.push_back(child);
         if (directoryOf(child) && m_expanded.contains(child)) collectSubtreeRows(child, out);
@@ -932,11 +943,121 @@ bool DiskViewModel::revealNode(const QString& id)
     for (int a = parent; a >= 0; a = parentOf(a)) {
         if (directoryOf(a)) m_expanded.insert(a);
     }
-    if (m_current != parent) { pushHistory(parent); resetAt(parent); }
-    if (m_viewMode != TreeView) { m_viewMode = TreeView; applyRowChange(); }
+    if (m_viewMode != TreeView) m_viewMode = TreeView;
+    applyRowChange();
     m_selectedId = QString::number(index + 1);
     emit listChanged();
     emit selectedChanged();
+    return true;
+}
+
+QString DiskViewModel::pathForNode(const QString& id) const
+{
+    return pathOf(indexForId(id));
+}
+
+bool DiskViewModel::isAggregateNode(const QString& id) const
+{
+    const int index = indexForId(id);
+    return index >= 0 && (m_tree.flags.at(index) & 32) != 0;
+}
+
+bool DiskViewModel::isDirectoryNode(const QString& id) const
+{
+    const int index = indexForId(id);
+    return index >= 0 && directoryOf(index);
+}
+
+quint64 DiskViewModel::sizeForNode(const QString& id) const
+{
+    const int index = indexForId(id);
+    return index >= 0 ? sizeOf(index) : 0;
+}
+
+bool DiskViewModel::removeNode(const QString& id)
+{
+    const int index = indexForId(id);
+    if (index < 0 || index >= nodeCount()) return false;
+    const int oldParent = parentOf(index);
+    int end = index + 1;
+    while (end < nodeCount()) {
+        int ancestor = end;
+        while (ancestor >= index && ancestor != index) ancestor = parentOf(ancestor);
+        if (ancestor != index) break;
+        ++end;
+    }
+    const int removedCount = end - index;
+
+    beginResetModel();
+    m_tree.names.removeRange(index, end);
+    m_tree.parents.remove(index, removedCount);
+    m_tree.sizes.remove(index, removedCount);
+    m_tree.allocs.remove(index, removedCount);
+    m_tree.modified.remove(index, removedCount);
+    m_tree.attributes.remove(index, removedCount);
+    m_tree.fileCounts.remove(index, removedCount);
+    m_tree.dirCounts.remove(index, removedCount);
+    m_tree.flags.remove(index, removedCount);
+    for (int& parent : m_tree.parents) {
+        if (parent >= end) parent -= removedCount;
+    }
+
+    auto shifted = [index, end, removedCount](int value) {
+        if (value >= end) return value - removedCount;
+        if (value >= index) return -1;
+        return value;
+    };
+    m_current = nodeCount() > 0 ? std::max(0, shifted(m_current)) : -1;
+    m_chartRoot = shifted(m_chartRoot);
+    if (nodeCount() == 0) m_chartRoot = -1;
+    else if (m_chartRoot < 0) m_chartRoot = std::max(0, shifted(oldParent));
+    QVector<int> history;
+    history.reserve(m_history.size());
+    for (int value : m_history) {
+        const int next = shifted(value);
+        if (next >= 0) history.push_back(next);
+    }
+    m_history = std::move(history);
+    m_historyPos = m_history.isEmpty() ? -1 : std::clamp(m_historyPos, 0, static_cast<int>(m_history.size()) - 1);
+    QSet<int> expanded;
+    for (int value : std::as_const(m_expanded)) {
+        const int next = shifted(value);
+        if (next >= 0) expanded.insert(next);
+    }
+    m_expanded = std::move(expanded);
+
+    buildChildren();
+    for (int i = nodeCount() - 1; i >= 0; --i) {
+        if (!directoryOf(i)) continue;
+        quint64 size = 0, alloc = 0, files = 0, dirs = 0;
+        const int count = childCountOf(i);
+        for (int p = 0; p < count; ++p) {
+            const int child = childAt(i, p);
+            size += sizeOf(child);
+            alloc += allocOf(child);
+            if (directoryOf(child)) {
+                dirs += 1 + m_tree.dirCounts.at(child);
+                files += m_tree.fileCounts.at(child);
+            } else {
+                files += (m_tree.flags.at(child) & 32) ? m_tree.fileCounts.at(child) : 1;
+            }
+        }
+        m_tree.sizes[i] = static_cast<qint64>(std::min<quint64>(size, std::numeric_limits<qint64>::max()));
+        m_tree.allocs[i] = static_cast<qint64>(std::min<quint64>(alloc, std::numeric_limits<qint64>::max()));
+        m_tree.fileCounts[i] = static_cast<quint32>(std::min<quint64>(files, std::numeric_limits<quint32>::max()));
+        m_tree.dirCounts[i] = static_cast<quint32>(std::min<quint64>(dirs, std::numeric_limits<quint32>::max()));
+    }
+    m_selectedId = (m_chartRoot >= 0 || m_current >= 0)
+        ? QString::number((m_chartRoot >= 0 ? m_chartRoot : m_current) + 1) : QString();
+    rebuildRows();
+    ++m_dataRevision;
+    ++m_chartRevision;
+    m_extensionCacheValid = false;
+    endResetModel();
+    emit currentPathChanged();
+    emit selectedChanged();
+    emit listChanged();
+    emit chartChanged();
     return true;
 }
 
@@ -988,55 +1109,148 @@ QVariantList DiskViewModel::extensions() const
 QVariantMap DiskViewModel::chartTree() const
 {
     if (m_chartRoot < 0) return {};
-    // "Auto" (0) exports every level the fixed maximum allows; the chart then
-    // draws fewer wherever a tile is too small to hold a frame. The export is
-    // capped in total, so a folder with hundreds of big subfolders cannot turn
-    // a double click into a memory spike.
-    const int depthSetting = m_chartDepth <= 0 ? 5 : std::clamp(m_chartDepth, 1, 5);
-    const int levels = depthSetting + 1;
+    // Export breadth-first, preserving all top-level siblings before spending
+    // the bounded budget on larger directories below them.
+    const int depthSetting = m_chartDepth <= 0 ? 8 : std::clamp(m_chartDepth, 1, 8);
     constexpr int kChartChildren = 256;
     const int kChartNodes = 2048 * depthSetting;
     int budget = kChartNodes;
-    const auto exportNode = [&](auto&& self, int index, int level) -> QVariantMap {
-        QVariantList children;
-        --budget;
-        if (level + 1 < levels && budget > 0) {
-            // Do not materialize every child of a large directory just to
-            // discard all but the largest chart tiles. Keep a bounded top-K
-            // heap-like vector while reading the CSR range.
-            // A min-heap of the largest kChartChildren. Scanning with
-            // min_element for every extra child made this O(children x 256),
-            // which is what made a chart export take hundreds of ms on a big
-            // directory.
-            QVector<int> kids;
-            const int count = childCountOf(index);
-            const int start = count > 0 ? m_childStart.at(index) : 0;
-            kids.reserve(std::min(count, kChartChildren));
-            const auto smallestFirst = [this](int a, int b) { return sizeOf(a) > sizeOf(b); };
-            for (int pos=0; pos<count; ++pos) {
-                const int child = m_children.at(start + pos);
-                if (kids.size() < kChartChildren) {
-                    kids.push_back(child);
-                    std::push_heap(kids.begin(), kids.end(), smallestFirst);
-                } else if (sizeOf(child) > sizeOf(kids.front())) {
-                    std::pop_heap(kids.begin(), kids.end(), smallestFirst);
-                    kids.back() = child;
-                    std::push_heap(kids.begin(), kids.end(), smallestFirst);
-                }
-            }
-            std::sort(kids.begin(), kids.end(), [this](int a, int b) { return sizeOf(a) > sizeOf(b); });
-            for (int child : kids) {
-                if (budget <= 0) break;
-                children.push_back(self(self, child, level + 1));
+    QHash<int, QVector<int>> exported;
+    QHash<int, quint64> restBytes;
+    QHash<int, quint32> restItems;
+    QHash<int, quint32> matchCounts;
+    QHash<int, quint32> restMatches;
+    QHash<int, int> levels;
+    using QueueEntry = std::pair<quint64, int>;
+    std::priority_queue<QueueEntry> pending;
+
+    const auto largestChildren = [&](int parent, int limit) {
+        QVector<int> best;
+        const int count = childCountOf(parent);
+        const int start = count > 0 ? m_childStart.at(parent) : 0;
+        best.reserve(std::min(count, limit));
+        const auto heapOrder = [this](int a, int b) { return sizeOf(a) > sizeOf(b); };
+        for (int pos = 0; pos < count; ++pos) {
+            const int child = m_children.at(start + pos);
+            if (best.size() < limit) {
+                best.push_back(child);
+                std::push_heap(best.begin(), best.end(), heapOrder);
+            } else if (limit > 0 && sizeOf(child) > sizeOf(best.front())) {
+                std::pop_heap(best.begin(), best.end(), heapOrder);
+                best.back() = child;
+                std::push_heap(best.begin(), best.end(), heapOrder);
             }
         }
+        std::sort(best.begin(), best.end(), [this](int a, int b) { return sizeOf(a) > sizeOf(b); });
+        return best;
+    };
+
+    --budget; // root
+    const int rootCount = childCountOf(m_chartRoot);
+    const QVector<int> rootKids = largestChildren(m_chartRoot, std::min(rootCount, budget));
+    exported.insert(m_chartRoot, rootKids);
+    levels.insert(m_chartRoot, 0);
+    quint64 rootSelectedBytes = 0;
+    for (int child : rootKids) {
+        --budget;
+        rootSelectedBytes += sizeOf(child);
+        levels.insert(child, 1);
+        if (directoryOf(child)) pending.push({sizeOf(child), child});
+    }
+    if (rootCount > rootKids.size()) {
+        restBytes.insert(m_chartRoot, sizeOf(m_chartRoot) - std::min(sizeOf(m_chartRoot), rootSelectedBytes));
+        restItems.insert(m_chartRoot, static_cast<quint32>(rootCount - rootKids.size()));
+    }
+    if (rootKids.size() == rootCount && budget == 0) {
+        for (int child : rootKids) {
+            if (directoryOf(child) && childCountOf(child) > 0) {
+                restBytes.insert(child, sizeOf(child));
+                restItems.insert(child, static_cast<quint32>(childCountOf(child)));
+            }
+        }
+    }
+
+    while (!pending.empty() && budget > 0) {
+        const int parent = pending.top().second;
+        pending.pop();
+        const int depth = levels.value(parent);
+        if (depth >= depthSetting || childCountOf(parent) == 0) continue;
+        const int childCount = childCountOf(parent);
+        const int allowance = std::min({childCount, kChartChildren, budget});
+        if (allowance <= 0) continue;
+        const QVector<int> kids = largestChildren(parent, allowance);
+        exported.insert(parent, kids);
+        quint64 selectedBytes = 0;
+        for (int child : kids) {
+            --budget;
+            selectedBytes += sizeOf(child);
+            levels.insert(child, depth + 1);
+            if (directoryOf(child)) pending.push({sizeOf(child), child});
+        }
+        if (childCount > kids.size()) {
+            restBytes.insert(parent, sizeOf(parent) - std::min(sizeOf(parent), selectedBytes));
+            restItems.insert(parent, static_cast<quint32>(childCount - kids.size()));
+        }
+    }
+
+    // A directory can be selected but never expanded when the breadth-first
+    // budget or depth limit is exhausted. Keep its full subtree as a real
+    // remainder tile instead of leaving the directory's tile uncovered.
+    QVector<int> exportedParents;
+    exportedParents.reserve(exported.size());
+    for (auto it = exported.cbegin(); it != exported.cend(); ++it) exportedParents.push_back(it.key());
+    for (int parent : exportedParents) {
+        for (int child : exported.value(parent)) {
+            if (directoryOf(child) && !exported.contains(child) && childCountOf(child) > 0) {
+                restBytes.insert(child, sizeOf(child));
+                restItems.insert(child, static_cast<quint32>(childCountOf(child)));
+            }
+        }
+    }
+
+    if (m_extensionFilterOn) {
+        QVector<quint32> subtreeMatches(nodeCount(), 0);
+        for (int index = nodeCount() - 1; index >= m_chartRoot; --index) {
+            quint64 matches = 0;
+            if (!directoryOf(index)) {
+                const QString ext = extOf(index);
+                if (m_extensionFilter == QStringLiteral("@small"))
+                    matches = (m_tree.flags.at(index) & 32) ? m_tree.fileCounts.at(index) : 0;
+                else if (m_extensionFilter.isEmpty() ? ext.isEmpty() : ext == m_extensionFilter)
+                    matches = (m_tree.flags.at(index) & 32) ? m_tree.fileCounts.at(index) : 1;
+            } else {
+                const int first = m_childStart.at(index);
+                const int last = m_childStart.at(index + 1);
+                for (int pos = first; pos < last; ++pos) matches += subtreeMatches.at(m_children.at(pos));
+            }
+            subtreeMatches[index] = static_cast<quint32>(std::min<quint64>(matches, std::numeric_limits<quint32>::max()));
+        }
+        for (auto it = exported.cbegin(); it != exported.cend(); ++it)
+            matchCounts.insert(it.key(), subtreeMatches.at(it.key()));
+        for (auto it = exported.cbegin(); it != exported.cend(); ++it) {
+            quint64 selectedMatches = 0;
+            for (int child : it.value()) selectedMatches += subtreeMatches.at(child);
+            const quint64 totalMatches = subtreeMatches.at(it.key());
+            if (totalMatches > selectedMatches)
+                restMatches.insert(it.key(), static_cast<quint32>(std::min<quint64>(
+                    totalMatches - selectedMatches, std::numeric_limits<quint32>::max())));
+        }
+    }
+
+    const auto exportNode = [&](auto&& self, int index) -> QVariantMap {
+        QVariantList children;
+        for (int child : exported.value(index)) children.push_back(self(self, child));
         return {{"id", QString::number(index + 1)}, {"name", nameOf(index)}, {"size", double(sizeOf(index))},
                 {"directory", directoryOf(index)}, {"group", (m_tree.flags.at(index) & 32) != 0},
+                {"rest", double(restBytes.value(index))}, {"restCount", restItems.value(index)},
+                {"matchCount", matchCounts.value(index)},
+                {"restMatchCount", restMatches.value(index)},
                 {"children", children}};
     };
     QElapsedTimer timer;
     timer.start();
-    QVariantMap map = exportNode(exportNode, m_chartRoot, 0);
+    QVariantMap map = exportNode(exportNode, m_chartRoot);
+    map.insert(QStringLiteral("rootPath"), pathOf(m_chartRoot));
     map.insert(QStringLiteral("revision"), m_chartRevision);
     return map;
 }

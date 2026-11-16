@@ -113,7 +113,7 @@ int main(int argc, char** argv)
             QTextStream(stderr) << "error: could not save " << options.screenshotPath << "\n";
             code = 1;
         }
-        app.exit(code);
+        if (!options.holdWindow) app.exit(code);
     };
 
     if (options.openSettings) {

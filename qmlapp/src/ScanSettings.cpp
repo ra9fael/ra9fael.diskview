@@ -221,6 +221,46 @@ void ScanSettings::setChartLayout(const QString& layout)
     emit changed();
 }
 
+void ScanSettings::setFontSize(int value)
+{
+    const int clamped = std::clamp(value, 11, 16);
+    if (m_fontSize == clamped) return;
+    m_fontSize = clamped;
+    emit changed();
+}
+
+void ScanSettings::setTreeRowHeight(int value)
+{
+    const int clamped = std::clamp(value, 22, 40);
+    if (m_treeRowHeight == clamped) return;
+    m_treeRowHeight = clamped;
+    emit changed();
+}
+
+void ScanSettings::setFileRowHeight(int value)
+{
+    const int clamped = std::clamp(value, 22, 44);
+    if (m_fileRowHeight == clamped) return;
+    m_fileRowHeight = clamped;
+    emit changed();
+}
+
+void ScanSettings::setHeaderRowHeight(int value)
+{
+    const int clamped = std::clamp(value, 22, 36);
+    if (m_headerRowHeight == clamped) return;
+    m_headerRowHeight = clamped;
+    emit changed();
+}
+
+void ScanSettings::setAppearanceMode(int value)
+{
+    const int clamped = std::clamp(value, 0, 2);
+    if (m_appearanceMode == clamped) return;
+    m_appearanceMode = clamped;
+    emit changed();
+}
+
 void ScanSettings::addExcludedPath(const QString& path)
 {
     const QString trimmed = path.trimmed();
@@ -262,7 +302,7 @@ bool ScanSettings::load()
     if (!file.open(QIODevice::ReadOnly)) {
         // First run: the volume's own reserved folders are excluded from the
         // start, the way the report is meant to be read.
-        m_excludedPaths = defaultExcludedPaths();
+        m_excludedPaths = m_defaultVolumeEnumerationEnabled ? defaultExcludedPaths() : QStringList();
         emit changed();
         return false;
     }
@@ -302,6 +342,11 @@ bool ScanSettings::load()
     m_wholeTree = object.value(QStringLiteral("wholeTree")).toBool(false);
     m_fileRecursive = object.value(QStringLiteral("fileRecursive")).toBool(false);
     m_chartDepth = std::clamp(object.value(QStringLiteral("chartDepth")).toInt(0), 0, 5);
+    m_fontSize = std::clamp(object.value(QStringLiteral("fontSize")).toInt(13), 11, 16);
+    m_treeRowHeight = std::clamp(object.value(QStringLiteral("treeRowHeight")).toInt(26), 22, 40);
+    m_fileRowHeight = std::clamp(object.value(QStringLiteral("fileRowHeight")).toInt(28), 22, 44);
+    m_headerRowHeight = std::clamp(object.value(QStringLiteral("headerRowHeight")).toInt(26), 22, 36);
+    m_appearanceMode = std::clamp(object.value(QStringLiteral("appearanceMode")).toInt(0), 0, 2);
     m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
     const QString layout = object.value(QStringLiteral("chartLayout")).toString();
     m_chartLayout = layout.isEmpty() ? (m_chartOnTop ? QStringLiteral("tablesBottom") : QStringLiteral("tablesTop"))
@@ -328,6 +373,11 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("wholeTree"), m_wholeTree);
     object.insert(QStringLiteral("fileRecursive"), m_fileRecursive);
     object.insert(QStringLiteral("chartDepth"), m_chartDepth);
+    object.insert(QStringLiteral("fontSize"), m_fontSize);
+    object.insert(QStringLiteral("treeRowHeight"), m_treeRowHeight);
+    object.insert(QStringLiteral("fileRowHeight"), m_fileRowHeight);
+    object.insert(QStringLiteral("headerRowHeight"), m_headerRowHeight);
+    object.insert(QStringLiteral("appearanceMode"), m_appearanceMode);
     object.insert(QStringLiteral("chartOnTop"), m_chartOnTop);
     object.insert(QStringLiteral("chartLayout"), m_chartLayout);
     object.insert(QStringLiteral("dockLayout"), QJsonDocument::fromJson(m_dockLayout.toUtf8()).object());

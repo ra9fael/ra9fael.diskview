@@ -11,6 +11,7 @@
 class ScanService;
 class ScanSettings;
 class ThemeBridge;
+class QProcess;
 
 class QmlHost : public QObject {
     Q_OBJECT
@@ -23,6 +24,9 @@ public:
         QString screenshotPath;
         int screenshotDelayMs = 1200;
         bool selfTest = false;
+        // Uses only the built-in fixture and a synthetic C: row; no volume
+        // enumeration is performed during visual validation.
+        bool fixtureOnly = false;
         bool help = false;
         // Opens the scan settings dialog right away, so it can be looked at
         // without a pointer.
@@ -30,6 +34,8 @@ public:
         // Starts the scan and leaves it paused, so the held state can be
         // looked at.
         bool pauseOnStart = false;
+        // Keeps a standalone validation window open after a scan completes.
+        bool holdWindow = false;
         // The pane to maximize on startup ("tables" or "chart"), so the
         // fullscreen layer can be looked at without a pointer. Empty leaves
         // the window as it opens.
@@ -70,11 +76,19 @@ public:
     // Puts the host's look onto the open window: the chart reads the same
     // theme the window does. Standalone runs keep the light look.
     Q_INVOKABLE void setTheme(const QString& theme) const;
+    Q_INVOKABLE void setLocalAppearanceMode(int mode);
     // The host's appearance object (nativeLook, uiStyle, uiSize, corners):
     // the window draws its colours and radii from it.
     Q_INVOKABLE void setAppearance(const QVariantMap& appearance);
     Q_INVOKABLE void copyToClipboard(const QString& text) const;
     Q_INVOKABLE void revealInExplorer(const QString& path) const;
+    Q_INVOKABLE bool openPath(const QString& path) const;
+    Q_INVOKABLE bool showProperties(const QString& path) const;
+    Q_INVOKABLE bool copyFilesToClipboard(const QString& path, bool cut) const;
+    Q_INVOKABLE QVariantMap canModifyPath(const QString& path) const;
+    Q_INVOKABLE void performFileActionAsync(const QString& path, bool permanent,
+                                            const QString& confirmation, const QString& nodeId,
+                                            int requestId);
     // The fixed drives, for the address bar's location menu: path, label and
     // a short free/total line.
     Q_INVOKABLE QVariantList drives() const;
@@ -83,6 +97,9 @@ public:
     // WinShun's own fuzzy search (the ws CLI over its index), as
     // [{path, name, dir, parent}]. Empty when ws or the index is unavailable.
     Q_INVOKABLE QVariantList searchPaths(const QString& text) const;
+    Q_INVOKABLE void searchPathsAsync(const QString& text, int requestId);
+    Q_INVOKABLE QVariantList defaultPaths(const QString& nearPath) const;
+    Q_INVOKABLE QVariantMap diskForPath(const QString& path) const;
     // Builds a tree of that many nodes and times the whole chart pipeline.
     bool runChartBenchmark(int nodes, QString* report);
 
@@ -92,9 +109,12 @@ public:
 signals:
     void scanFinished();
     void scanFailed(const QString& message);
+    void pathSuggestionsReady(int requestId, const QVariantList& rows);
+    void fileActionFinished(int requestId, const QString& nodeId, const QVariantMap& result);
 
 private:
     bool runDockChecks(QString* report);
+    QVariantMap validateFileActionPath(const QString& path) const;
     Options m_options;
     QQmlApplicationEngine m_engine;
     ScanService* m_scanService = nullptr;
@@ -106,4 +126,6 @@ private:
     // What the QML engine complained about while loading; the reasons only
     // arrive through its warnings signal.
     QStringList m_loadWarnings;
+    QProcess* m_searchProcess = nullptr;
+    int m_searchRequest = 0;
 };

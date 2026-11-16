@@ -151,7 +151,7 @@ Dialog {
             Layout.fillWidth: true
             Layout.preferredHeight: 150
             color: theme.surface
-            border.color: "#dce2e8"
+            border.color: theme.border
             radius: 4
             ListView {
                 id: excludedList

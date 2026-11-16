@@ -35,6 +35,17 @@ public:
     void reserve(int count) { m_offsets.reserve(count + 1); }
     void clear() { m_chars.clear(); m_offsets.resize(1); m_offsets[0] = 0; }
 
+    void removeRange(int first, int last)
+    {
+        if (first < 0 || last <= first || last > size()) return;
+        const quint32 charBegin = m_offsets.at(first);
+        const quint32 charEnd = m_offsets.at(last);
+        const quint32 removed = charEnd - charBegin;
+        m_chars.remove(static_cast<qsizetype>(charBegin), static_cast<qsizetype>(removed));
+        m_offsets.remove(first + 1, last - first);
+        for (int i = first + 1; i < m_offsets.size(); ++i) m_offsets[i] -= removed;
+    }
+
     void append(const QString& name)
     {
         // Let QVector grow geometrically. Reserving size+name.size() on every

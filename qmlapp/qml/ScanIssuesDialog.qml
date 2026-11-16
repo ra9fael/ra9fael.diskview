@@ -49,7 +49,7 @@ Dialog {
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: theme.surface
-            border.color: "#dce2e8"
+            border.color: theme.border
             radius: 4
 
             ListView {

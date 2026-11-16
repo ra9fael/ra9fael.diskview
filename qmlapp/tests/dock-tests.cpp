@@ -23,9 +23,16 @@ int main(int argc, char** argv) {
         }
     }
     const auto saved = state.layout();
-    check(!state.movePane("tree", "tree", "left"), "reject self drop");
     check(!state.movePane("unknown", "tree", "left"), "reject unknown pane");
     check(state.layout() == saved, "invalid drop is atomic");
+    DockState grouped;
+    check(grouped.movePane("files", "tree", "center"), "merge files into tree tabs");
+    check(grouped.movePane("chart", "tree", "center"), "merge chart into tree tabs");
+    check(grouped.movePane("legend", "tree", "center"), "merge legend into tree tabs");
+    check(grouped.movePane("legend", "legend", "left"), "split active tab from all-in-one group");
+    check(DockState::valid(grouped.layout()), "split tab layout remains valid");
+    DockState single;
+    check(!single.movePane("tree", "tree", "left"), "reject self drop from single-pane group");
     DockState restored;
     restored.setLayout(QJsonDocument::fromJson(QJsonDocument::fromVariant(saved).toJson()).object().toVariantMap());
     check(restored.layout() == saved, "JSON round trip");

@@ -32,6 +32,12 @@ struct Node {
     bool dir = false;
     // A display-only aggregate of files below the scan's small-file threshold.
     bool group = false;
+    // Bytes and item count omitted by the bounded chart export. Treemap layout
+    // renders these as a real aggregate tile rather than an unaccounted gap.
+    std::uint64_t rest = 0;
+    std::uint32_t restCount = 0;
+    std::uint32_t matchCount = 0;
+    std::uint32_t restMatchCount = 0;
     std::uint32_t files = 0;           // a directory: files in its subtree (self not counted)
     std::uint32_t dirs = 0;            // a directory: folders in its subtree (self not counted)
     int skippedChildren = 0;           // immediate entries this directory could not read
@@ -118,6 +124,7 @@ struct Tile {
     // folder's own, so a click on the aggregate resolves to the folder.
     bool remainder = false;
     std::uint32_t remainderCount = 0;
+    std::uint32_t remainderMatchCount = 0;
 };
 
 namespace detail {
@@ -170,7 +177,7 @@ inline double rowWorstExtra(const std::vector<double>& areas, double side, doubl
 // inner ones need their room for content.
 inline int treemapHeaderHeight(int depth)
 {
-    return depth <= 0 ? 16 : (depth == 1 ? 13 : 11);
+    return depth <= 0 ? 18 : (depth == 1 ? 15 : 13);
 }
 
 // How many of a folder's children would still be readable blocks inside
@@ -203,7 +210,8 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                          int maxDepth = 24, const std::vector<const Node*>* visible = nullptr,
                          double parentHue = -1.0)
 {
-    if (depth > maxDepth || node.children.empty() || area.w <= 0 || area.h <= 0)
+    if (depth > maxDepth || area.w <= 0 || area.h <= 0
+        || (node.children.empty() && node.rest == 0 && node.restCount == 0))
         return;
     std::vector<const Node*> kids;
     kids.reserve(node.children.size());
@@ -223,6 +231,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
         double hue = 0;
         bool remainder = false;
         std::uint32_t count = 0;
+        std::uint32_t matchCount = 0;
     };
     std::vector<Entry> entries;
     entries.reserve(kids.size() + 1);
@@ -243,13 +252,14 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
     // What is left of the folder: the culled children, plus any bytes no
     // exported child accounts for (the model keeps a bounded top-K per
     // folder). One aggregate keeps the folder's inside completely covered.
-    const double restArea = area.area() - shownArea;
-    const bool hasRest = restArea > 4.0;
+    const double restArea = std::max(0.0, area.area() - shownArea);
+    const bool hasRest = restArea > 4.0 && (node.rest > 0 || node.restCount > 0 || culledCount > 0);
     if (hasRest) {
         Entry entry;
         entry.area = restArea;
         entry.remainder = true;
-        entry.count = culledCount;
+        entry.count = node.restCount + culledCount;
+        entry.matchCount = node.restMatchCount;
         entries.push_back(entry);
     }
     if (entries.empty())
@@ -298,6 +308,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
             tile.hue = entry.hue;
             tile.remainder = entry.remainder;
             tile.remainderCount = entry.count;
+            tile.remainderMatchCount = entry.matchCount;
             if (!entry.remainder && entry.node->dir && r.w >= 64.0 && r.h >= stripHeight + 10.0) {
                 tile.header = stripHeight;
                 const Rect inner {r.x + 2.0, r.y + stripHeight,
@@ -306,8 +317,8 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                 // Split only when the inside can hold two blocks worth
                 // reading; otherwise the folder keeps its whole block under
                 // the strip.
-                if (inner.area() >= 1600.0 && depth + 1 <= maxDepth
-                    && treemapBigChildren(*entry.node, inner.area(), 48.0) >= 2) {
+                if (inner.area() >= 900.0 && depth + 1 <= maxDepth
+                    && treemapBigChildren(*entry.node, inner.area(), 48.0) >= 1) {
                     out.push_back(tile);
                     treemapTiles(*entry.node, inner, depth + 1, minArea, out, out.back().path,
                                  maxDepth, nullptr, entry.hue);

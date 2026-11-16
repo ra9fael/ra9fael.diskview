@@ -8,6 +8,7 @@ import QtQuick.Layouts
 // which keeps the rule clear of the text.
 Item {
     id: cell
+    clip: true
 
     property int cellWidth: 60
     property color lineColor: "transparent"
@@ -17,6 +18,7 @@ Item {
     implicitWidth: cellWidth
     implicitHeight: 24
     Layout.preferredWidth: cellWidth
+    Layout.minimumWidth: 0
     Layout.fillHeight: true
 
     Item {

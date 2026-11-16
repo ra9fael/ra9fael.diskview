@@ -58,6 +58,11 @@ void testDefaults()
     check(settings.media() == 0, "a fresh settings object keeps the automatic media");
     check(settings.previewIntervalMs() == 1500, "a fresh settings object keeps the 1.5 s preview interval");
     check(settings.chartDepth() == 0, "a fresh settings object lets the chart pick its own depth");
+    check(settings.fontSize() == 13, "a fresh settings object uses the compact readable font size");
+    check(settings.treeRowHeight() == 26, "a fresh settings object uses the compact tree row height");
+    check(settings.fileRowHeight() == 28, "a fresh settings object uses the compact file row height");
+    check(settings.headerRowHeight() == 26, "a fresh settings object uses the compact header row height");
+    check(settings.appearanceMode() == 0, "a fresh settings object follows the host theme");
     check(settings.excludedPaths().isEmpty(), "a fresh settings object excludes nothing");
 }
 
@@ -96,6 +101,16 @@ void testClamping()
     check(settings.chartDepth() == 3, "a depth the chart draws is kept");
     settings.setChartDepth(0);
     check(settings.chartDepth() == 0, "zero keeps the automatic depth");
+    settings.setFontSize(100);
+    settings.setTreeRowHeight(1);
+    settings.setFileRowHeight(100);
+    settings.setHeaderRowHeight(1);
+    check(settings.fontSize() == 16, "the font size is clamped to the readable upper bound");
+    check(settings.treeRowHeight() == 22, "the tree row height is clamped to the compact lower bound");
+    check(settings.fileRowHeight() == 44, "the file row height is clamped to the readable upper bound");
+    check(settings.headerRowHeight() == 22, "the header row height is clamped to the compact lower bound");
+    settings.setAppearanceMode(9);
+    check(settings.appearanceMode() == 2, "the appearance mode is clamped to dark");
 }
 
 void testExcludedPaths()
@@ -134,6 +149,11 @@ void testRoundTrip()
     saved.setFuzzyMatch(true);
     saved.setWholeTree(true);
     saved.setChartDepth(4);
+    saved.setFontSize(14);
+    saved.setTreeRowHeight(27);
+    saved.setFileRowHeight(31);
+    saved.setHeaderRowHeight(25);
+    saved.setAppearanceMode(1);
     saved.setColumnWidths(QStringLiteral("{\"tree\":{\"size\":140},\"file\":{},\"legend\":{\"files\":60}}"));
     check(saved.save(), "the settings are written");
 
@@ -149,6 +169,11 @@ void testRoundTrip()
     check(back.fuzzyMatch(), "the fuzzy mode survives the round trip");
     check(back.wholeTree(), "the whole-tree scope survives the round trip");
     check(back.chartDepth() == 4, "the chart depth survives the round trip");
+    check(back.fontSize() == 14, "the font size survives the round trip");
+    check(back.treeRowHeight() == 27, "the tree row height survives the round trip");
+    check(back.fileRowHeight() == 31, "the file row height survives the round trip");
+    check(back.headerRowHeight() == 25, "the header row height survives the round trip");
+    check(back.appearanceMode() == 1, "the appearance mode survives the round trip");
     check(back.columnWidths().contains(QStringLiteral("\"size\":140"))
               && back.columnWidths().contains(QStringLiteral("\"files\":60")),
           "the column widths survive the round trip");
@@ -183,6 +208,18 @@ void testRoundTrip()
     check(broken.workers() == 0, "a broken file leaves the defaults alone");
 }
 
+void testFixtureModeDoesNotEnumerateVolumes()
+{
+    QTemporaryDir dir(QDir::current().filePath(QStringLiteral("dv-settings-fixture-XXXXXX")));
+    check(dir.isValid(), "the fixture settings directory is usable");
+    if (!dir.isValid()) return;
+    ScopedDataDir scoped(dir.path());
+    ScanSettings settings;
+    settings.setDefaultVolumeEnumerationEnabled(false);
+    check(!settings.load(), "fixture settings start without a file");
+    check(settings.excludedPaths().isEmpty(), "fixture defaults do not enumerate mounted volumes");
+}
+
 } // namespace
 
 int main()
@@ -192,6 +229,7 @@ int main()
     testClamping();
     testExcludedPaths();
     testRoundTrip();
+    testFixtureModeDoesNotEnumerateVolumes();
     if (g_failures == 0) {
         std::cout << "PASS\n";
         return 0;

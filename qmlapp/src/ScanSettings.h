@@ -46,6 +46,11 @@ class ScanSettings : public QObject {
     // "legend"). Only the columns the user dragged are in it; an empty or
     // broken value falls back to the spec defaults in Main.qml.
     Q_PROPERTY(QString columnWidths READ columnWidths WRITE setColumnWidths NOTIFY changed)
+    Q_PROPERTY(int fontSize READ fontSize WRITE setFontSize NOTIFY changed)
+    Q_PROPERTY(int treeRowHeight READ treeRowHeight WRITE setTreeRowHeight NOTIFY changed)
+    Q_PROPERTY(int fileRowHeight READ fileRowHeight WRITE setFileRowHeight NOTIFY changed)
+    Q_PROPERTY(int headerRowHeight READ headerRowHeight WRITE setHeaderRowHeight NOTIFY changed)
+    Q_PROPERTY(int appearanceMode READ appearanceMode WRITE setAppearanceMode NOTIFY changed)
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
 
 public:
@@ -84,8 +89,21 @@ public:
     void setDockLayout(const QString& value) { if (m_dockLayout != value) { m_dockLayout = value; emit changed(); } }
     QString columnWidths() const { return m_columnWidths; }
     void setColumnWidths(const QString& value) { if (m_columnWidths != value) { m_columnWidths = value; emit changed(); } }
+    int fontSize() const { return m_fontSize; }
+    void setFontSize(int value);
+    int treeRowHeight() const { return m_treeRowHeight; }
+    void setTreeRowHeight(int value);
+    int fileRowHeight() const { return m_fileRowHeight; }
+    void setFileRowHeight(int value);
+    int headerRowHeight() const { return m_headerRowHeight; }
+    void setHeaderRowHeight(int value);
+    int appearanceMode() const { return m_appearanceMode; }
+    void setAppearanceMode(int value);
     void setChartLayout(const QString& layout);
     QString filePath() const;
+
+    // Visual fixture runs do not inspect mounted volumes to seed exclusions.
+    void setDefaultVolumeEnumerationEnabled(bool enabled) { m_defaultVolumeEnumerationEnabled = enabled; }
 
     Q_INVOKABLE bool load();
     Q_INVOKABLE bool save();
@@ -107,9 +125,15 @@ private:
     bool m_fuzzyMatch = false;
     bool m_wholeTree = false;
     bool m_fileRecursive = false;
+    bool m_defaultVolumeEnumerationEnabled = true;
     int m_chartDepth = 0; // 0 = auto: the area budget picks the depth
     bool m_chartOnTop = false;
     QString m_chartLayout = QStringLiteral("tablesTop");
     QString m_dockLayout;
     QString m_columnWidths;
+    int m_fontSize = 13;
+    int m_treeRowHeight = 26;
+    int m_fileRowHeight = 28;
+    int m_headerRowHeight = 26;
+    int m_appearanceMode = 0;
 };

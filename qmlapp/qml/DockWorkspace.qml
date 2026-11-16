@@ -16,12 +16,21 @@ Item {
     property string edge: ""
     property point pointer
     property bool showHeaders: true
+    property var collapsedGroups: ({})
     signal maximizeRequested(string pane)
     signal persisted()
 
+    function groupCollapsed(id) { return collapsedGroups[id] === true }
+    function toggleGroup(id) {
+        const next = Object.assign({}, collapsedGroups)
+        next[id] = !groupCollapsed(id)
+        collapsedGroups = next
+        refresh()
+    }
+
     function title(id) {
         return id === "tree" ? "树视图" : id === "files" ? "文件视图"
-             : id === "chart" ? "可视化" : "扩展名"
+             : id === "chart" ? "可视化视图" : "扩展名视图"
     }
     function icon(id) {
         return id === "tree" ? "tree-structure" : id === "files" ? "rows"
@@ -42,10 +51,10 @@ Item {
             const pane = panes[slot.active]
             if (fullscreen === slot.active) continue
             pane.x = slot.x
-            pane.y = slot.y + 28
+            pane.y = slot.y + Metrics.row
             pane.width = slot.width
-            pane.height = Math.max(0, slot.height - 28)
-            pane.visible = true
+            pane.height = groupCollapsed(slot.active) ? 0 : Math.max(0, slot.height - Metrics.row)
+            pane.visible = !groupCollapsed(slot.active)
         }
     }
     function hoverDrop(position) {
@@ -57,6 +66,12 @@ Item {
             if (position.x < slot.x || position.x > slot.x + slot.width
                 || position.y < slot.y || position.y > slot.y + slot.height) continue
             target = slot.active
+            const panesInGroup = slot.panes || []
+            if (target === dragged) {
+                for (const candidate of panesInGroup) {
+                    if (candidate !== dragged) { target = candidate; break }
+                }
+            }
             const x = (position.x - slot.x) / slot.width
             const y = (position.y - slot.y) / slot.height
             if (x > .3 && x < .7 && y > .3 && y < .7) edge = "center"
@@ -86,7 +101,7 @@ Item {
             x: modelData.x
             y: modelData.y
             width: modelData.width
-            height: modelData.type === "tabs" ? 28 : modelData.height
+            height: modelData.type === "tabs" ? Metrics.row : modelData.height
             z: 2
             Rectangle {
                 anchors.fill: parent
@@ -105,15 +120,19 @@ Item {
                         required property string modelData
                         objectName: "dock-tab-" + modelData
                         Layout.fillHeight: true
-                        Layout.preferredWidth: Math.min(120, Math.max(48, region.width / (region.modelData.panes.length + .4)))
-                        color: region.modelData.active === modelData ? theme.selection : "transparent"
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        Layout.maximumWidth: 160
+                        color: region.modelData.active === modelData ? theme.selection
+                                                                       : (mouseArea.containsMouse ? theme.hoverRow : "transparent")
                         Row {
                             anchors.centerIn: parent
                             spacing: 4
-                            Glyph { iconName: workspace.icon(tab.modelData); size: 13; color: theme.textMuted }
-                            Label { text: workspace.title(tab.modelData); font.pixelSize: 11; color: theme.text }
+                            Glyph { iconName: workspace.icon(tab.modelData); size: 13; color: region.modelData.active === tab.modelData ? theme.accent : theme.textMuted }
+                            Label { text: workspace.title(tab.modelData); font.family: Metrics.fontFamily; font.pixelSize: Metrics.caption; font.weight: region.modelData.active === tab.modelData ? Font.DemiBold : Font.Normal; color: region.modelData.active === tab.modelData ? theme.text : theme.textMuted }
                         }
                         MouseArea {
+                            id: mouseArea
                             anchors.fill: parent
                             cursorShape: Qt.OpenHandCursor
                             property point start
@@ -147,13 +166,20 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 ToolButton {
-                    implicitWidth: 26; implicitHeight: 26
+                    implicitWidth: Metrics.row; implicitHeight: Metrics.row
                     ToolTip.visible: hovered
-                    ToolTip.text: "全屏"
-                    onClicked: workspace.maximizeRequested(region.modelData.active)
-                    contentItem: Glyph { iconName: "arrows-out"; size: 14; color: theme.textMuted }
+                    ToolTip.text: workspace.groupCollapsed(region.modelData.active) ? "展开" : "折叠"
+                    onClicked: workspace.toggleGroup(region.modelData.active)
+                    contentItem: Glyph { iconName: workspace.groupCollapsed(region.modelData.active) ? "plus" : "minus"; size: 14; color: theme.textMuted }
                 }
-                Label { visible: workspace.showHeaders; text: workspace.title(region.modelData.active); font.pixelSize: 11; color: theme.textMuted; Layout.preferredWidth: 80 }
+                ToolButton {
+                    implicitWidth: Metrics.row; implicitHeight: Metrics.row
+                    ToolTip.visible: hovered
+                    ToolTip.text: workspace.fullscreen === region.modelData.active ? "还原" : "最大化"
+                    onClicked: workspace.maximizeRequested(region.modelData.active)
+                    contentItem: Glyph { iconName: workspace.fullscreen === region.modelData.active ? "corners-in" : "corners-out"; size: 14; color: theme.textMuted }
+                }
+                Label { visible: workspace.showHeaders; text: workspace.title(region.modelData.active); font.family: Metrics.fontFamily; font.pixelSize: Metrics.caption; color: theme.textMuted; Layout.preferredWidth: 80 }
             }
             MouseArea {
                 anchors.fill: parent
@@ -184,7 +210,7 @@ Item {
         model: workspace.dragged && workspace.target ? workspace.geometry : []
         delegate: Item {
             required property var modelData
-            visible: modelData.type === "tabs" && modelData.active === workspace.target
+            visible: modelData.type === "tabs" && (modelData.panes || []).indexOf(workspace.target) >= 0
             x: modelData.x; y: modelData.y
             width: modelData.width; height: modelData.height
             z: 100

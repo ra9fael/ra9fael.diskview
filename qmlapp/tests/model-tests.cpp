@@ -70,16 +70,18 @@ void testSorting()
 {
     DiskViewModel model;
     model.loadTree(tree());
+    // The outline is intentionally fixed to size-descending. Sorting controls
+    // belong to the independent file panel, whose model owns the same state.
     model.toggleSort(DiskViewModel::SortByName);
-    check(model.ascending(), "the name head starts ascending");
-    check(namesOf(model) == QStringList({"alpha", "mike.bin", "zulu"}), "the name head sorts by name");
-    model.toggleSort(DiskViewModel::SortByName);
-    check(!model.ascending(), "the same head flips the direction");
-    check(namesOf(model) == QStringList({"zulu", "mike.bin", "alpha"}), "the name head sorts downwards");
+    check(namesOf(model) == QStringList({"zulu", "alpha", "mike.bin"}), "the tree remains size-descending");
+    model.setViewMode(DiskViewModel::FileView);
     model.toggleSort(DiskViewModel::SortBySize);
-    check(model.sortKey() == DiskViewModel::SortBySize, "the size head takes over");
-    check(!model.ascending(), "the size head starts with the biggest first");
-    check(namesOf(model) == QStringList({"zulu", "alpha", "mike.bin"}), "the size head sorts by size");
+    model.toggleSort(DiskViewModel::SortByName);
+    check(model.ascending(), "the file head starts ascending");
+    check(namesOf(model) == QStringList({"big.bin", "mid.dat", "mike.bin", "tiny.txt"}), "the file head sorts by name");
+    model.toggleSort(DiskViewModel::SortByName);
+    check(!model.ascending(), "the same file head flips the direction");
+    check(namesOf(model) == QStringList({"tiny.txt", "mike.bin", "mid.dat", "big.bin"}), "the file head sorts downwards");
 }
 
 void testFilter()
@@ -402,6 +404,20 @@ void testIncrementalExpand()
           "navigating advances the chart revision");
 }
 
+void testPathsAndRemoval()
+{
+    DiskViewModel model;
+    model.loadTree(tree());
+    check(model.pathForNode(QStringLiteral("2")) == QStringLiteral("D:\\zulu"), "node paths are absolute from the scan root");
+    check(!model.isAggregateNode(QStringLiteral("2")) && model.isDirectoryNode(QStringLiteral("2")), "node kind is exposed for actions");
+    check(model.sizeForNode(QStringLiteral("2")) == 600000, "node size is exposed for action confirmation");
+    check(model.removeNode(QStringLiteral("2")), "a real subtree can be removed from the snapshot");
+    check(namesOf(model) == QStringList({"alpha", "mike.bin"}), "removal keeps later siblings");
+    check(model.currentPath() == QStringLiteral("D:\\"), "removal keeps the scan root");
+    check(model.removeNode(QStringLiteral("1")), "the scan root can be removed from the snapshot");
+    check(model.rowCount() == 0 && model.currentPath().isEmpty(), "removing the scan root clears the snapshot");
+}
+
 int main()
 {
     {
@@ -410,6 +426,13 @@ int main()
         FileListModel files;
         files.setModel(&shared);
         check(files.rowCount() == 1, "the file panel lists the folder's own files by default");
+        const int treeRowsBeforeFilter = shared.rowCount();
+        files.setFilter(QStringLiteral("bin"));
+        check(files.rowCount() == 1
+              && files.data(files.index(0), FileListModel::NameRole).toString() == QStringLiteral("mike.bin"),
+              "file view filter matches filenames");
+        check(shared.rowCount() == treeRowsBeforeFilter, "file view filter leaves tree rows unchanged");
+        files.setFilter(QString());
         files.setRecursive(true);
         check(files.rowCount() == 4, "independent file panel loads existing scan when recursive");
         shared.selectExtension(QStringLiteral(".txt"));
@@ -437,6 +460,7 @@ int main()
     testExtensionFilter();
     testEnterAndResetChart();
     testIncrementalExpand();
+    testPathsAndRemoval();
     if (g_failures == 0) {
         std::cout << "PASS\n";
         return 0;

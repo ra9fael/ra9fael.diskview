@@ -4,6 +4,9 @@
 
 #include <QGuiApplication>
 #include <QPalette>
+#include <QWindow>
+
+#include <dwmapi.h>
 
 #include <cmath>
 
@@ -35,6 +38,10 @@ QColor overColor(const QColor& translucent, const QColor& base)
 ThemeBridge::ThemeBridge(QObject* parent) : QObject(parent)
 {
     apply();
+    for (QWindow* window : QGuiApplication::allWindows()) {
+        const BOOL darkAttribute = m_dark ? TRUE : FALSE;
+        ::DwmSetWindowAttribute(reinterpret_cast<HWND>(window->winId()), 20, &darkAttribute, sizeof(darkAttribute));
+    }
 }
 
 QColor ThemeBridge::systemAccent()
@@ -46,30 +53,37 @@ QColor ThemeBridge::systemAccent()
     return accent;
 }
 
+// WinShun's default fluent Look (themes/fluent/Look.qml). The standalone
+// launcher, local light/dark modes and hosts that omit tokens all draw with
+// the host's own defaults, so the pages match WinShun exactly.
 QColor ThemeBridge::fallbackColor(const char* name, bool dark)
 {
     struct Entry { const char* name; const char* light; const char* dark; };
     static const Entry table[] = {
-        {"background", "#f4f6f8", "#1e2430"},
-        {"page", "#f4f6f8", "#1e2430"},
-        {"layer", "#ffffff", "#26303f"},
-        {"card", "#ffffff", "#26303f"},
-        {"sunken", "#f0f3f9", "#242b38"},
-        {"divider", "#dce2e8", "#333d4e"},
-        {"hover", "#fbfcfd", "#2c3646"},
-        {"pressed", "#e3eefb", "#2a4a6e"},
-        {"tagFill", "#e3eefb", "#2a4a6e"},
-        {"text", "#243246", "#dbe5f0"},
-        {"subtext", "#56657b", "#93a3b8"},
-        {"faint", "#8b98a9", "#6f7f93"},
-        {"control", "#ffffff", "#26303f"},
-        {"controlBorder", "#dce2e8", "#333d4e"},
-        {"inputFocused", "#ffffff", "#1e2430"},
-        {"accent", "#2f7cd6", "#6aaef7"},
+        {"background", "#f9f9f9", "#202020"},
+        {"page", "#f3f3f3", "#202020"},
+        {"layer", "#ffffff", "#272727"},
+        {"card", "#fbfbfb", "#2b2b2b"},
+        {"divider", "#eaeaea", "#2e2e2e"},
+        {"hover", "#f1f1f1", "#292929"},
+        {"pressed", "#e8e8e8", "#323232"},
+        {"tagFill", "#0d000000", "#12ffffff"},
+        {"text", "#1b1b1b", "#f3f3f3"},
+        {"subtext", "#666666", "#b8b8b8"},
+        {"faint", "#8a8a8a", "#8a8a8a"},
+        {"control", "#ffffff", "#373737"},
+        {"controlBorder", "#d5d5d5", "#444444"},
+        {"inputFocused", "#ffffff", "#1f1f1f"},
+        {"accent", "#0078d4", "#66b8ff"},
+        {"controlHover", "#f6f6f6", "#3c3c3c"},
         {"accentFill", "#2f7cd6", "#2f7cd6"},
         {"accentText", "#ffffff", "#ffffff"},
-        {"danger", "#b3261e", "#e58a80"},
-        {"dangerFill", "#b3261e", "#b3261e"},
+        {"danger", "#c42b1c", "#ff99a4"},
+        {"dangerFill", "#c42b1c", "#c42b1c"},
+        {"menuBackground", "#f9f9f9", "#2c2c2c"},
+        {"menuHover", "#ececec", "#3a3a3a"},
+        {"menuEdge", "#1a000000", "#17ffffff"},
+        {"windowEdge", "#b4b4b4", "#6a6a6a"},
     };
     for (const Entry& entry : table) {
         if (QString::fromLatin1(entry.name) == QLatin1String(name)) {
@@ -109,6 +123,10 @@ void ThemeBridge::setTheme(const QString& theme)
     if (!style.isEmpty() && m_style != style) { m_style = style; dirty = true; }
     if (!dirty) return;
     apply();
+    for (QWindow* window : QGuiApplication::allWindows()) {
+        const BOOL darkAttribute = m_dark ? TRUE : FALSE;
+        ::DwmSetWindowAttribute(reinterpret_cast<HWND>(window->winId()), 20, &darkAttribute, sizeof(darkAttribute));
+    }
     emit changed();
 }
 
@@ -118,8 +136,12 @@ void ThemeBridge::setAppearance(const QVariantMap& appearance)
     // notification may carry them at the top level (the contract allows both).
     QVariantMap look = appearance.value(QStringLiteral("nativeLook")).toMap();
     if (look.isEmpty()) look = appearance;
-    m_look = look;
-    m_native = look.contains(QStringLiteral("background"));
+    m_hostLook = look;
+    m_hostNative = look.contains(QStringLiteral("background"))
+                   || look.contains(QStringLiteral("layer"))
+                   || look.contains(QStringLiteral("text"));
+    m_look = m_hostLook;
+    m_native = m_hostNative;
 
     const QString style = appearance.value(QStringLiteral("uiStyle")).toString();
     if (style == QStringLiteral("fluent") || style == QStringLiteral("brand")
@@ -131,12 +153,44 @@ void ThemeBridge::setAppearance(const QVariantMap& appearance)
         || size == QStringLiteral("normal") || size == QStringLiteral("roomy")) {
         m_uiSize = size;
     }
+    const QString family = appearance.value(QStringLiteral("resolvedUiFont")).toString();
+    if (!family.trimmed().isEmpty()) m_fontFamily = family.trimmed();
     const QString corners = appearance.value(QStringLiteral("corners")).toString();
     if (!corners.isEmpty()) m_rounded = corners != QStringLiteral("square");
     if (m_look.contains(QStringLiteral("dark"))) m_dark = m_look.value(QStringLiteral("dark")).toBool();
     if (m_look.contains(QStringLiteral("rounded"))) m_rounded = m_look.value(QStringLiteral("rounded")).toBool();
+    m_hostDark = m_dark;
+    if (m_localMode != 0) {
+        m_look.clear();
+        m_native = false;
+        m_dark = m_localMode == 2;
+    }
 
     apply();
+    for (QWindow* window : QGuiApplication::allWindows()) {
+        const BOOL darkAttribute = m_dark ? TRUE : FALSE;
+        ::DwmSetWindowAttribute(reinterpret_cast<HWND>(window->winId()), 20, &darkAttribute, sizeof(darkAttribute));
+    }
+    emit changed();
+}
+
+void ThemeBridge::setLocalMode(int mode)
+{
+    m_localMode = std::clamp(mode, 0, 2);
+    if (m_localMode == 0) {
+        m_look = m_hostLook;
+        m_native = m_hostNative;
+        m_dark = m_hostDark;
+    } else {
+        m_look.clear();
+        m_native = false;
+        m_dark = m_localMode == 2;
+    }
+    apply();
+    for (QWindow* window : QGuiApplication::allWindows()) {
+        const BOOL darkAttribute = m_dark ? TRUE : FALSE;
+        ::DwmSetWindowAttribute(reinterpret_cast<HWND>(window->winId()), 20, &darkAttribute, sizeof(darkAttribute));
+    }
     emit changed();
 }
 
@@ -146,39 +200,69 @@ void ThemeBridge::apply()
         // No host tokens (the standalone launcher, or an old host): keep the
         // window's own light/dark table and the system accent.
         if (m_dark) {
-            m_window = QColor(QStringLiteral("#1e2430"));
-            m_surface = QColor(QStringLiteral("#26303f"));
-            m_surfaceAlt = QColor(QStringLiteral("#242b38"));
-            m_handleFill = QColor(QStringLiteral("#2a3342"));
-            m_border = QColor(QStringLiteral("#333d4e"));
-            m_text = QColor(QStringLiteral("#dbe5f0"));
-            m_textMuted = QColor(QStringLiteral("#93a3b8"));
-            m_selection = QColor(QStringLiteral("#2a4a6e"));
-            m_hoverRow = QColor(QStringLiteral("#2c3646"));
-            m_ok = QColor(QStringLiteral("#7cc38a"));
-            m_warn = QColor(QStringLiteral("#d8a25a"));
-            m_error = QColor(QStringLiteral("#e58a80"));
+            m_window = QColor(QStringLiteral("#202020"));
+            m_surface = QColor(QStringLiteral("#202020"));
+            m_surfaceAlt = QColor(QStringLiteral("#272727"));
+            m_handleFill = QColor(QStringLiteral("#292929"));
+            m_border = QColor(QStringLiteral("#2e2e2e"));
+            m_scrollThumb = QColor(QStringLiteral("#8a8a8a"));
+            m_text = QColor(QStringLiteral("#f3f3f3"));
+            m_textMuted = QColor(QStringLiteral("#b8b8b8"));
+            m_selection = QColor(255, 255, 255, 18);
+            m_hoverRow = QColor(QStringLiteral("#292929"));
+            m_ok = QColor(QStringLiteral("#6ccb5f"));
+            m_warn = QColor(QStringLiteral("#fce100"));
+            m_error = QColor(QStringLiteral("#ff99a4"));
+            m_page = m_window;
+            m_faint = QColor(QStringLiteral("#8a8a8a"));
+            m_pressed = QColor(QStringLiteral("#323232"));
+            m_control = QColor(QStringLiteral("#373737"));
+            m_controlHover = QColor(QStringLiteral("#3c3c3c"));
+            m_controlBorder = QColor(QStringLiteral("#444444"));
+            m_menuBackground = QColor(QStringLiteral("#2c2c2c"));
+            m_menuHover = QColor(QStringLiteral("#3a3a3a"));
+            m_menuEdge = QColor(255, 255, 255, 23);
+            m_windowEdge = QColor(QStringLiteral("#6a6a6a"));
         } else {
-            m_window = QColor(QStringLiteral("#f4f6f8"));
-            m_surface = QColor(QStringLiteral("#ffffff"));
-            m_surfaceAlt = QColor(QStringLiteral("#f0f3f9"));
-            m_handleFill = QColor(QStringLiteral("#e6ebf2"));
-            m_border = QColor(QStringLiteral("#dce2e8"));
-            m_text = QColor(QStringLiteral("#243246"));
-            m_textMuted = QColor(QStringLiteral("#56657b"));
-            m_selection = QColor(QStringLiteral("#e3eefb"));
-            m_hoverRow = QColor(QStringLiteral("#fbfcfd"));
-            m_ok = QColor(QStringLiteral("#2c7a3f"));
-            m_warn = QColor(QStringLiteral("#a76414"));
-            m_error = QColor(QStringLiteral("#b3261e"));
+            m_window = QColor(QStringLiteral("#f9f9f9"));
+            m_surface = QColor(QStringLiteral("#f9f9f9"));
+            m_surfaceAlt = QColor(QStringLiteral("#ffffff"));
+            m_handleFill = QColor(QStringLiteral("#f1f1f1"));
+            m_border = QColor(QStringLiteral("#eaeaea"));
+            m_scrollThumb = QColor(QStringLiteral("#8a8a8a"));
+            m_text = QColor(QStringLiteral("#1b1b1b"));
+            m_textMuted = QColor(QStringLiteral("#666666"));
+            m_selection = QColor(0, 0, 0, 13);
+            m_hoverRow = QColor(QStringLiteral("#f1f1f1"));
+            m_ok = QColor(QStringLiteral("#0f7b0f"));
+            m_warn = QColor(QStringLiteral("#9d5d00"));
+            m_error = QColor(QStringLiteral("#c42b1c"));
+            m_page = QColor(QStringLiteral("#f3f3f3"));
+            m_faint = QColor(QStringLiteral("#8a8a8a"));
+            m_pressed = QColor(QStringLiteral("#e8e8e8"));
+            m_control = QColor(QStringLiteral("#ffffff"));
+            m_controlHover = QColor(QStringLiteral("#f6f6f6"));
+            m_controlBorder = QColor(QStringLiteral("#d5d5d5"));
+            m_menuBackground = QColor(QStringLiteral("#f9f9f9"));
+            m_menuHover = QColor(QStringLiteral("#ececec"));
+            m_menuEdge = QColor(0, 0, 0, 26);
+            m_windowEdge = QColor(QStringLiteral("#b4b4b4"));
         }
         m_accent = systemAccent();
-        if (m_dark) m_accent = m_accent.lighter(135);
-        m_accentText = m_accent.lightnessF() > 0.6 ? QColor(QStringLiteral("#1b2b3a"))
-                                                   : QColor(QStringLiteral("#ffffff"));
+        if (m_dark) m_accent = m_accent.lighter(155);
+        m_accentLine = m_accent;
+        m_textSelection = m_selection;
+        m_caret = m_accentLine;
+        m_controlHover = m_hoverRow;
+        m_accentText = QColor(QStringLiteral("#ffffff"));
         m_radius = m_style == QStringLiteral("tactile") ? 6 : 4;
+        m_cardRadius = m_rounded ? 6 : 0;
+        m_controlRadius = m_rounded ? 4 : 0;
+        m_smallRadius = m_rounded ? 3 : 0;
         m_controlHeight = m_style == QStringLiteral("liquid") ? 28 : 26;
         m_fontSize = 11;
+        m_fontBody = 14; m_fontCaption = 12; m_fontSmall = 11;
+        m_rowHeight = 32; m_fileRowHeight = 30; m_iconSize = 18; m_gap = 8; m_pad = 12;
         return;
     }
 
@@ -186,30 +270,58 @@ void ThemeBridge::apply()
     QColor background = lookColor("background");
     if (!background.isValid()) background = fallbackColor("background", m_dark);
     QColor page = lookColor("page");
-    if (!page.isValid()) page = background;
-    m_window = over(background, page);
+    if (!page.isValid()) page = fallbackColor("page", m_dark);
+    m_page = over(page, background);
+    m_window = over(background, m_page);
 
     QColor layer = lookColor("layer");
     if (!layer.isValid()) layer = fallbackColor("layer", m_dark);
-    m_surface = over(layer, m_window);
-
-    QColor control = lookColor("control");
-    if (!control.isValid()) control = fallbackColor("control", m_dark);
-    m_surfaceAlt = over(control, m_window);
-
+    // WinShun paints its page/body with background and its chrome with layer.
+    m_surface = m_window;
+    m_surfaceAlt = over(layer, m_window);
+    m_control = lookColor("control");
+    if (!m_control.isValid()) m_control = fallbackColor("control", m_dark);
+    m_control = over(m_control, m_surface);
+    m_controlHover = lookColor("controlHover");
+    if (!m_controlHover.isValid()) m_controlHover = lookColor("hover");
+    if (!m_controlHover.isValid()) m_controlHover = fallbackColor("control", m_dark);
+    m_controlHover = over(m_controlHover, m_control);
+    m_controlBorder = lookColor("controlBorder");
+    if (!m_controlBorder.isValid()) m_controlBorder = fallbackColor("controlBorder", m_dark);
+    m_controlBorder = over(m_controlBorder, m_surface);
     QColor hover = lookColor("hover");
     if (!hover.isValid()) hover = fallbackColor("hover", m_dark);
-    m_handleFill = over(hover, m_surface);
+    m_handleFill = over(hover, m_surfaceAlt);
     m_hoverRow = over(hover, m_surface);
-
     QColor divider = lookColor("divider");
     if (!divider.isValid()) divider = fallbackColor("divider", m_dark);
     m_border = over(divider, m_surface);
+    m_faint = lookColor("faint");
+    if (!m_faint.isValid()) m_faint = fallbackColor("faint", m_dark);
+    m_pressed = lookColor("pressed");
+    if (!m_pressed.isValid()) m_pressed = fallbackColor("pressed", m_dark);
+    m_pressed = over(m_pressed, m_surface);
+    m_menuBackground = lookColor("menuBackground");
+    if (!m_menuBackground.isValid()) m_menuBackground = fallbackColor("menuBackground", m_dark);
+    m_menuBackground = over(m_menuBackground, m_window);
+    m_menuHover = lookColor("menuHover");
+    if (!m_menuHover.isValid()) m_menuHover = hover;
+    if (!m_menuHover.isValid()) m_menuHover = fallbackColor("menuHover", m_dark);
+    m_menuHover = over(m_menuHover, m_menuBackground);
+    m_menuEdge = lookColor("menuEdge");
+    if (!m_menuEdge.isValid()) m_menuEdge = divider;
+    if (!m_menuEdge.isValid()) m_menuEdge = fallbackColor("menuEdge", m_dark);
+    m_menuEdge = over(m_menuEdge, m_menuBackground);
+    m_windowEdge = lookColor("windowEdge");
+    if (!m_windowEdge.isValid()) m_windowEdge = divider;
+    if (!m_windowEdge.isValid()) m_windowEdge = fallbackColor("windowEdge", m_dark);
+    m_windowEdge = over(m_windowEdge, m_window);
 
     m_text = lookColor("text");
     if (!m_text.isValid()) m_text = fallbackColor("text", m_dark);
     m_textMuted = lookColor("subtext");
     if (!m_textMuted.isValid()) m_textMuted = fallbackColor("subtext", m_dark);
+    m_scrollThumb = m_faint;
 
     QColor tag = lookColor("tagFill");
     if (!tag.isValid()) tag = lookColor("pressed");
@@ -220,11 +332,15 @@ void ThemeBridge::apply()
     if (!accent.isValid()) accent = lookColor("accentFill");
     if (!accent.isValid()) accent = systemAccent();
     m_accent = accent;
+    m_accentLine = lookColor("accentLine");
+    if (!m_accentLine.isValid()) m_accentLine = m_accent;
+    m_textSelection = lookColor("textSelection");
+    if (!m_textSelection.isValid()) m_textSelection = m_selection;
+    m_caret = lookColor("caret");
+    if (!m_caret.isValid()) m_caret = m_accentLine;
+    m_scrollThumb = m_faint;
     m_accentText = lookColor("accentText");
-    if (!m_accentText.isValid()) {
-        m_accentText = m_accent.lightnessF() > 0.6 ? QColor(QStringLiteral("#1b2b3a"))
-                                                   : QColor(QStringLiteral("#ffffff"));
-    }
+    if (!m_accentText.isValid()) m_accentText = QColor(QStringLiteral("#ffffff"));
 
     QColor danger = lookColor("danger");
     if (!danger.isValid()) danger = fallbackColor("danger", m_dark);
@@ -234,11 +350,22 @@ void ThemeBridge::apply()
     m_warn = m_dark ? QColor(QStringLiteral("#fce100")) : QColor(QStringLiteral("#9d5d00"));
 
     // Radii and sizes come from the same contract.
-    m_radius = static_cast<int>(std::lround(lookRadius("controlRadius", 6.0)));
+    m_radius = static_cast<int>(std::lround(lookRadius("controlRadius", 4.0)));
+    m_cardRadius = lookRadius("cardRadius", 6.0);
+    m_controlRadius = lookRadius("controlRadius", 4.0);
+    m_smallRadius = lookRadius("smallControlRadius", 3.0);
     const bool compact = m_uiSize == QStringLiteral("compact");
     const bool roomy = m_uiSize == QStringLiteral("roomy");
-    m_controlHeight = compact ? 26 : roomy ? 32 : 28;
-    m_fontSize = compact ? 10 : roomy ? 12 : 11;
+    m_controlHeight = compact ? 28 : roomy ? 36 : 32;
+    m_fontBody = compact ? 14 : roomy ? 18 : 16;
+    m_fontCaption = compact ? 12 : roomy ? 16 : 14;
+    m_fontSmall = compact ? 11 : roomy ? 14 : 12;
+    m_fontSize = m_fontCaption;
+    m_rowHeight = compact ? 30 : roomy ? 40 : 32;
+    m_fileRowHeight = compact ? 36 : roomy ? 48 : 40;
+    m_iconSize = compact ? 16 : roomy ? 22 : 18;
+    m_gap = compact ? 6 : roomy ? 12 : 8;
+    m_pad = compact ? 10 : roomy ? 18 : 14;
 }
 
 QVariantMap ThemeBridge::phosphorIcon(const QString& name, bool filled) const

@@ -89,6 +89,35 @@ void testTreemapAreaAndCoverage()
     for (const auto& tile : tiles) area += tile.rect.area();
     expectNear(area, 8000.0);
 }
+
+void testTreemapKeepsOneReadableChildVisible()
+{
+    diskview::Node root;
+    root.name = L"root";
+    root.logical = 1000;
+    root.dir = true;
+
+    diskview::Node folder;
+    folder.name = L"folder";
+    folder.logical = 1000;
+    folder.dir = true;
+    diskview::Node file;
+    file.name = L"large.bin";
+    file.logical = 1000;
+    folder.children.push_back(file);
+    root.children.push_back(folder);
+
+    std::vector<diskview::Tile> tiles;
+    diskview::treemapTiles(root, {0, 0, 240, 180}, 0, 18, tiles, root.name, 24);
+    bool foundNested = false;
+    for (const auto& tile : tiles) {
+        if (tile.path == L"root/folder/large.bin" && tile.depth >= 2) {
+            foundNested = true;
+            break;
+        }
+    }
+    assert(foundNested);
+}
 }
 
 int main()
@@ -96,5 +125,6 @@ int main()
     testSunburstCoverage();
     testSunburstPreservesActualGaps();
     testTreemapAreaAndCoverage();
-    std::cout << "PASS chart geometry: sunburst parent coverage, fixture gaps, treemap area\n";
+    testTreemapKeepsOneReadableChildVisible();
+    std::cout << "PASS chart geometry: sunburst parent coverage, fixture gaps, treemap nesting\n";
 }

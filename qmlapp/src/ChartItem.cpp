@@ -18,8 +18,6 @@
 
 namespace {
 // The colour a file gets when the legend has dimmed everything else.
-const QColor kDimmedFill("#dfe4ea");
-
 // True when `path` is `selected` itself or one of the folders above it. The
 // path is the chart's own ("D:\dir\sub\dll"), so a prefix plus a separator is
 // all it takes; the selected block and its whole branch stay lit while the
@@ -44,19 +42,24 @@ ChartItem::ChartItem(QQuickItem* parent) : QQuickPaintedItem(parent)
 namespace {
 diskview::Node nodeFromVariant(const QVariantMap& map, QHash<std::wstring, QString>& ids,
                                QHash<QString, ChartItem::NodeInfo>& infos,
-                               const std::wstring& parentPath = {})
+                               const std::wstring& parentPath = {},
+                               const std::wstring& absoluteRoot = {})
 {
     diskview::Node node; node.name=map.value("name").toString().toStdWString();
     node.logical=static_cast<std::uint64_t>(std::max(0.0,map.value("size").toDouble()));
     node.dir=map.value("directory").toBool();
     node.group=map.value("group").toBool();
-    const std::wstring path=parentPath.empty()?node.name:diskview::childPath(parentPath,node.name);
+    node.rest=static_cast<std::uint64_t>(std::max(0.0,map.value("rest").toDouble()));
+    node.restCount=static_cast<std::uint32_t>(std::max(0, map.value("restCount").toInt()));
+    node.matchCount=static_cast<std::uint32_t>(std::max(0, map.value("matchCount").toInt()));
+    node.restMatchCount=static_cast<std::uint32_t>(std::max(0, map.value("restMatchCount").toInt()));
+    const std::wstring path=parentPath.empty()?absoluteRoot:diskview::childPath(parentPath,node.name);
     const QString id=map.value("id").toString();
     ids.insert(path,id);
     infos.insert(id,{QString::fromStdWString(node.name),QString::fromStdWString(path),
                      static_cast<quint64>(node.logical),node.dir});
     for(const auto& child:map.value("children").toList()) if(child.canConvert<QVariantMap>()) {
-        diskview::Node childNode=nodeFromVariant(child.toMap(),ids,infos,path);
+        diskview::Node childNode=nodeFromVariant(child.toMap(),ids,infos,path,absoluteRoot);
         node.files+=childNode.dir?childNode.files:1; node.dirs+=childNode.dir?childNode.dirs+1:0;
         node.children.push_back(std::move(childNode));
     }
@@ -72,7 +75,9 @@ void ChartItem::setTreeData(const QVariantMap& data)
     if (revision == m_revision && !m_treeData.isEmpty()) return;
     m_revision = revision;
     m_treeData=data; m_pathIds.clear(); m_nodeInfo.clear();
-    m_chartRoot=nodeFromVariant(data,m_pathIds,m_nodeInfo); m_tiles.clear(); m_slices.clear();
+    m_rootPath = data.value(QStringLiteral("rootPath")).toString().toStdWString();
+    if (m_rootPath.empty()) m_rootPath = data.value(QStringLiteral("name")).toString().toStdWString();
+    m_chartRoot=nodeFromVariant(data,m_pathIds,m_nodeInfo,{},m_rootPath); m_tiles.clear(); m_slices.clear();
     emit treeDataChanged(); rebuildGeometry();
 }
 bool ChartItem::hasDirectoryRegion() const
@@ -171,6 +176,13 @@ void ChartItem::setAccent(const QColor& accent)
     update();
 }
 
+void ChartItem::setSurfaceToken(const QColor& color) { if (color.isValid() && m_surfaceToken != color) { m_surfaceToken = color; emit paletteChanged(); update(); } }
+void ChartItem::setBorderToken(const QColor& color) { if (color.isValid() && m_borderToken != color) { m_borderToken = color; emit paletteChanged(); update(); } }
+void ChartItem::setNeutralToken(const QColor& color) { if (color.isValid() && m_neutralToken != color) { m_neutralToken = color; emit paletteChanged(); update(); } }
+void ChartItem::setDimToken(const QColor& color) { if (color.isValid() && m_dimToken != color) { m_dimToken = color; emit paletteChanged(); update(); } }
+void ChartItem::setFontFamily(const QString& family) { if (!family.isEmpty() && m_fontFamily != family) { m_fontFamily = family; emit paletteChanged(); update(); } }
+void ChartItem::setFontPixels(int pixels) { pixels = std::clamp(pixels, 9, 24); if (m_fontPixels != pixels) { m_fontPixels = pixels; emit paletteChanged(); update(); } }
+
 QColor ChartItem::segmentColor(double hue, int depth, bool isFile) const
 {
     // A cyclic hue wheel: red → orange → amber → olive → green → teal → blue →
@@ -213,23 +225,27 @@ QColor ChartItem::segmentColor(double hue, int depth, bool isFile) const
 
 QColor ChartItem::fillFor(const diskview::Node& node, double hue, int depth, bool* dimmed) const
 {
+    const QColor dimFill = m_dimToken.isValid() ? m_dimToken : (m_theme == QStringLiteral("dark")
+        ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));
     // The small-files aggregate has no single extension: a neutral block, and
     // it steps back whenever an extension filter is on.
     if (node.group) {
-        const bool hidden = !m_highlightExtension.isEmpty();
+        const bool hidden = !m_highlightExtension.isEmpty() && m_highlightExtension != QStringLiteral("@small");
         if (dimmed) *dimmed = hidden;
-        return hidden ? kDimmedFill : (m_theme == QStringLiteral("dark")
-                                       ? QColor(QStringLiteral("#3A4150"))
-                                       : QColor(QStringLiteral("#B9BFC8")));
+        if (hidden) return dimFill;
+        return diskviewqml::extensionColor(QStringLiteral("@small"));
     }
     // "(none)" is the legend's "(无)" pick: files without an extension stay
     // lit, everything else dims.
     const bool nonePick = m_highlightExtension == QStringLiteral("(none)");
     const QString extension = diskviewqml::extensionOf(QString::fromStdWString(node.name));
-    const bool hidden = !m_highlightExtension.isEmpty() && !node.dir
-        && (nonePick ? !extension.isEmpty() : extension != m_highlightExtension);
+    const bool matches = nonePick ? extension.isEmpty() : extension == m_highlightExtension;
+    const bool hidden = !m_highlightExtension.isEmpty()
+        && (node.dir ? node.restCount == 0 && node.children.empty() : !matches);
     if (dimmed)*dimmed=hidden;
-    if(hidden)return kDimmedFill;
+    if(hidden)return dimFill;
+    if (!node.dir && !m_highlightExtension.isEmpty())
+        return diskviewqml::extensionColor(m_highlightExtension);
     // Layout normally supplies the hue; the extension colour is the fallback
     // for anything without a position (and matches the legend).
     if (hue < 0)
@@ -243,6 +259,7 @@ QColor ChartItem::fillFor(const diskview::Node& node, double hue, int depth, boo
 // without any selection.
 QColor ChartItem::strokeColor() const
 {
+    if (m_borderToken.isValid()) return m_borderToken;
     return m_theme=="dark"?QColor(255,255,255,46):QColor(24,38,56,56);
 }
 
@@ -259,21 +276,25 @@ QColor ChartItem::accentColor(bool selected) const
 // through is structure rather than a colour that looks like a file.
 QColor ChartItem::chromeFill() const
 {
-    return m_theme=="dark"?QColor(QStringLiteral("#20262E")):QColor(QStringLiteral("#EDF1F6"));
+    if (m_surfaceToken.isValid()) return m_surfaceToken;
+    return m_theme=="dark"?QColor(QStringLiteral("#20262E")):QColor(QStringLiteral("#E9EDF3"));
 }
 
 QColor ChartItem::chromeInk() const
 {
+    if (m_neutralToken.isValid()) return m_neutralToken;
     return m_theme=="dark"?QColor(QStringLiteral("#D6E0EB")):QColor(QStringLiteral("#31465E"));
 }
 
 QColor ChartItem::chromeBorder() const
 {
-    return m_theme=="dark"?QColor(255,255,255,40):QColor(30,45,65,52);
+    if (m_borderToken.isValid()) return m_borderToken;
+    return m_theme=="dark"?QColor(255,255,255,86):QColor(QStringLiteral("#AEB9C6"));
 }
 
 QColor ChartItem::neutralFill() const
 {
+    if (m_neutralToken.isValid()) return m_neutralToken;
     return m_theme=="dark"?QColor(QStringLiteral("#3A4150")):QColor(QStringLiteral("#B9BFC8"));
 }
 
@@ -314,7 +335,7 @@ void ChartItem::rebuildGeometry()
     // lets the per-folder area budget stop it instead.
     const int maxDepth=m_depth<=0?24:m_depth-1;
     if(m_viewMode==0){
-        diskview::treemapTiles(m_chartRoot,{0,0,area.width(),area.height()},0,18.0,m_tiles,m_chartRoot.name,maxDepth);
+        diskview::treemapTiles(m_chartRoot,{0,0,area.width(),area.height()},0,18.0,m_tiles,m_rootPath,maxDepth);
         for(const auto& tile:m_tiles){
             // The aggregate block has no node of its own; the folder's region
             // already covers that space, and a click on it selects the folder.
@@ -329,7 +350,7 @@ void ChartItem::rebuildGeometry()
         // its radius is kept for the hit test.
         m_innerRadius=innerRadius;
         const qreal ringWidth=(maxR-innerRadius)/4.0;
-        diskview::sunburstSlices(m_chartRoot,area.center().x(),area.center().y(),innerRadius,ringWidth,-M_PI_2,3*M_PI_2,0,4.0/std::max<qreal>(1.0,maxR),m_slices,m_chartRoot.name,maxDepth);
+        diskview::sunburstSlices(m_chartRoot,area.center().x(),area.center().y(),innerRadius,ringWidth,-M_PI_2,3*M_PI_2,0,4.0/std::max<qreal>(1.0,maxR),m_slices,m_rootPath,maxDepth);
         const QPointF center=area.center();
         for(const auto& slice:m_slices){
             const QString id=m_pathIds.value(slice.path);
@@ -555,7 +576,15 @@ void ChartItem::paint(QPainter* painter)
         for(const auto& tile:m_tiles){
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             bool dimmed=false;
-            const QBrush fill=tile.remainder?QBrush(neutralFill())
+            const bool remainderDimmed = tile.remainder && !m_highlightExtension.isEmpty()
+                                         && tile.remainderMatchCount == 0;
+            const QColor remainderColor = remainderDimmed
+                ? (m_dimToken.isValid() ? m_dimToken : neutralFill())
+                : (!m_highlightExtension.isEmpty()
+                   ? diskviewqml::extensionColor(m_highlightExtension == QStringLiteral("(none)")
+                                                ? QString() : m_highlightExtension)
+                   : neutralFill());
+            const QBrush fill=tile.remainder?QBrush(remainderColor)
                                             :fillBrush(*tile.node,rect,tile.hue,tile.depth,&dimmed);
             painter->fillRect(rect,fill);
             painter->setPen(QPen(strokeColor(),1));
@@ -577,14 +606,15 @@ void ChartItem::paint(QPainter* painter)
         // colours, and it also hides the parent's own block where its children
         // do not reach.
         for(const auto& tile:m_tiles){
-            if(tile.header<=0)continue;
+            if(tile.remainder || !tile.node || !tile.node->dir)continue;
+            if(tile.rect.w < 36 || tile.rect.h < 14)continue;
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
-            painter->setPen(QPen(chromeBorder(),2));
+            painter->setPen(QPen(chromeBorder(),1.5));
             painter->setBrush(Qt::NoBrush);
             painter->drawRect(rect.adjusted(1,1,-1,-1));
+            if(tile.header<=0)continue;
             const QRectF strip(rect.left(),rect.top(),rect.width(),tile.header);
             painter->fillRect(strip,chromeFill());
-            if(dimOthers&&!onSelectedBranch(tile.path,selectedPath))painter->fillRect(strip,scrim);
             painter->setPen(QPen(chromeBorder(),1));
             painter->drawLine(strip.bottomLeft(),strip.bottomRight());
             painter->setPen(QPen(strokeColor(),1));
@@ -620,7 +650,7 @@ void ChartItem::paint(QPainter* painter)
     }
     if(m_viewMode==1&&!m_centerLabel.isEmpty()){
         painter->setPen(m_theme=="dark"?QColor("#e6edf5"):QColor("#243246"));
-        QFont font=painter->font();font.setPixelSize(11);font.setWeight(QFont::DemiBold);painter->setFont(font);
+        QFont font=painter->font();font.setFamily(m_fontFamily);font.setPixelSize(m_fontPixels);font.setWeight(QFont::DemiBold);painter->setFont(font);
         QRectF hole(center.x()-36,center.y()-36,72,72);
         // A long path would spill out of the hole and over the rings, so the
         // label is elided to what the hole can hold.
@@ -636,7 +666,7 @@ void ChartItem::paint(QPainter* painter)
     painter->save();
     painter->setClipRect(QRectF(0,0,width(),height()));
     const auto toScreen=[&](const QPointF& p){return transformCenter+(p-transformCenter)*m_zoom+m_pan;};
-    QFont micro=painter->font();micro.setPixelSize(10);
+    QFont micro=painter->font();micro.setFamily(m_fontFamily);micro.setPixelSize(std::max(9, m_fontPixels - 2));
     const QFontMetricsF metrics(micro);
     if(m_viewMode==0){
         painter->setFont(micro);
@@ -708,23 +738,16 @@ void ChartItem::paint(QPainter* painter)
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             const QRectF screen(toScreen(rect.topLeft()),toScreen(rect.bottomRight()));
             const QRectF ring=screen.adjusted(1,1,-1,-1);
-            // A selected folder's strip turns into the accent, with the name
-            // repainted on it: the strip is what the eye follows down a
-            // nesting, so it is the clearest place to carry the state.
+            // Keep the title strip neutral; confine the selected accent to a
+            // compact label badge so both sides remain part of the chrome.
             if(selected&&tile.header>0){
                 const qreal band=tile.header*m_zoom;
                 const QRectF strip(screen.left(),screen.top(),screen.width(),band);
-                painter->fillRect(strip,m_accent);
-                painter->setPen(QPen(m_accent,1));
-                painter->drawLine(strip.bottomLeft(),strip.bottomRight());
-                const QRectF innerStrip(strip.left()+5,strip.top(),strip.width()-10,band);
-                if(innerStrip.width()>0&&band>=8){
-                    painter->setPen(diskviewqml::textOnColor(m_accent));
-                    const QString label=QString::fromStdWString(tile.node->name)+"  "
-                                        +QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
-                    painter->drawText(innerStrip,Qt::AlignLeft|Qt::AlignVCenter,
-                                      metrics.elidedText(label,Qt::ElideRight,innerStrip.width()));
-                }
+                const QString label=QString::fromStdWString(tile.node->name)+"  "
+                                    +QString::fromStdString(diskview::formatBytes(tile.node->logical,true));
+                 // Selection is already communicated by the halo and ring.
+                 // Keep the title strip in the same neutral chrome as every
+                 // other folder; selected text should not invert.
             }
             // A soft halo outside the block first: it reads on any background,
             // and the strong ring then sits on the block's own edge.

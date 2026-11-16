@@ -10,11 +10,18 @@ ApplicationWindow {
     minimumWidth: 900
     minimumHeight: 620
     visible: true
-    title: "Disk View · QML 技术样机"
+    title: "Disk View"
+    font.family: metrics.fontFamily
     // The whole window follows the host's light/dark choice; the chart reads
     // the same switch so its greys and inks follow.
     color: theme.window
     readonly property var themeTokens: theme
+    readonly property var metrics: Metrics
+    property string committedPath: initialScanPath
+    property bool acceptingSuggestion: false
+    property int suggestionRequestId: 0
+    property string notice: ""
+    property alias filterField: filePaneHeader.filterField
     // The Basic style's controls take their colours from the palette; feeding
     // it the same tokens keeps a TextField, Button and ComboBox from staying
     // light in a dark WinShun.
@@ -47,6 +54,7 @@ ApplicationWindow {
         diskModel.loadFixture(fixtureSource)
         // The file view remembers how it was left.
         diskModel.fuzzyMatch = scanSettings.fuzzyMatch
+        fileListModel.fuzzyMatch = scanSettings.fuzzyMatch
         fileListModel.wholeTree = scanSettings.wholeTree
         fileListModel.recursive = scanSettings.fileRecursive
         // ... and so does the chart: how many levels of blocks it draws.
@@ -69,7 +77,8 @@ ApplicationWindow {
     // width budget all read this, so a column cannot drift out of step with its
     // own header.
     readonly property var treeColumnSpec: [
-        { key: "pct", label: "% 父级", width: 78, min: 48 },
+        { key: "name", label: "文件夹 / 名称", width: 260, min: 140 },
+        { key: "pct", label: "% 父级", width: 82, min: 48 },
         { key: "size", label: "大小", width: 84, min: 60, sort: 0 },
         { key: "alloc", label: "已分配", width: 84, min: 64 },
         { key: "items", label: "项目", width: 62, min: 52 },
@@ -79,14 +88,16 @@ ApplicationWindow {
         { key: "attributes", label: "属性", width: 64, min: 52 }
     ]
     readonly property var fileColumnSpec: [
-        { key: "pct", label: "% 父级", width: 78, min: 48 },
+        { key: "name", label: "名称", width: 240, min: 140 },
+        { key: "pct", label: "% 父级", width: 82, min: 48 },
         { key: "size", label: "大小", width: 84, min: 60 },
         { key: "alloc", label: "已分配", width: 84, min: 64 },
         { key: "modified", label: "修改时间", width: 118, min: 92 },
         { key: "attributes", label: "属性", width: 64, min: 52 }
     ]
     readonly property var legendColumnSpec: [
-        { key: "percent", label: "占比", width: 52, min: 40 },
+        { key: "name", label: "扩展名", width: 150, min: 100 },
+        { key: "percent", label: "占比", width: 56, min: 40 },
         { key: "size", label: "大小", width: 66, min: 48 },
         { key: "alloc", label: "已分配", width: 66, min: 48 },
         { key: "files", label: "文件数", width: 52, min: 40 }
@@ -101,33 +112,152 @@ ApplicationWindow {
     function columnPane(panel) {
         return panel === "tree" ? treePane : (panel === "file" ? filePane : legendPane)
     }
-    // The name column is not in the spec: it takes what is left, and it is the
-    // one thing a table cannot do without, so its minimum is what the fixed
-    // columns leave alone when they decide whether they still fit.
-    function nameMinimum(panel) { return panel === "tree" ? 120 : (panel === "file" ? 110 : 90) }
-    function columnWidth(panel, key) { return columnStore(panel).width(key) }
-    function columnMinimum(panel, key) {
-        const spec = columnSpec(panel)
-        for (let i = 0; i < spec.length; ++i) if (spec[i].key === key) return spec[i].min
-        return 40
+    // The visible columns always fill the pane. Resizing transfers width to or
+    // from the adjacent column; the name column absorbs pane-size changes.
+    function visibleColumnKeys(panel) {
+        return columnSpec(panel).filter(function(column) { return !columnHidden(column.key) }).map(function(column) { return column.key })
+    }
+    function columnResizable(panel, key) {
+        const keys = visibleColumnKeys(panel)
+        return keys.indexOf(key) >= 0 && keys.indexOf(key) < keys.length - 1
+    }
+    function requestedColumnWidths(panel) {
+        const keys = visibleColumnKeys(panel)
+        const store = columnStore(panel)
+        const widths = ({})
+        let total = 0
+        for (const key of keys) {
+            widths[key] = Math.max(0, store.width(key))
+            total += widths[key]
+        }
+        return { keys: keys, widths: widths, total: total }
+    }
+    function columnLayout(panel) {
+        const requested = requestedColumnWidths(panel)
+        const keys = requested.keys
+        const widths = requested.widths
+        const available = Math.max(0, Math.floor(columnPane(panel).width))
+        const total = requested.total
+        if (total > available && total > 0) {
+            const factor = available / total
+            let used = 0
+            for (let i = 0; i < keys.length; ++i) {
+                const key = keys[i]
+                widths[key] = i === keys.length - 1 ? Math.max(0, available - used)
+                                                     : Math.max(0, Math.floor(widths[key] * factor))
+                used += widths[key]
+            }
+        } else if (keys.indexOf("name") >= 0) {
+            let fixed = 0
+            for (const key of keys) if (key !== "name") fixed += widths[key]
+            widths.name = Math.max(0, available - fixed)
+        }
+        return widths
+    }
+    function columnWidth(panel, key) { return columnLayout(panel)[key] || 0 }
+    function nameWidth(panel) { return columnWidth(panel, "name") }
+    function resizeColumn(panel, key, delta) {
+        const requested = requestedColumnWidths(panel)
+        const keys = requested.keys
+        const at = keys.indexOf(key)
+        if (at < 0 || keys.length < 2 || !delta) return
+        const neighborAt = at < keys.length - 1 ? at + 1 : at - 1
+        const neighbor = keys[neighborAt]
+        const available = Math.max(0, Math.floor(columnPane(panel).width))
+        const scale = requested.total > available && available > 0 ? requested.total / available : 1
+        const requestedDelta = delta * scale
+        const applied = Math.max(-requested.widths[key], Math.min(requested.widths[neighbor], requestedDelta))
+        const store = columnStore(panel)
+        const next = Object.assign({}, store.widths)
+        for (const visibleKey of keys) next[visibleKey] = requested.widths[visibleKey]
+        if (key === "name") {
+            next[neighbor] = Math.max(0, requested.widths[neighbor] - applied)
+        } else if (neighbor === "name") {
+            next[key] = Math.max(0, requested.widths[key] + applied)
+        } else {
+            next[key] = Math.max(0, requested.widths[key] + applied)
+            next[neighbor] = Math.max(0, requested.widths[neighbor] - applied)
+        }
+        store.setWidths(next)
+    }
+    function widestName(panel) {
+        const textMetrics = Qt.createQmlObject('import QtQuick; TextMetrics {}', window)
+        textMetrics.font.family = metrics.fontFamily
+        textMetrics.font.pixelSize = metrics.caption
+        let widest = textMetrics.advanceWidth
+        if (panel === "legend") {
+            for (const row of diskModel.extensionRows) {
+                textMetrics.text = (row.ext.length ? row.ext : "(无)") + "  " + row.label
+                widest = Math.max(widest, textMetrics.advanceWidth)
+            }
+        } else {
+            const model = panel === "tree" ? diskModel : fileListModel
+            const count = Math.min(model.rowCount(), 250)
+            for (let row = 0; row < count; ++row) {
+                const name = model.data(model.index(row, 0), Qt.UserRole + 2)
+                textMetrics.text = name === undefined ? "" : String(name)
+                widest = Math.max(widest, textMetrics.advanceWidth)
+            }
+        }
+        textMetrics.destroy()
+        return Math.ceil(widest + 42)
+    }
+    function columnRole(panel, key) {
+        if (panel === "tree") return ({size: 4, pct: 5, alloc: 11, items: 14, files: 15, dirs: 16, modified: 17, attributes: 19})[key]
+        if (panel === "file") return ({size: 4, pct: 5, alloc: 8, modified: 12, attributes: 14})[key]
+        return undefined
+    }
+    function columnText(panel, key, value) {
+        if (key === "pct") return Number(value).toFixed(1) + "%"
+        return value === undefined || value === null ? "" : String(value)
+    }
+    function autoFitWidth(panel, key) {
+        if (key === "name") return widestName(panel)
+        if (panel === "legend") {
+            const values = diskModel.extensionRows
+            let widest = 0
+            for (const row of values) {
+                const value = key === "percent" ? Number(row.percent).toFixed(1) + "%"
+                             : key === "size" ? row.sizeText
+                             : key === "alloc" ? row.allocText
+                             : key === "files" ? diskModel.formatCount(row.files) : ""
+                const textMetrics = Qt.createQmlObject('import QtQuick; TextMetrics {}', window)
+                textMetrics.font.family = metrics.fontFamily
+                textMetrics.font.pixelSize = metrics.small
+                textMetrics.text = String(value)
+                widest = Math.max(widest, textMetrics.advanceWidth)
+                textMetrics.destroy()
+            }
+            return Math.ceil(widest + 20)
+        }
+        const model = panel === "tree" ? diskModel : fileListModel
+        const role = columnRole(panel, key)
+        if (role === undefined) return columnStore(panel).width(key)
+        const count = Math.min(model.rowCount(), 250)
+        const textMetrics = Qt.createQmlObject('import QtQuick; TextMetrics {}', window)
+        textMetrics.font.family = metrics.fontFamily
+        textMetrics.font.pixelSize = metrics.small
+        let widest = 0
+        for (let row = 0; row < count; ++row) {
+            textMetrics.text = columnText(panel, key, model.data(model.index(row, 0), Qt.UserRole + role))
+            widest = Math.max(widest, textMetrics.advanceWidth)
+        }
+        textMetrics.destroy()
+        return Math.ceil(widest + 20)
+    }
+    function autoFitColumn(panel, key) {
+        resizeColumn(panel, key, autoFitWidth(panel, key) - columnWidth(panel, key))
+    }
+    function tableContentWidth(panel) {
+        return Math.max(0, Math.floor(columnPane(panel).width))
     }
     // A column is drawn only while the fixed columns to its left still leave
     // the name column its minimum. That replaces the hand-tuned thresholds the
     // file panel used to carry, and it now applies to every table.
     function columnVisible(panel, key) {
+        if (key === "name") return true
         if (columnHidden(key)) return false
-        const spec = columnSpec(panel)
-        const store = columnStore(panel)
-        const available = columnPane(panel).width
-        let used = nameMinimum(panel)
-        for (let i = 0; i < spec.length; ++i) {
-            const column = spec[i]
-            if (columnHidden(column.key)) continue
-            used += store.width(column.key)
-            if (used > available) return false
-            if (column.key === key) return true
-        }
-        return false
+        return true
     }
     function gridColor() { return Qt.rgba(theme.border.r, theme.border.g, theme.border.b, 0.5) }
 
@@ -160,6 +290,10 @@ ApplicationWindow {
     }
     function saveColumnWidths() {
         if (!columnsLoaded) return
+        widthSaveTimer.restart()
+    }
+    function persistColumnWidths() {
+        if (!columnsLoaded) return
         scanSettings.columnWidths = JSON.stringify({
             tree: columns.widths,
             file: fileColumns.widths,
@@ -171,7 +305,13 @@ ApplicationWindow {
         columns.resetAll()
         fileColumns.resetAll()
         legendColumns.resetAll()
-        saveColumnWidths()
+        persistColumnWidths()
+    }
+    Timer {
+        id: widthSaveTimer
+        interval: 300
+        repeat: false
+        onTriggered: window.persistColumnWidths()
     }
     // The breadcrumb of the current folder, shortened when it gets long the
     // way the native panel shortens it.
@@ -183,9 +323,10 @@ ApplicationWindow {
     // The extension the legend picked lives in the model now, so the file
     // list can filter on it too; the chart maps the "(无)" pick to its own
     // sentinel.
+    property string chartHighlightExtension: ""
     function chartHighlight() {
-        if (!diskModel.hasExtensionFilter) return ""
-        return diskModel.extensionFilter.length ? diskModel.extensionFilter : "(none)"
+        if (chartHighlightExtension === "") return ""
+        return chartHighlightExtension.length ? chartHighlightExtension : "(none)"
     }
     // Which picture the chart draws: 0 treemap, 1 sunburst. The startup value
     // is the host's default view; the toolbar switches it for this window.
@@ -198,6 +339,10 @@ ApplicationWindow {
     property string chartLayout: "tablesTop"
     // "" or the pane that fills the window ("tables" / "chart").
     property string maximizedPane: ""
+    property bool treeCollapsed: false
+    property bool fileCollapsed: false
+    property bool legendCollapsed: false
+    property bool chartCollapsed: false
     property var dockPanes: ({tree: treePane, files: filePane, legend: legendPane, chart: chartPane})
     function detachForDock() {
         for (const pair of [[topSplit, treePane], [tablesInnerSplit, filePane],
@@ -219,6 +364,16 @@ ApplicationWindow {
         detachForDock()
         dockWorkspace.refresh()
         let passed = ok()
+        dockState.reset()
+        passed = dockState.movePane("files", "tree", "center") && passed
+        passed = dockState.movePane("chart", "tree", "center") && passed
+        passed = dockState.movePane("legend", "tree", "center") && passed
+        passed = dockState.movePane("legend", "legend", "left") && passed
+        let tabGroups = 0
+        for (const placement of dockState.placements(900, 600))
+            if (placement.type === "tabs") tabGroups += 1
+        passed = tabGroups >= 2 && passed
+        dockState.reset()
         passed = dockState.movePane("files", "tree", "center") && passed
         dockState.activate("files")
         passed = filePane.visible && !treePane.visible && passed
@@ -318,7 +473,11 @@ ApplicationWindow {
 
     Connections {
         target: scanService
-        function onStarted(path) { diskModel.clear() }
+        function onStarted(path) {
+            window.committedPath = path
+            pathField.text = path
+            diskModel.clear()
+        }
         function onPartialTree(tree) { diskModel.loadFlat(tree, true) }
         // The finished tree is handed to the model from C++ by move, so the
         // multi-million-node result is not copied through a QML signal.
@@ -328,40 +487,321 @@ ApplicationWindow {
 
     Connections {
         target: diskModel
+        function onCurrentPathChanged() {
+            if (diskModel.currentPath.length > 0 && scanService.state !== "scanning") {
+                window.committedPath = diskModel.currentPath
+                pathField.text = diskModel.currentPath
+            }
+        }
         function onSelectedChanged() {
             if (diskModel.selectedRow >= 0) list.positionViewAtIndex(diskModel.selectedRow, ListView.Contain)
         }
         function onListChanged() {
             // Navigating clears the filter in the model, so the field has to
             // follow it.
-            if (filterField.text !== diskModel.filter) filterField.text = diskModel.filter
+            if (filterField.text !== fileListModel.filter) filterField.text = fileListModel.filter
         }
     }
 
     ScanSettingsDialog { id: settingsDialog; objectName: "scanSettingsDialog" }
+    ThemeSettingsDialog { id: themeDialog }
     ScanIssuesDialog { id: issuesDialog; objectName: "scanIssuesDialog" }
 
-    // The read-only half of the native context menu; the file actions wait for
-    // the host integration.
+    function targetPath() { return contextMenu.targetId.length ? diskModel.pathForNode(contextMenu.targetId) : contextMenu.targetPath }
+    function targetAllowed() {
+        const path = targetPath()
+        return contextMenu.targetId.length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
+               && appHost.canModifyPath(path).ok
+    }
+    function targetDeniedReason() {
+        const path = targetPath()
+        if (!path.length) return "没有可操作的项目"
+        const result = appHost.canModifyPath(path)
+        return result.ok ? "" : (result.reason || "此项目当前不可操作")
+    }
+
+    Dialog {
+        id: destructiveDialog
+        property bool permanent: false
+        property string actionPath: ""
+        property string actionId: ""
+        property string itemName: ""
+        property string sizeText: ""
+        property int requestId: 0
+        property bool working: false
+        title: destructiveDialog.permanent ? "永久删除" : "移至回收站"
+        modal: true
+        width: 480
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.NoButton
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 10
+            Label { Layout.fillWidth: true; text: destructiveDialog.permanent ? "此操作不可恢复，且不会进入回收站。" : "项目将移入系统回收站，可以还原。"; color: destructiveDialog.permanent ? theme.error : theme.text; font.pixelSize: metrics.caption; font.weight: Font.DemiBold; wrapMode: Text.WordWrap }
+            Label { Layout.fillWidth: true; text: destructiveDialog.actionPath + (destructiveDialog.sizeText.length ? "  ·  " + destructiveDialog.sizeText : ""); color: theme.textMuted; elide: Text.ElideMiddle; font.pixelSize: metrics.small }
+            Label { visible: destructiveDialog.permanent; text: "请输入：" + destructiveDialog.itemName; color: theme.text; font.pixelSize: metrics.caption }
+            TextField { id: confirmation; visible: destructiveDialog.permanent; Layout.fillWidth: true; placeholderText: destructiveDialog.itemName; font.pixelSize: metrics.caption }
+            Label { Layout.fillWidth: true; text: destructiveDialog.permanent ? "永久删除" : "移至回收站"; color: destructiveDialog.permanent ? theme.error : theme.text; font.pixelSize: metrics.small }
+        }
+        footer: RowLayout {
+            spacing: metrics.gap
+            Item { Layout.fillWidth: true }
+            Button {
+                text: destructiveDialog.permanent ? "永久删除" : "移至回收站"
+                enabled: !destructiveDialog.working && (!destructiveDialog.permanent || confirmation.text.localeCompare(destructiveDialog.itemName, Qt.CaseInsensitive) === 0)
+                onClicked: {
+                    destructiveDialog.working = true
+                    destructiveDialog.requestId += 1
+                    appHost.performFileActionAsync(destructiveDialog.actionPath, destructiveDialog.permanent,
+                                                   confirmation.text, destructiveDialog.actionId, destructiveDialog.requestId)
+                }
+            }
+            Button { text: "取消"; enabled: !destructiveDialog.working; onClicked: destructiveDialog.close() }
+        }
+    }
+
+    function parentPath(path) {
+        let value = String(path || "").replace(/[\\\/]+$/, "")
+        if (!value.length) return ""
+        if (/^[A-Za-z]:$/.test(value)) return value + "\\"
+        const slash = Math.max(value.lastIndexOf("\\"), value.lastIndexOf("/"))
+        if (slash < 0) return ""
+        const parent = value.slice(0, slash)
+        return /^[A-Za-z]:$/.test(parent) ? parent + "\\" : parent
+    }
+    function samePath(left, right) {
+        return String(left || "").replace(/[\\\/]+$/, "").toLowerCase()
+            === String(right || "").replace(/[\\\/]+$/, "").toLowerCase()
+    }
+    function fileToolbarFits() {
+        return filePane.height >= metrics.paneHeader + metrics.headerRow * 2 + metrics.row
+    }
+    function startScanAfterDelete(rootPath) {
+        const parent = parentPath(rootPath)
+        if (!parent.length) return false
+        committedPath = parent
+        pathField.text = parent
+        pathSuggestions.rows = []
+        searchTimer.stop()
+        return scanService.start(parent)
+    }
+    function prepareFixtureVisualState(state) {
+        if (state === "drives") {
+            driveBox.popup.open()
+            return
+        }
+        if (state === "resized-columns") {
+            columns.setWidth("size", 132)
+            return
+        }
+        if (state === "address-focus") {
+            pathField.forceActiveFocus()
+            pathSuggestions.rows = []
+            return
+        }
+        if (state === "dock-tabs") {
+            window.chartLayout = "dock"
+            window.detachForDock()
+            dockState.layout = ({type: "tabs", panes: ["tree", "files", "chart", "legend"], active: "tree"})
+            Qt.callLater(dockWorkspace.refresh)
+            return
+        }
+        if (state === "dock-compass") {
+            window.chartLayout = "dock"
+            window.detachForDock()
+            dockState.reset()
+            dockWorkspace.refresh()
+            dockWorkspace.dragged = "chart"
+            dockWorkspace.target = "tree"
+            dockWorkspace.edge = "left"
+            return
+        }
+        if (state === "columns-menu") {
+            columnsMenu.popup(filePaneHeader, filePaneHeader.width - metrics.control, filePaneHeader.height)
+            return
+        }
+        if (state === "file-filter") {
+            filePaneHeader.filterField.text = "bin"
+            filePaneHeader.filterField.forceActiveFocus()
+            return
+        }
+        if (state === "extension-highlight") {
+            window.chartHighlightExtension = ".bin"
+            return
+        }
+        if (state === "suggestions") {
+            pathField.text = ""
+            pathField.forceActiveFocus()
+            pathSuggestions.rows = appHost.defaultPaths(committedPath)
+            pathSuggestions.selectedIndex = 0
+            return
+        }
+        if (state === "columns") {
+            columns.setWidth("name", 480)
+            list.contentX = 160
+            return
+        }
+        let targetId = diskModel.selectedId
+        if (!targetId.length && diskModel.rowCount() > 0)
+            targetId = diskModel.data(diskModel.index(0, 0), Qt.UserRole + 1)
+        if (!targetId.length) return
+        contextMenu.targetId = targetId
+        contextMenu.targetPath = diskModel.pathForNode(targetId)
+        if (state === "context-menu") {
+            contextMenu.popup(window.contentItem, Qt.point(100, 100))
+        } else if (state === "delete-confirmation") {
+            destructiveDialog.permanent = true
+            destructiveDialog.actionPath = contextMenu.targetPath
+            destructiveDialog.actionId = targetId
+            destructiveDialog.itemName = contextMenu.targetPath.split(/[\\/]/).pop()
+            destructiveDialog.sizeText = diskModel.formatSize(diskModel.sizeForNode(targetId))
+            destructiveDialog.working = true
+            confirmation.text = ""
+            destructiveDialog.open()
+            destructiveDialog.visible = true
+            destructiveDialog.forceActiveFocus()
+        }
+    }
+    function acceptSuggestion(entry) {
+        const target = entry.dir ? entry.path : entry.parent
+        acceptingSuggestion = true
+        committedPath = target
+        pathField.text = target
+        pathSuggestions.rows = []
+        pathSuggestions.selectedIndex = -1
+        searchTimer.stop()
+        scanService.start(target)
+        acceptingSuggestion = false
+    }
+
+    Connections {
+        target: appHost
+        function onPathSuggestionsReady(requestId, rows) {
+            if (requestId !== window.suggestionRequestId) return
+            pathSuggestions.rows = rows
+            pathSuggestions.selectedIndex = -1
+        }
+        function onFileActionFinished(requestId, nodeId, result) {
+            if (requestId !== destructiveDialog.requestId || nodeId !== destructiveDialog.actionId) return
+            destructiveDialog.working = false
+            if (!result.ok) {
+                window.notice = result.error
+                return
+            }
+            const deletedPath = destructiveDialog.actionPath
+            const removedRoot = samePath(deletedPath, scanService.rootPath)
+            diskModel.removeNode(nodeId)
+            if (removedRoot) {
+                window.notice = destructiveDialog.permanent ? "已永久删除，正在扫描上级目录" : "已移至回收站，正在扫描上级目录"
+                window.startScanAfterDelete(deletedPath)
+            } else {
+                window.notice = destructiveDialog.permanent ? "已永久删除" : "已移至回收站"
+            }
+            destructiveDialog.close()
+        }
+    }
+
     Menu {
         id: contextMenu
         property string targetPath: ""
         property string targetId: ""
         MenuItem {
+            text: "打开"
+            enabled: contextMenu.targetId.length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
+            onClicked: diskModel.isDirectoryNode(contextMenu.targetId)
+                       ? diskModel.enterNode(contextMenu.targetId) : appHost.openPath(targetPath())
+        }
+        MenuItem {
             text: "复制完整路径"
-            enabled: contextMenu.targetPath.length > 0
-            onClicked: appHost.copyToClipboard(contextMenu.targetPath)
+            enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
+            onClicked: appHost.copyToClipboard(targetPath())
+        }
+        MenuItem {
+            text: "复制文件"
+            enabled: targetAllowed()
+            onClicked: appHost.copyFilesToClipboard(targetPath(), false)
+        }
+        MenuItem {
+            text: "剪切文件"
+            enabled: targetAllowed()
+            onClicked: appHost.copyFilesToClipboard(targetPath(), true)
         }
         MenuItem {
             text: "在资源管理器中显示"
-            enabled: contextMenu.targetPath.length > 0
-            onClicked: appHost.revealInExplorer(contextMenu.targetPath)
+            enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
+            onClicked: appHost.revealInExplorer(targetPath())
         }
         MenuItem {
-            text: "定位到所在目录"
+            text: "在树中定位"
             enabled: contextMenu.targetId.length > 0
             onClicked: diskModel.revealNode(contextMenu.targetId)
         }
+        MenuItem { text: "属性"; enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId); onClicked: appHost.showProperties(targetPath()) }
+        MenuSeparator {}
+        MenuItem {
+            text: "移至回收站…"
+            enabled: targetAllowed() && scanService.state !== "scanning"
+            ToolTip.visible: hovered && !enabled
+            ToolTip.text: scanService.state === "scanning" ? "扫描完成后才能操作" : targetDeniedReason()
+            onClicked: { destructiveDialog.permanent = false; destructiveDialog.actionPath = targetPath(); destructiveDialog.actionId = contextMenu.targetId; destructiveDialog.sizeText = diskModel.formatSize(diskModel.sizeForNode(contextMenu.targetId)); destructiveDialog.open() }
+        }
+        MenuItem {
+            text: "永久删除…"
+            enabled: targetAllowed() && scanService.state !== "scanning"
+            ToolTip.visible: hovered && !enabled
+            ToolTip.text: scanService.state === "scanning" ? "扫描完成后才能操作" : targetDeniedReason()
+            onClicked: { destructiveDialog.permanent = true; destructiveDialog.actionPath = targetPath(); destructiveDialog.actionId = contextMenu.targetId; destructiveDialog.sizeText = diskModel.formatSize(diskModel.sizeForNode(contextMenu.targetId)); destructiveDialog.itemName = targetPath().split(/[\\/]/).pop(); confirmation.text = ""; destructiveDialog.open() }
+        }
+    }
+
+    Timer {
+        id: columnsCloseTimer
+        interval: 350
+        repeat: false
+        onTriggered: if (columnsMenu.visible && !columnsHover.hovered) columnsMenu.close()
+    }
+
+    Menu {
+        id: columnsMenu
+        property bool wasHovered: false
+        onOpened: {
+            wasHovered = false
+            columnsCloseTimer.interval = 650
+            columnsCloseTimer.restart()
+        }
+        onClosed: { wasHovered = false; columnsCloseTimer.stop() }
+        HoverHandler {
+            id: columnsHover
+            onHoveredChanged: {
+                if (hovered) {
+                    columnsMenu.wasHovered = true
+                    columnsCloseTimer.stop()
+                } else if (columnsMenu.wasHovered) {
+                    columnsCloseTimer.interval = 350
+                    columnsCloseTimer.restart()
+                }
+            }
+        }
+        Repeater {
+            model: [
+                { key: "pct", label: "% 父级" },
+                { key: "alloc", label: "已分配" },
+                { key: "items", label: "项目" },
+                { key: "files", label: "文件" },
+                { key: "dirs", label: "文件夹" },
+                { key: "modified", label: "修改时间" },
+                { key: "attributes", label: "属性" }
+            ]
+            delegate: MenuItem {
+                text: modelData.label
+                checkable: true
+                checked: !window.columnHidden(modelData.key)
+                onTriggered: window.toggleColumn(modelData.key)
+            }
+        }
+        MenuSeparator { }
+        MenuItem { text: "列宽复位"; onTriggered: window.resetColumnWidths() }
     }
 
     Shortcut {
@@ -378,40 +818,12 @@ ApplicationWindow {
     Shortcut { sequence: "Esc"; onActivated: {
         // Out of the fullscreen first, then the text filter.
         if (window.maximizedPane) { window.maximizePane(window.maximizedPane); return }
-        diskModel.filter = ""; filterField.text = ""
+        fileListModel.filter = ""; filterField.text = ""
     } }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
-
-        // ---- title row -------------------------------------------------
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 34
-            color: theme.surface
-            border.color: theme.border
-            RowLayout {
-                anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
-                Label { text: "Disk View"; font.pixelSize: 14; font.weight: Font.DemiBold; color: theme.text }
-                Label { text: "QML 技术样机"; font.pixelSize: 12; color: theme.textMuted }
-                Item { Layout.fillWidth: true }
-                Label {
-                    id: elevationLabel
-                    text: scanService.state === "done" ? "真实扫描"
-                          : scanService.state === "scanning" ? (scanService.paused ? "扫描已暂停" : "扫描中")
-                          : scanService.state === "cancelled" ? "已取消的扫描"
-                          : scanService.state === "error" ? "扫描失败"
-                          : "固定快照"
-                    font.pixelSize: 11
-                    color: scanService.state === "done" ? "#168c84"
-                          : scanService.state === "scanning" ? theme.warn
-                          : scanService.state === "error" ? theme.error
-                          : theme.textMuted
-                }
-                BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: 14; implicitHeight: 14 }
-            }
-        }
 
         // ---- drive, path and scan controls -----------------------------
         Rectangle {
@@ -421,32 +833,79 @@ ApplicationWindow {
             border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 8
-                // Location first: a drive menu, then the editable path, then
+                // Location first: a drive picker, then the editable path, then
                 // the system folder picker. Enter in the field starts the scan.
-                Button {
-                    id: locationButton
+                ThemedComboBox {
+                    id: driveBox
+                    implicitWidth: 220
                     implicitHeight: 28
+                    font.pixelSize: metrics.caption
+                    model: appHost.drives()
+                    textRole: "label"
                     ToolTip.visible: hovered
-                    ToolTip.text: "选择磁盘或位置"
-                    onClicked: drivesMenu.open()
-                    contentItem: Row {
-                        spacing: 4
-                        Glyph { iconName: "hard-drives"; size: 15; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
-                        Label { text: "位置"; font.pixelSize: 11; color: theme.text; anchors.verticalCenter: parent.verticalCenter }
-                        Glyph { iconName: "caret-down"; size: 12; color: theme.textMuted; anchors.verticalCenter: parent.verticalCenter }
+                    ToolTip.text: "切换磁盘"
+                    function sync() {
+                        const drives = appHost.drives()
+                        const current = appHost.diskForPath(window.committedPath)
+                        for (let i = 0; i < drives.length; ++i) {
+                            if (samePath(drives[i].path, current.path)) { currentIndex = i; return }
+                        }
+                        currentIndex = 0
                     }
-                }
-                Menu {
-                    id: drivesMenu
-                    Repeater {
-                        model: appHost.drives()
-                        delegate: MenuItem {
-                            required property var modelData
-                            text: modelData.label + "    " + modelData.detail
-                            onClicked: {
-                                pathField.text = modelData.path
-                                scanService.start(modelData.path)
-                            }
+                    Component.onCompleted: sync()
+                    onCountChanged: sync()
+                    onActivated: function(index) {
+                        const drive = appHost.drives()[index]
+                        if (!drive) return
+                        pathField.text = drive.path
+                        window.committedPath = drive.path
+                        scanService.start(drive.path)
+                    }
+                    Connections {
+                        target: window
+                        function onCommittedPathChanged() { driveBox.sync() }
+                    }
+                    // The row carries the free-space detail next to the label,
+                    // and the popup stays wide enough for it.
+                    delegate: ItemDelegate {
+                        id: driveEntry
+                        required property var modelData
+                        required property int index
+                        height: 28
+                        highlighted: driveBox.highlightedIndex === index
+                        background: Rectangle {
+                            radius: theme.radius
+                            color: driveEntry.highlighted ? theme.hoverRow : "transparent"
+                        }
+                        contentItem: Label {
+                            leftPadding: 8
+                            text: driveEntry.modelData.label + "    " + driveEntry.modelData.detail
+                            color: theme.text
+                            font.pixelSize: metrics.caption
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                    }
+                    popup: Popup {
+                        popupType: Popup.Window
+                        y: driveBox.height + 4
+                        width: 440
+                        padding: 4
+                        implicitHeight: Math.min(contentItem.implicitHeight + 8, 320)
+                        background: Rectangle {
+                            radius: theme.radius
+                            color: theme.surface
+                            border.width: 1
+                            border.color: theme.border
+                        }
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentHeight
+                            model: driveBox.popup.visible ? driveBox.delegateModel : null
+                            currentIndex: driveBox.highlightedIndex
+                            spacing: 2
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar {}
                         }
                     }
                 }
@@ -460,83 +919,71 @@ ApplicationWindow {
                     text: initialScanPath
                     placeholderText: "输入或选择要扫描的位置"
                     selectByMouse: true
-                    onTextEdited: searchTimer.restart()
-                    onAccepted: {
-                        searchTimer.stop()
-                        window.pathSuggestions = []
-                        if (text.trim().length > 0) scanService.start(text.trim())
+                    onTextEdited: {
+                        window.suggestionRequestId += 1
+                        pathSuggestions.selectedIndex = -1
+                        if (text.trim().length > 0) searchTimer.restart()
+                        else { searchTimer.stop(); pathSuggestions.rows = [] }
                     }
-                }
-                Popup {
-                    id: suggestPopup
-                    parent: pathField
-                    x: 0
-                    y: pathField.height + 3
-                    width: pathField.width
-                    padding: 4
-                    visible: pathField.activeFocus && window.pathSuggestions.length > 0
-                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                    background: Rectangle {
-                        radius: theme.radius
-                        color: theme.surface
-                        border.width: 1
-                        border.color: theme.border
-                    }
-                    contentItem: ListView {
-                        implicitHeight: Math.min(contentHeight + 8, 260)
-                        clip: true
-                        model: window.pathSuggestions
-                        boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar {}
-                        delegate: ItemDelegate {
-                            required property var modelData
-                            width: ListView.view.width
-                            height: 28
-                            background: Rectangle {
-                                radius: theme.radius
-                                color: parent.hovered ? theme.hoverRow : "transparent"
-                            }
-                            contentItem: RowLayout {
-                                spacing: 6
-                                Glyph {
-                                    iconName: modelData.dir ? "folder" : "file"
-                                    size: 14
-                                    color: theme.textMuted
-                                    Layout.alignment: Qt.AlignVCenter
-                                }
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: modelData.name.length ? modelData.name : modelData.path
-                                        font.pixelSize: 11
-                                        color: theme.text
-                                        elide: Text.ElideRight
-                                    }
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: modelData.dir ? modelData.path : modelData.parent
-                                        font.pixelSize: 10
-                                        color: theme.textMuted
-                                        elide: Text.ElideMiddle
-                                    }
-                                }
-                            }
-                            onClicked: {
-                                const target = modelData.dir ? modelData.path : modelData.parent
-                                pathField.text = target
-                                window.pathSuggestions = []
-                                scanService.start(target)
-                            }
+                    onActiveFocusChanged: {
+                        if (!activeFocus && !window.acceptingSuggestion && scanService.state !== "scanning") {
+                            searchTimer.stop()
+                            text = window.committedPath
+                            pathSuggestions.rows = []
                         }
                     }
+                    onAccepted: {
+                        searchTimer.stop()
+                        if (pathSuggestions.selectedIndex >= 0 && pathSuggestions.selectedIndex < pathSuggestions.rows.length) {
+                            window.acceptSuggestion(pathSuggestions.rows[pathSuggestions.selectedIndex])
+                        } else if (text.trim().length > 0) {
+                            window.committedPath = text.trim()
+                            pathSuggestions.rows = []
+                            scanService.start(text.trim())
+                        }
+                    }
+                    Keys.onDownPressed: function(event) {
+                        if (pathSuggestions.rows.length === 0 && text.trim().length === 0) {
+                            searchTimer.restart()
+                            event.accepted = true
+                            return
+                        }
+                        if (pathSuggestions.rows.length > 0) {
+                            pathSuggestions.selectedIndex = Math.min(pathSuggestions.selectedIndex + 1, pathSuggestions.rows.length - 1)
+                            pathSuggestions.keepIndexVisible()
+                            event.accepted = true
+                        }
+                    }
+                    Keys.onUpPressed: function(event) {
+                        if (pathSuggestions.rows.length > 0) {
+                            pathSuggestions.selectedIndex = Math.max(pathSuggestions.selectedIndex - 1, 0)
+                            pathSuggestions.keepIndexVisible()
+                            event.accepted = true
+                        }
+                    }
+                    Keys.onEscapePressed: function(event) {
+                        if (pathSuggestions.rows.length > 0) {
+                            pathSuggestions.rows = []
+                            text = window.committedPath
+                            event.accepted = true
+                        }
+                    }
+                }
+                PathSuggestions {
+                    id: pathSuggestions
+                    anchorItem: pathField
+                    rows: []
+                    selectedIndex: -1
+                    onHovered: function(index) { selectedIndex = index }
+                    onChosen: function(entry) { window.acceptSuggestion(entry) }
                 }
                 Timer {
                     id: searchTimer
                     interval: 250
-                    onTriggered: window.pathSuggestions = pathField.text.trim().length > 0
-                                 ? appHost.searchPaths(pathField.text) : []
+                    onTriggered: {
+                        window.suggestionRequestId += 1
+                        appHost.searchPathsAsync(pathField.text, window.suggestionRequestId)
+                    }
                 }
                 ToolButton {
                     id: browseButton
@@ -551,7 +998,7 @@ ApplicationWindow {
                             scanService.start(picked)
                         }
                     }
-                    contentItem: Glyph { iconName: "folder-open"; size: 16; color: theme.textMuted }
+                    contentItem: Glyph { iconName: "folder-open"; size: 16; color: theme.text }
                 }
                 Button {
                     text: (scanService.state === "done" || scanService.state === "cancelled") ? "重新扫描" : "扫描"
@@ -575,130 +1022,15 @@ ApplicationWindow {
                     onClicked: issuesDialog.open()
                 }
                 Button { text: "扫描设置"; Layout.minimumWidth: 76; onClicked: settingsDialog.open() }
-                // Whether the fast scan can run at all: this process carries an
-                // administrator token only when an elevated Win顺 started it.
-                Label {
-                    visible: scanSettings.scanMode !== 2
-                    text: scanService.elevated ? "快扫可用（管理员）" : "快扫不可用（Win顺 未以管理员运行）"
-                    font.pixelSize: 11
-                    color: scanService.elevated ? theme.ok : theme.warn
-                    ToolTip.visible: elevationHover.hovered
-                    ToolTip.text: scanService.elevated
-                                  ? "本进程持有管理员令牌，快扫直接读取 MFT，不再弹出 UAC"
-                                  : "以管理员身份运行 Win顺，并在插件权限里允许 elevated 后，快扫才会启用"
-                    HoverHandler { id: elevationHover }
-                }
-            }
-        }
-
-        // ---- search scope and the columns menu ---------------------------
-        // The tree panel and the file panel are separate now; the switches
-        // that belonged to one of them moved onto the file panel's header.
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 36
-            color: theme.surface
-            border.color: theme.border
-            RowLayout {
-                anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 6
-                Label {
-                    text: "搜索："
-                    font.pixelSize: 11; color: theme.textMuted
-                }
                 Item { Layout.fillWidth: true }
+                BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: metrics.icon; implicitHeight: metrics.icon }
                 ToolButton {
-                    id: columnsButton
-                    implicitWidth: 30
-                    implicitHeight: 26
+                    implicitWidth: metrics.control
+                    implicitHeight: metrics.control
                     ToolTip.visible: hovered
-                    ToolTip.text: "显示或隐藏列"
-                    onClicked: columnsMenu.open()
-                    background: Rectangle {
-                        radius: 3
-                        color: columnsButton.hovered ? theme.hoverRow : "transparent"
-                        border.color: theme.border
-                    }
-                    contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.textMuted }
-                }
-                Menu {
-                    id: columnsMenu
-                    // The name column always stays: a table of numbers with no
-                    // names is not usable.
-                    Repeater {
-                        model: [
-                            { key: "pct", label: "% 父级" },
-                            { key: "alloc", label: "已分配" },
-                            { key: "items", label: "项目" },
-                            { key: "files", label: "文件" },
-                            { key: "dirs", label: "文件夹" },
-                            { key: "modified", label: "修改时间" },
-                            { key: "attributes", label: "属性" }
-                        ]
-                        delegate: MenuItem {
-                            text: modelData.label
-                            checkable: true
-                            checked: !window.columnHidden(modelData.key)
-                            onClicked: window.toggleColumn(modelData.key)
-                        }
-                    }
-                    MenuSeparator { }
-                    MenuItem {
-                        text: "列宽复位"
-                        onClicked: window.resetColumnWidths()
-                    }
-                }
-                TextField {
-                    id: filterField
-                    Layout.preferredWidth: 200
-                    Layout.preferredHeight: 26
-                    topPadding: 4
-                    bottomPadding: 4
-                    font.pixelSize: 11
-                    placeholderText: "筛选名称或文件…"
-                    selectByMouse: true
-                    onTextEdited: diskModel.filter = text
-                }
-            }
-        }
-
-        // ---- workspace bar: fullscreen lives here, not in a pane -------
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 34
-            color: theme.surface
-            border.color: theme.border
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 6
-                Label { text: "全屏"; font.pixelSize: 11; color: theme.textMuted }
-                Button {
-                    visible: window.chartLayout !== "dock"
-                    text: window.maximizedPane === "tables" ? "还原表格" : "表格全屏"
-                    onClicked: window.maximizePane("tables")
-                }
-                Button {
-                    visible: window.chartLayout !== "dock"
-                    text: window.maximizedPane === "chart" ? "还原图表" : "图表全屏"
-                    onClicked: window.maximizePane("chart")
-                }
-                Repeater {
-                    model: window.chartLayout === "dock"
-                           ? [{ id: "tree", label: "树" }, { id: "files", label: "文件" },
-                              { id: "legend", label: "扩展名" }, { id: "chart", label: "可视化" }]
-                           : []
-                    delegate: Button {
-                        required property var modelData
-                        text: window.maximizedPane === modelData.id ? "还原" : modelData.label + "全屏"
-                        onClicked: window.maximizePane(modelData.id)
-                    }
-                }
-                Item { Layout.fillWidth: true }
-                Button {
-                    visible: window.maximizedPane !== ""
-                    text: "全部还原"
-                    onClicked: window.maximizePane(window.maximizedPane)
+                    ToolTip.text: "主题设置"
+                    onClicked: themeDialog.open()
+                    contentItem: Glyph { iconName: "paint-brush"; size: metrics.icon; color: theme.text }
                 }
             }
         }
@@ -757,11 +1089,11 @@ ApplicationWindow {
                     tablesInnerSplit.orientation = Qt.Vertical
                     filePane.SplitView.fillHeight = true
                     filePane.SplitView.preferredHeight = -1
-                    filePane.SplitView.minimumHeight = 120
+                    filePane.SplitView.minimumHeight = metrics.paneHeader + metrics.headerRow * 2 + metrics.row
                     filePane.SplitView.minimumWidth = -1
                     legendPane.SplitView.fillHeight = false
                     legendPane.SplitView.preferredHeight = 190
-                    legendPane.SplitView.minimumHeight = 80
+                    legendPane.SplitView.minimumHeight = metrics.paneHeader + metrics.row
                     legendPane.SplitView.minimumWidth = -1
                 } else {
                     // tables beside the chart: the three panels side by side
@@ -802,33 +1134,63 @@ ApplicationWindow {
                     id: treePane
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 430
+                    SplitView.minimumHeight: window.treeCollapsed ? metrics.paneHeader : -1
+                    SplitView.preferredHeight: window.treeCollapsed ? metrics.paneHeader : -1
+                    PaneHeader {
+                        id: treePaneHeader
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                        title: "树视图"; iconName: "tree-structure"
+                        maximized: window.maximizedPane === "tables"
+                        collapsed: window.treeCollapsed
+                        onMaximizeRequested: window.maximizePane("tables")
+                        onCollapseRequested: window.treeCollapsed = !window.treeCollapsed
+                    }
                     ColumnLayout {
-                        anchors.fill: parent
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        anchors.top: treePaneHeader.bottom
                         spacing: 0
-                        Rectangle {
+                        visible: !window.treeCollapsed
+                        Flickable {
+                            id: treeHeader
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 26
-                            color: theme.surfaceAlt
-                            border.color: theme.border
+                            Layout.preferredHeight: metrics.headerRow
+                            Layout.minimumHeight: metrics.headerRow
+                            clip: true
+                            contentWidth: list.contentWidth
+                            contentHeight: height
+                            contentX: list.contentX
+                            interactive: false
+                            boundsBehavior: Flickable.StopAtBounds
+                            Rectangle { anchors.fill: parent; color: theme.surfaceAlt; border.color: theme.border }
                             RowLayout {
-                                anchors.fill: parent
+                                width: treeHeader.contentWidth
+                                height: treeHeader.height
                                 spacing: 0
                                 TableCell {
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: window.nameMinimum("tree")
+                                             cellWidth: window.nameWidth("tree")
+                                        lineColor: window.gridColor()
+                                        Layout.preferredWidth: window.nameWidth("tree")
                                     Label {
                                         anchors.fill: parent
                                         anchors.leftMargin: 8
                                         verticalAlignment: Text.AlignVCenter
-                                        text: "文件夹 / 名称" + (diskModel.sortKey === 1 ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                        font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                        text: "文件夹 / 名称 ↓"
+                                        font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
                                         elide: Text.ElideRight
                                     }
-                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: diskModel.toggleSort(1) }
+                                             ColumnHandle {
+                                        anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+                                        objectName: "columnHandle:tree:name"
+                                          store: window.columnStore("tree"); column: "name"
+                                          visible: window.columnResizable("tree", "name")
+                                          effectiveWidth: function() { return window.nameWidth("tree") }
+                                          resizeBy: function(delta) { window.resizeColumn("tree", "name", delta) }
+                                         autoFit: function() { window.autoFitColumn("tree", "name") }
+                                    }
                                 }
                                 Repeater {
                                     objectName: "treeColumnRepeater"
-                                    model: window.treeColumnSpec
+                                    model: window.treeColumnSpec.slice(1)
                                     delegate: TableCell {
                                         cellWidth: window.columnWidth("tree", modelData.key)
                                         visible: window.columnVisible("tree", modelData.key)
@@ -840,12 +1202,12 @@ ApplicationWindow {
                                             horizontalAlignment: Text.AlignRight
                                             text: modelData.label + (modelData.sort !== undefined && diskModel.sortKey === modelData.sort
                                                                      ? (diskModel.ascending ? " ↑" : " ↓") : "")
-                                            font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                         font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
                                             elide: Text.ElideRight
                                         }
                                         MouseArea {
                                             anchors.fill: parent
-                                            enabled: modelData.sort !== undefined
+                                            enabled: modelData.sort !== undefined && modelData.sort !== 1
                                             cursorShape: modelData.sort !== undefined ? Qt.PointingHandCursor : Qt.ArrowCursor
                                             onClicked: diskModel.toggleSort(modelData.sort)
                                         }
@@ -854,9 +1216,11 @@ ApplicationWindow {
                                             anchors.top: parent.top
                                             anchors.bottom: parent.bottom
                                             objectName: "columnHandle:tree:" + modelData.key
-                                            store: window.columnStore("tree")
-                                            column: modelData.key
-                                            minimum: window.columnMinimum("tree", modelData.key)
+                                              store: window.columnStore("tree")
+                                              column: modelData.key
+                                              visible: window.columnResizable("tree", modelData.key)
+                                              resizeBy: function(delta) { window.resizeColumn("tree", modelData.key, delta) }
+                                             autoFit: function() { window.autoFitColumn("tree", modelData.key) }
                                         }
                                     }
                                 }
@@ -867,6 +1231,9 @@ ApplicationWindow {
                             objectName: "diskViewList"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            contentWidth: window.tableContentWidth("tree")
+                             ScrollBar.horizontal: StyledScrollBar { policy: ScrollBar.AlwaysOff }
+                             ScrollBar.vertical: StyledScrollBar { policy: ScrollBar.AsNeeded }
                             model: diskModel
                             clip: true
                             reuseItems: true
@@ -898,8 +1265,8 @@ ApplicationWindow {
                                 required property bool directory
                                 required property bool hasChildren
                                 required property bool expanded
-                                width: ListView.view.width
-                                height: 24
+                                width: ListView.view.contentWidth
+                                height: metrics.row
                                 padding: 0
                                 highlighted: nodeId === diskModel.selectedId
                                 // A click only selects; the triangle and the
@@ -926,8 +1293,7 @@ ApplicationWindow {
                                         anchors.fill: parent
                                         spacing: 0
                                         TableCell {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: window.nameMinimum("tree")
+                                            cellWidth: window.nameWidth("tree")
                                             lineColor: window.gridColor()
                                             RowLayout {
                                                 anchors.fill: parent
@@ -951,7 +1317,7 @@ ApplicationWindow {
                                                     Layout.fillWidth: true
                                                     text: rowItem.name
                                                     elide: Text.ElideRight
-                                                    color: theme.text; font.pixelSize: 11
+                                                    color: theme.text; font.pixelSize: metrics.caption
                                                 }
                                             }
                                         }
@@ -959,21 +1325,22 @@ ApplicationWindow {
                                             visible: window.columnVisible("tree", "pct")
                                             cellWidth: window.columnWidth("tree", "pct")
                                             lineColor: window.gridColor()
-                                            Rectangle {
-                                                x: 4
-                                                y: parent.height / 2 - 4
-                                                height: 8
-                                                radius: 2
-                                                color: theme.selection
-                                                width: Math.max(0, Math.min(1, rowItem.percent / 100)) * (parent.width - 8)
-                                            }
+                                              Rectangle {
+                                                  anchors.left: parent.left
+                                                  anchors.top: parent.top
+                                                  anchors.bottom: parent.bottom
+                                                  width: Math.max(rowItem.percent > 0 ? 2 : 0,
+                                                                 Math.min(1, rowItem.percent / 100) * parent.width)
+                                                  color: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b,
+                                                                window.dark ? 0.30 : 0.18)
+                                              }
                                             Label {
                                                 anchors.fill: parent
                                                 anchors.leftMargin: 6
                                                 anchors.rightMargin: 6
                                                 verticalAlignment: Text.AlignVCenter
                                                 text: rowItem.percent.toFixed(1) + "%"
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -984,7 +1351,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.sizeText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -995,7 +1362,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.allocText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1006,7 +1373,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.directory ? diskModel.formatCount(rowItem.items) : "—"
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1017,7 +1384,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.directory ? diskModel.formatCount(rowItem.files) : "—"
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1028,7 +1395,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.directory ? diskModel.formatCount(rowItem.dirs) : "—"
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1039,7 +1406,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.modifiedText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1050,7 +1417,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: rowItem.attributes
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                     }
@@ -1083,22 +1450,39 @@ ApplicationWindow {
                     Item {
                         id: filePane
                         SplitView.fillHeight: true
-                        SplitView.minimumHeight: 120
+                        SplitView.minimumHeight: window.fileCollapsed ? metrics.paneHeader : metrics.paneHeader + metrics.headerRow * 2 + metrics.row
+                        SplitView.preferredHeight: window.fileCollapsed ? metrics.paneHeader : -1
+                        PaneHeader {
+                            id: filePaneHeader
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                            title: "文件视图"; iconName: "rows"
+                            maximized: window.maximizedPane === "tables"
+                            collapsed: window.fileCollapsed
+                            showFilter: true
+                            showColumnsButton: true
+                            onMaximizeRequested: window.maximizePane("tables")
+                            onCollapseRequested: window.fileCollapsed = !window.fileCollapsed
+                            onColumnsRequested: function(anchor) { columnsMenu.popup(anchor, 0, anchor.height) }
+                        }
                         ColumnLayout {
-                            anchors.fill: parent
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                            anchors.top: filePaneHeader.bottom
                             spacing: 0
-                        Rectangle {
+                            visible: !window.fileCollapsed
+                            Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 26
+                            Layout.preferredHeight: metrics.headerRow
+                            Layout.minimumHeight: metrics.headerRow
+                            visible: window.fileToolbarFits()
                             color: theme.surfaceAlt
                             border.color: theme.border
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
                                 Label {
                                     Layout.fillWidth: true
-                                    text: "文件" + (fileListModel.wholeTree ? " · 整个扫描"
+                                    text: "文件列表" + (fileListModel.wholeTree ? " · 整个扫描"
                                             : fileListModel.recursive ? " · 含子目录" : "")
-                                    font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                    font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
                                 }
                                 // Where the files come from: the folder the
                                 // chart is on, or the whole scan.
@@ -1147,10 +1531,10 @@ ApplicationWindow {
                                     implicitWidth: 62
                                     implicitHeight: 22
                                     model: ["子串", "模糊"]
-                                    currentIndex: diskModel.fuzzyMatch ? 1 : 0
+                                    currentIndex: fileListModel.fuzzyMatch ? 1 : 0
                                     onActivated: {
-                                        diskModel.fuzzyMatch = (index === 1)
-                                        scanSettings.fuzzyMatch = diskModel.fuzzyMatch
+                                        fileListModel.fuzzyMatch = (index === 1)
+                                        scanSettings.fuzzyMatch = fileListModel.fuzzyMatch
                                         scanSettings.save()
                                     }
                                 }
@@ -1158,26 +1542,43 @@ ApplicationWindow {
                         }
                         // Column headers, with the same drag strips as the
                         // tree table; widths live in fileColumns.
-                        Rectangle {
+                        Flickable {
+                            id: fileHeader
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 22
-                            color: theme.surfaceAlt
-                            border.color: theme.border
+                            Layout.preferredHeight: metrics.headerRow
+                            Layout.minimumHeight: metrics.headerRow
+                            clip: true
+                            contentWidth: fileList.contentWidth
+                            contentHeight: height
+                            contentX: fileList.contentX
+                            interactive: false
+                            boundsBehavior: Flickable.StopAtBounds
+                            Rectangle { anchors.fill: parent; color: theme.surfaceAlt; border.color: theme.border }
                             RowLayout {
-                                anchors.fill: parent
+                                width: fileHeader.contentWidth
+                                height: fileHeader.height
                                 spacing: 0
                                 TableCell {
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: window.nameMinimum("file")
+                                    cellWidth: window.nameWidth("file")
+                                    lineColor: window.gridColor()
                                     Label {
                                         anchors.fill: parent
                                         anchors.leftMargin: 8
                                         verticalAlignment: Text.AlignVCenter
-                                        text: "名称"; font.pixelSize: 10; color: theme.textMuted; elide: Text.ElideRight
+                                        text: "名称"; font.pixelSize: metrics.caption; color: theme.textMuted; elide: Text.ElideRight
+                                    }
+                                         ColumnHandle {
+                                        anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+                                        objectName: "columnHandle:file:name"
+                                          store: window.columnStore("file"); column: "name"
+                                          visible: window.columnResizable("file", "name")
+                                          effectiveWidth: function() { return window.nameWidth("file") }
+                                          resizeBy: function(delta) { window.resizeColumn("file", "name", delta) }
+                                         autoFit: function() { window.autoFitColumn("file", "name") }
                                     }
                                 }
                                 Repeater {
-                                    model: window.fileColumnSpec
+                                    model: window.fileColumnSpec.slice(1)
                                     delegate: TableCell {
                                         cellWidth: window.columnWidth("file", modelData.key)
                                         visible: window.columnVisible("file", modelData.key)
@@ -1188,7 +1589,7 @@ ApplicationWindow {
                                             verticalAlignment: Text.AlignVCenter
                                             horizontalAlignment: Text.AlignRight
                                             text: modelData.label
-                                            font.pixelSize: 10; color: theme.textMuted
+                                            font.pixelSize: metrics.caption; color: theme.textMuted
                                             elide: Text.ElideRight
                                         }
                                         ColumnHandle {
@@ -1196,9 +1597,11 @@ ApplicationWindow {
                                             anchors.top: parent.top
                                             anchors.bottom: parent.bottom
                                             objectName: "columnHandle:file:" + modelData.key
-                                            store: window.columnStore("file")
-                                            column: modelData.key
-                                            minimum: window.columnMinimum("file", modelData.key)
+                                              store: window.columnStore("file")
+                                              column: modelData.key
+                                              visible: window.columnResizable("file", modelData.key)
+                                              resizeBy: function(delta) { window.resizeColumn("file", modelData.key, delta) }
+                                             autoFit: function() { window.autoFitColumn("file", modelData.key) }
                                         }
                                     }
                                 }
@@ -1211,6 +1614,9 @@ ApplicationWindow {
                             Layout.fillHeight: true
                             model: fileListModel
                             clip: true
+                            contentWidth: window.tableContentWidth("file")
+                             ScrollBar.horizontal: StyledScrollBar { policy: ScrollBar.AlwaysOff }
+                             ScrollBar.vertical: StyledScrollBar { policy: ScrollBar.AsNeeded }
                             reuseItems: true
                             boundsBehavior: Flickable.StopAtBounds
                             Keys.onPressed: function(event) {
@@ -1230,8 +1636,8 @@ ApplicationWindow {
                                 required property string attributes
                                 required property real percent
                                 required property bool selected
-                                width: ListView.view.width
-                                height: 24
+                                width: ListView.view.contentWidth
+                                height: metrics.fileRow
                                 padding: 0
                                 highlighted: fileRow.selected || nodeId === diskModel.selectedId
                                 onClicked: fileListModel.select(nodeId)
@@ -1251,8 +1657,7 @@ ApplicationWindow {
                                         anchors.fill: parent
                                         spacing: 0
                                         TableCell {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: window.nameMinimum("file")
+                                            cellWidth: window.nameWidth("file")
                                             lineColor: window.gridColor()
                                             RowLayout {
                                                 anchors.fill: parent
@@ -1264,7 +1669,7 @@ ApplicationWindow {
                                                     Layout.fillWidth: true
                                                     text: fileRow.name
                                                     elide: Text.ElideRight
-                                                    color: theme.text; font.pixelSize: 11
+                                                    color: theme.text; font.pixelSize: metrics.small
                                                 }
                                             }
                                         }
@@ -1272,21 +1677,22 @@ ApplicationWindow {
                                             visible: window.columnVisible("file", "pct")
                                             cellWidth: window.columnWidth("file", "pct")
                                             lineColor: window.gridColor()
-                                            Rectangle {
-                                                x: 4
-                                                y: parent.height / 2 - 4
-                                                height: 8
-                                                radius: 2
-                                                color: theme.selection
-                                                width: Math.max(0, Math.min(1, fileRow.percent / 100)) * (parent.width - 8)
-                                            }
+                                              Rectangle {
+                                                  anchors.left: parent.left
+                                                  anchors.top: parent.top
+                                                  anchors.bottom: parent.bottom
+                                                  width: Math.max(fileRow.percent > 0 ? 2 : 0,
+                                                                 Math.min(1, fileRow.percent / 100) * parent.width)
+                                                  color: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b,
+                                                                window.dark ? 0.30 : 0.18)
+                                              }
                                             Label {
                                                 anchors.fill: parent
                                                 anchors.leftMargin: 6
                                                 anchors.rightMargin: 6
                                                 verticalAlignment: Text.AlignVCenter
                                                 text: fileRow.percent.toFixed(1) + "%"
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1297,7 +1703,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: fileRow.sizeText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1308,7 +1714,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: fileRow.allocText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1319,7 +1725,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: fileRow.modifiedText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1330,7 +1736,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 8
                                                 text: fileRow.attributes
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                     }
@@ -1351,30 +1757,63 @@ ApplicationWindow {
                     id: legendPane
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 250
+                    SplitView.minimumHeight: window.legendCollapsed ? metrics.headerRow : -1
+                    SplitView.preferredHeight: window.legendCollapsed ? metrics.headerRow : -1
+                    PaneHeader {
+                        id: legendPaneHeader
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                        title: "扩展名视图"; iconName: "tag"
+                        maximized: window.maximizedPane === "tables"
+                        collapsed: window.legendCollapsed
+                        onMaximizeRequested: window.maximizePane("tables")
+                        onCollapseRequested: window.legendCollapsed = !window.legendCollapsed
+                    }
                     ColumnLayout {
-                        anchors.fill: parent
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        anchors.top: legendPaneHeader.bottom
                         spacing: 0
-                        Rectangle {
+                        visible: !window.legendCollapsed
+                        Flickable {
+                            id: legendHeader
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 26
-                            color: theme.surfaceAlt
-                            border.color: theme.border
+                            Layout.preferredHeight: metrics.headerRow
+                            Layout.minimumHeight: metrics.headerRow
+                            clip: true
+                            contentWidth: legend.contentWidth
+                            contentHeight: height
+                            contentX: legend.contentX
+                            interactive: false
+                            Rectangle { anchors.fill: parent; color: theme.surfaceAlt; border.color: theme.border }
                             RowLayout {
-                                anchors.fill: parent
+                                width: legendHeader.contentWidth
+                                height: legendHeader.height
                                 spacing: 0
                                 TableCell {
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: window.nameMinimum("legend")
+                                    cellWidth: window.nameWidth("legend")
+                                    lineColor: window.gridColor()
                                     Label {
                                         anchors.fill: parent
                                         anchors.leftMargin: 26
                                         verticalAlignment: Text.AlignVCenter
-                                        text: "扩展名"; font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                        text: "扩展名"; font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
                                         elide: Text.ElideRight
+                                    }
+                                    ColumnHandle {
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.bottom: parent.bottom
+                                        objectName: "columnHandle:legend:name"
+                                        store: window.columnStore("legend")
+                                        column: "name"
+                                        visible: window.columnResizable("legend", "name")
+                                        effectiveWidth: function() { return window.nameWidth("legend") }
+                                        resizeBy: function(delta) { window.resizeColumn("legend", "name", delta) }
+                                        autoFit: function() { window.autoFitColumn("legend", "name") }
                                     }
                                 }
                                 Repeater {
-                                    model: window.legendColumnSpec
+                                    objectName: "legendColumnRepeater"
+                                    model: window.legendColumnSpec.slice(1)
                                     delegate: TableCell {
                                         cellWidth: window.columnWidth("legend", modelData.key)
                                         visible: window.columnVisible("legend", modelData.key)
@@ -1385,17 +1824,19 @@ ApplicationWindow {
                                             verticalAlignment: Text.AlignVCenter
                                             horizontalAlignment: Text.AlignRight
                                             text: modelData.label
-                                            font.pixelSize: 11; font.weight: Font.DemiBold; color: theme.textMuted
+                                            font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
                                             elide: Text.ElideRight
                                         }
-                                        ColumnHandle {
+                                         ColumnHandle {
                                             anchors.right: parent.right
                                             anchors.top: parent.top
                                             anchors.bottom: parent.bottom
                                             objectName: "columnHandle:legend:" + modelData.key
-                                            store: window.columnStore("legend")
-                                            column: modelData.key
-                                            minimum: window.columnMinimum("legend", modelData.key)
+                                              store: window.columnStore("legend")
+                                              column: modelData.key
+                                              visible: window.columnResizable("legend", modelData.key)
+                                              resizeBy: function(delta) { window.resizeColumn("legend", modelData.key, delta) }
+                                             autoFit: function() { window.autoFitColumn("legend", modelData.key) }
                                         }
                                     }
                                 }
@@ -1406,26 +1847,28 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
+                            contentWidth: window.tableContentWidth("legend")
+                             ScrollBar.horizontal: StyledScrollBar { policy: ScrollBar.AlwaysOff }
+                             ScrollBar.vertical: StyledScrollBar { policy: ScrollBar.AsNeeded }
                             boundsBehavior: Flickable.StopAtBounds
                             model: diskModel.extensionRows
                             delegate: ItemDelegate {
-                                width: ListView.view.width
-                                height: 22
+                                width: ListView.view.contentWidth
+                                height: metrics.row
                                 padding: 0
                                 // Two links in one: the row the legend picked
                                 // (which also filters the file list), and the
                                 // extension of whatever the chart has
                                 // selected, so the panels point at each other.
-                                highlighted: (diskModel.hasExtensionFilter && diskModel.extensionFilter === modelData.ext)
+                                highlighted: (window.chartHighlightExtension === modelData.ext)
                                              || (diskModel.selectedExtension.length > 0 && diskModel.selectedExtension === modelData.ext)
-                                onClicked: diskModel.selectExtension(modelData.ext)
+                                onClicked: window.chartHighlightExtension = window.chartHighlightExtension === modelData.ext ? "" : modelData.ext
                                 contentItem: Item {
                                     RowLayout {
                                         anchors.fill: parent
                                         spacing: 0
                                         TableCell {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: window.nameMinimum("legend")
+                                            cellWidth: window.nameWidth("legend")
                                             lineColor: window.gridColor()
                                             Rectangle {
                                                 anchors.left: parent.left
@@ -1440,29 +1883,29 @@ ApplicationWindow {
                                                 verticalAlignment: Text.AlignVCenter
                                                 text: (modelData.ext.length ? modelData.ext : "(无)") + "  " + modelData.label
                                                 elide: Text.ElideRight
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
                                             visible: window.columnVisible("legend", "percent")
                                             cellWidth: window.columnWidth("legend", "percent")
                                             lineColor: window.gridColor()
-                                            Rectangle {
-                                                x: 2
-                                                y: parent.height / 2 - 4
-                                                height: 8
-                                                radius: 2
-                                                color: modelData.color
-                                                opacity: 0.55
-                                                width: Math.max(0, Math.min(1, modelData.percent / 100)) * (parent.width - 4)
-                                            }
+                                              Rectangle {
+                                                  anchors.left: parent.left
+                                                  anchors.top: parent.top
+                                                  anchors.bottom: parent.bottom
+                                                  width: Math.max(modelData.percent > 0 ? 2 : 0,
+                                                                 Math.min(1, modelData.percent / 100) * parent.width)
+                                                  color: modelData.color
+                                                 opacity: window.dark ? 0.30 : 0.18
+                                              }
                                             Label {
                                                 anchors.fill: parent
                                                 anchors.rightMargin: 6
                                                 verticalAlignment: Text.AlignVCenter
                                                 horizontalAlignment: Text.AlignRight
                                                 text: modelData.percent.toFixed(1) + "%"
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1473,7 +1916,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 6
                                                 text: modelData.sizeText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.text; font.pixelSize: 11
+                                                color: theme.text; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1484,7 +1927,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 6
                                                 text: modelData.allocText
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                         TableCell {
@@ -1495,7 +1938,7 @@ ApplicationWindow {
                                                 anchors.fill: parent; anchors.rightMargin: 6
                                                 text: diskModel.formatCount(modelData.files)
                                                 horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
-                                                color: theme.textMuted; font.pixelSize: 11
+                                                color: theme.textMuted; font.pixelSize: metrics.small
                                             }
                                         }
                                     }
@@ -1520,11 +1963,24 @@ ApplicationWindow {
             ColumnLayout {
                 id: chartPane
                 SplitView.fillHeight: true
+                SplitView.minimumHeight: window.chartCollapsed ? metrics.headerRow : 110
+                SplitView.preferredHeight: window.chartCollapsed ? metrics.headerRow : -1
                 spacing: 4
 
+                PaneHeader {
+                    Layout.fillWidth: true
+                    title: "可视化视图"; iconName: window.chartKind === 0 ? "squares-four" : "chart-donut"
+                    maximized: window.maximizedPane === "chart"
+                    collapsed: window.chartCollapsed
+                    onMaximizeRequested: window.maximizePane("chart")
+                    onCollapseRequested: window.chartCollapsed = !window.chartCollapsed
+                }
+
                 Rectangle {
+                    visible: !window.chartCollapsed
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32
+                    Layout.minimumHeight: 30
                     color: theme.surface
                     border.color: theme.border
                     RowLayout {
@@ -1569,7 +2025,12 @@ ApplicationWindow {
                                             anchors.fill: parent
                                             cursorShape: Qt.PointingHandCursor
                                             enabled: modelData.id.length > 0 && !modelData.current
-                                            onClicked: diskModel.navigate(modelData.id)
+                                            onClicked: {
+                                                diskModel.navigate(modelData.id)
+                                                diskModel.select(modelData.id)
+                                                if (diskModel.selectedRow >= 0)
+                                                    Qt.callLater(function() { list.positionViewAtIndex(diskModel.selectedRow, ListView.Contain) })
+                                            }
                                         }
                                     }
                                     Label { text: "›"; font.pixelSize: 14; color: theme.textMuted; visible: index < window.crumbs.length - 1 }
@@ -1579,7 +2040,7 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         Label {
                             text: "当前目录 · " + diskModel.totalText + " · " + diskModel.formatCount(diskModel.nodeItems) + " 项"
-                            color: theme.textMuted; font.pixelSize: 11
+                            color: theme.textMuted; font.pixelSize: metrics.small
                         }
                     }
                 }
@@ -1589,6 +2050,8 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.leftMargin: 8; Layout.rightMargin: 8
+                    Layout.preferredHeight: metrics.control
+                    Layout.minimumHeight: 26
                     spacing: 6
                     // The chart's view modes, as icons with their names in the
                     // tooltip: squares for the treemap, a ring for the sunburst.
@@ -1605,7 +2068,7 @@ ApplicationWindow {
                             color: treemapButton.checked ? theme.selection : "transparent"
                             border.color: theme.border
                         }
-                        contentItem: Glyph { iconName: "squares-four"; size: 15; color: treemapButton.checked ? theme.text : theme.textMuted }
+                        contentItem: Glyph { iconName: "squares-four"; size: 15; color: treemapButton.checked ? theme.text : theme.text }
                     }
                     ToolButton {
                         id: sunburstButton
@@ -1620,7 +2083,7 @@ ApplicationWindow {
                             color: sunburstButton.checked ? theme.selection : "transparent"
                             border.color: theme.border
                         }
-                        contentItem: Glyph { iconName: "chart-donut"; size: 15; color: sunburstButton.checked ? theme.text : theme.textMuted }
+                        contentItem: Glyph { iconName: "chart-donut"; size: 15; color: theme.text }
                     }
                     // Back to the folder the tree is rooted at and to 1:1: one
                     // button for both, since a chart that has wandered off is
@@ -1640,10 +2103,10 @@ ApplicationWindow {
                             color: resetButton.hovered ? theme.hoverRow : "transparent"
                             border.color: theme.border
                         }
-                        contentItem: Glyph { iconName: "arrow-counter-clockwise"; size: 15; color: theme.textMuted }
+                        contentItem: Glyph { iconName: "arrow-counter-clockwise"; size: 15; color: theme.text }
                     }
                     Item { Layout.fillWidth: true }
-                    Label { text: "层级"; font.pixelSize: 11; color: theme.textMuted }
+                    Label { text: "层级"; font.pixelSize: metrics.small; color: theme.textMuted }
                     ThemedComboBox {
                         id: depthBox
                         implicitWidth: 76
@@ -1665,9 +2128,9 @@ ApplicationWindow {
                         ToolTip.visible: hovered
                         ToolTip.text: "恢复默认 Dock 布局"
                         onClicked: dockState.reset()
-                        contentItem: Glyph { iconName: "layout"; size: 15; color: theme.textMuted }
+                        contentItem: Glyph { iconName: "layout"; size: 15; color: theme.text }
                     }
-                    Label { text: "布局"; font.pixelSize: 11; color: theme.textMuted }
+                    Label { text: "布局"; font.pixelSize: metrics.small; color: theme.textMuted }
                     ThemedComboBox {
                         id: layoutBox
                         implicitWidth: 104
@@ -1698,7 +2161,7 @@ ApplicationWindow {
                         border.color: theme.border
                         radius: 4
                         clip: true
-                        ChartItem {
+                             ChartItem {
                             id: chart
                             objectName: "diskViewChart"
                             anchors.fill: parent
@@ -1712,7 +2175,13 @@ ApplicationWindow {
                             theme: window.dark ? "dark" : "light"
                             centerLabel: diskModel.currentName
                             highlightExtension: window.chartHighlight()
-                            accent: window.themeTokens.accent
+                             accent: window.themeTokens.accent
+                             surfaceToken: theme.surfaceAlt
+                             borderToken: theme.border
+                             neutralToken: theme.textMuted
+                             dimToken: theme.faint
+                             fontFamily: metrics.fontFamily
+                             fontPixels: metrics.caption
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
                             onActivated: function(nodeId, directory) {
                                 // The chart is a map: a double click enters the
@@ -1738,23 +2207,22 @@ ApplicationWindow {
                             z: 5
                             readonly property var info: chart.hoverId.length ? chart.hoveredInfo(chart.hoverId) : ({})
                             visible: chart.hoverId.length > 0
-                            width: Math.min(320, parent.width - 16)
-                            height: tip.implicitHeight + 16
+                            width: Math.min(280, parent.width - 16)
+                            height: tip.implicitHeight + metrics.pad
                             x: Math.max(8, Math.min(parent.width - width - 8, chart.hoverPosition.x + 16))
                             y: Math.max(8, Math.min(parent.height - height - 8, chart.hoverPosition.y + 18))
-                            color: theme.hoverRow; border.color: "#c3ced9"; radius: 4
+                            color: theme.hoverRow; border.color: theme.border; radius: metrics.cardRadius
                             Column {
                                 id: tip
-                                anchors.fill: parent; anchors.margins: 8; spacing: 3
-                                Label { width: parent.width; text: hoverCard.info.name || ""; font.weight: Font.DemiBold; font.pixelSize: 12; color: theme.text; elide: Text.ElideRight }
-                                Label { width: parent.width; text: hoverCard.info.path || ""; font.pixelSize: 11; color: theme.textMuted; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
+                                anchors.fill: parent; anchors.margins: metrics.pad / 2; spacing: 3
+                                Label { width: parent.width; text: hoverCard.info.name || ""; font.family: metrics.fontFamily; font.weight: Font.DemiBold; font.pixelSize: metrics.caption; color: theme.text; elide: Text.ElideRight }
+                                Label { width: parent.width; text: hoverCard.info.path || ""; font.family: metrics.fontFamily; font.pixelSize: metrics.small; color: theme.textMuted; elide: Text.ElideMiddle; maximumLineCount: 1 }
                                 Label {
-                                    width: parent.width; font.pixelSize: 11; color: theme.text
+                                    width: parent.width; font.family: metrics.fontFamily; font.pixelSize: metrics.small; color: theme.text
                                     text: (hoverCard.info.directory ? "文件夹" : "文件") + " · "
                                           + diskModel.formatSize(hoverCard.info.size || 0) + " · "
                                           + (hoverCard.info.percent || 0).toFixed(1) + "%"
                                 }
-                                Label { width: parent.width; text: "单击固定详情 · 双击进入文件夹"; font.pixelSize: 10; color: theme.textMuted }
                             }
                         }
                         // The old hint label lives in the launcher's help
@@ -1800,13 +2268,13 @@ ApplicationWindow {
 
         // ---- status bar --------------------------------------------------
         Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: 26; color: theme.surface; border.color: theme.border
+            Layout.fillWidth: true; Layout.preferredHeight: metrics.row; color: theme.surface; border.color: theme.border
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
                 Label {
                     text: diskModel.selectedId.length ? "已选：" + (chart.hoveredInfo(diskModel.selectedId).name || "")
                                                       : "未选中"
-                    color: theme.textMuted; font.pixelSize: 11
+                    color: theme.textMuted; font.pixelSize: metrics.small
                 }
                 Label {
                     Layout.fillWidth: true
@@ -1818,12 +2286,12 @@ ApplicationWindow {
                            : (scanService.fast ? "MFT 快扫" : "普通遍历") + " · " + scanService.statusText
                     color: diskModel.loadError.length || scanService.state === "error" ? theme.error
                           : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? theme.warn : theme.textMuted
-                    font.pixelSize: 11
+                    font.pixelSize: metrics.small
                     elide: Text.ElideRight
                 }
                 Label {
                     text: chart.hoverId.length ? (chart.hoveredInfo(chart.hoverId).path || "") : ""
-                    color: theme.textMuted; font.pixelSize: 11
+                    color: theme.textMuted; font.pixelSize: metrics.small
                     elide: Text.ElideMiddle
                     Layout.maximumWidth: parent.width * 0.5
                 }

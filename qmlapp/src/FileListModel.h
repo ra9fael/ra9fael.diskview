@@ -32,6 +32,8 @@ class FileListModel : public QAbstractListModel {
     Q_PROPERTY(bool recursive READ recursive WRITE setRecursive NOTIFY recursiveChanged)
     Q_PROPERTY(int itemCount READ itemCount NOTIFY countChanged)
     Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectionChanged)
+    Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY filterChanged)
+    Q_PROPERTY(bool fuzzyMatch READ fuzzyMatch WRITE setFuzzyMatch NOTIFY filterChanged)
 
 public:
     enum Roles {
@@ -51,6 +53,10 @@ public:
     void setRecursive(bool recursive);
     int itemCount() const { return m_rows.size(); }
     int selectedRow() const;
+    QString filter() const { return m_filter; }
+    void setFilter(const QString& filter);
+    bool fuzzyMatch() const { return m_fuzzyMatch; }
+    void setFuzzyMatch(bool fuzzy);
 
     int rowCount(const QModelIndex& parent = {}) const override;
     QVariant data(const QModelIndex& index, int role) const override;
@@ -70,6 +76,7 @@ signals:
     void recursiveChanged();
     void countChanged();
     void selectionChanged();
+    void filterChanged();
 
 private:
     void rebuild();
@@ -79,6 +86,8 @@ private:
     QVector<int> m_rows;
     bool m_wholeTree = false;
     bool m_recursive = false;
+    QString m_filter;
+    bool m_fuzzyMatch = false;
     bool m_connected = false;
     quint64 m_signature = 0;
     bool m_cacheValid = false;

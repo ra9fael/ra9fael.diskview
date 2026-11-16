@@ -27,7 +27,8 @@ qt_add_executable(diskview-qml
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
-    QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml)
+    QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/Metrics.qml qml/PathSuggestions.qml)
+set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -48,7 +49,7 @@ qt_add_resources(diskview-qml "diskview_qml_icon"
 target_link_libraries(diskview-qml PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
 # The scan helper needs the shell (to ask for authorization), the security
 # API (for the pipe's access control) and COM (for the session id).
-target_link_libraries(diskview-qml PRIVATE user32 shell32 advapi32 ole32 uuid)
+target_link_libraries(diskview-qml PRIVATE user32 shell32 advapi32 ole32 uuid dwmapi)
 # The generated type registration includes the QML_ELEMENT headers by their
 # bare name, so their folder has to be on the include path. The branch root
 # holds scan.h and tree.h, which the scanner reuses.
@@ -114,7 +115,8 @@ if(DISKVIEW_BUILD_PLUGIN)
     qt_add_qml_module(diskview-qml-app
         URI DiskViewPrototype
         VERSION 1.0
-        QML_FILES qml/Main.qml qml/ScanSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml)
+        QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/Metrics.qml qml/PathSuggestions.qml)
+    set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
     qt_add_resources(diskview-qml-app "diskview_qml_fixture"
         PREFIX "/fixtures"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -128,7 +130,7 @@ if(DISKVIEW_BUILD_PLUGIN)
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/.."
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/../app.ico")
     target_link_libraries(diskview-qml-app PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
-        user32 shell32 advapi32 ole32 uuid)
+        user32 shell32 advapi32 ole32 uuid dwmapi)
     target_include_directories(diskview-qml-app PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/..")
     target_compile_definitions(diskview-qml-app PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

@@ -147,6 +147,11 @@ public:
     Q_INVOKABLE void openSelected();
     Q_INVOKABLE void toggleSort(int key);
     Q_INVOKABLE bool revealNode(const QString& id);
+    Q_INVOKABLE QString pathForNode(const QString& id) const;
+    Q_INVOKABLE bool isAggregateNode(const QString& id) const;
+    Q_INVOKABLE bool isDirectoryNode(const QString& id) const;
+    Q_INVOKABLE quint64 sizeForNode(const QString& id) const;
+    Q_INVOKABLE bool removeNode(const QString& id);
     // Opens the folder in place: every folder on the way to it and the folder
     // itself are expanded in the list, and its row is selected. The window
     // stays on the folder it is showing, unlike navigate().
@@ -228,6 +233,7 @@ private:
     void collectFilesFiltered(int node, QString& path, QVector<int>& out) const;
     QSet<int> filterKeepSet() const;
     void sortEntries(QVector<int>& entries) const;
+    void sortTreeEntries(QVector<int>& entries) const;
     void pushHistory(int index);
     int depthOf(int index) const;
 

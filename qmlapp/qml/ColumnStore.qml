@@ -9,6 +9,7 @@ QtObject {
 
     // key -> width, for the columns the user has dragged.
     property var widths: ({})
+    property int activeEdits: 0
     // key -> default width, filled from the spec once at startup.
     property var defaults: ({})
     // Raised after any change; Main.qml persists the three stores together.
@@ -23,17 +24,26 @@ QtObject {
         const next = Object.assign({}, store.widths)
         next[key] = value
         store.widths = next
-        store.changed()
+        if (store.activeEdits === 0) store.changed()
+    }
+    function setWidths(values) {
+        widths = Object.assign({}, values)
+        if (activeEdits === 0) changed()
     }
     function reset(key) {
         if (store.widths[key] === undefined) return
         const next = Object.assign({}, store.widths)
         delete next[key]
         store.widths = next
-        store.changed()
+        if (store.activeEdits === 0) store.changed()
     }
     function resetAll() {
         store.widths = ({})
         store.changed()
+    }
+    function beginEdit() { store.activeEdits += 1 }
+    function endEdit() {
+        if (store.activeEdits > 0) store.activeEdits -= 1
+        if (store.activeEdits === 0) store.changed()
     }
 }

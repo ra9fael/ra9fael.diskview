@@ -12,8 +12,9 @@ Item {
 
     required property var store
     required property string column
-    property int minimum: 40
-    property int maximum: 480
+    property var resizeBy: function(delta) { store.setWidth(column, Math.max(0, effectiveWidth() + delta)) }
+    property var effectiveWidth: function() { return store.width(column) }
+    property var autoFit: function() { store.reset(column) }
 
     implicitWidth: 7
     implicitHeight: 20
@@ -32,17 +33,20 @@ Item {
         hoverEnabled: true
         cursorShape: Qt.SizeHorCursor
         property real startSceneX: 0
-        property real startWidth: 0
+        property bool editing: false
         onPressed: function(point) {
+            handle.store.beginEdit()
+            editing = true
             startSceneX = mapToItem(null, point.x, point.y).x
-            startWidth = handle.store.width(handle.column)
         }
         onPositionChanged: function(point) {
             if (!pressed) return
             const sceneX = mapToItem(null, point.x, point.y).x
-            const wanted = Math.round(startWidth + sceneX - startSceneX)
-            handle.store.setWidth(handle.column, Math.max(handle.minimum, Math.min(handle.maximum, wanted)))
+            handle.resizeBy(Math.round(sceneX - startSceneX))
+            startSceneX = sceneX
         }
-        onDoubleClicked: handle.store.reset(handle.column)
+        onReleased: if (editing) { editing = false; handle.store.endEdit() }
+        onCanceled: if (editing) { editing = false; handle.store.endEdit() }
+        onDoubleClicked: handle.autoFit()
     }
 }

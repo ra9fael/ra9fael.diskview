@@ -52,6 +52,22 @@ void FileListModel::setRecursive(bool recursive)
     rebuild();
 }
 
+void FileListModel::setFilter(const QString& filter)
+{
+    if (m_filter == filter) return;
+    m_filter = filter;
+    emit filterChanged();
+    rebuild();
+}
+
+void FileListModel::setFuzzyMatch(bool fuzzy)
+{
+    if (m_fuzzyMatch == fuzzy) return;
+    m_fuzzyMatch = fuzzy;
+    emit filterChanged();
+    rebuild();
+}
+
 void FileListModel::rebuild()
 {
     if (!m_model || m_model->m_current < 0) {
@@ -67,8 +83,8 @@ void FileListModel::rebuild()
     // signature says what the rows depend on.
     const int root = m_wholeTree ? 0 : m_model->m_chartRoot;
     const quint64 signature = (quint64(root) << 8)
-        ^ (quint64(qHash(m_model->m_filter)) << 1)
-        ^ (m_model->m_fuzzyMatch ? 1u : 0u)
+        ^ (quint64(qHash(m_filter)) << 1)
+        ^ (m_fuzzyMatch ? 1u : 0u)
         ^ (quint64(m_model->m_sortKey + 1) << 55)
         ^ (m_model->m_ascending ? (1ull << 59) : 0ull)
         ^ (m_model->m_extensionFilterOn ? (quint64(qHash(m_model->m_extensionFilter)) << 40 | (1ull << 32)) : 0ull)
@@ -106,9 +122,9 @@ void FileListModel::rebuild()
     }
     // The text filter: a substring of the path, or the fuzzy subsequence of
     // the name, the way the old file view matched.
-    const QString& filter = m_model->m_filter;
+    const QString& filter = m_filter;
     if (!filter.isEmpty()) {
-        if (m_model->m_fuzzyMatch) {
+        if (m_fuzzyMatch) {
             m_rows.erase(std::remove_if(m_rows.begin(), m_rows.end(), [this, &filter](int node) {
                 return !fuzzyContains(m_model->nameViewOf(node), filter);
             }), m_rows.end());
@@ -128,7 +144,7 @@ void FileListModel::rebuild()
     // Order: a fuzzy search ranks its best matches first, everything else is
     // the panel's own sort (size downwards, the model's key applies here
     // too).
-    if (!filter.isEmpty() && m_model->m_fuzzyMatch) {
+    if (!filter.isEmpty() && m_fuzzyMatch) {
         std::stable_sort(m_rows.begin(), m_rows.end(), [this, &filter](int a, int b) {
             return fuzzyRank(m_model->nameViewOf(a), filter) < fuzzyRank(m_model->nameViewOf(b), filter);
         });
@@ -165,7 +181,7 @@ void FileListModel::rebuild()
 
 int FileListModel::fuzzyScore(int node) const
 {
-    return fuzzyRank(m_model->nameViewOf(node), m_model->m_filter);
+    return fuzzyRank(m_model->nameViewOf(node), m_filter);
 }
 
 int FileListModel::selectedRow() const

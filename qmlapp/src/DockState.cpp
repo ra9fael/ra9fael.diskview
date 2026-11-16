@@ -137,11 +137,29 @@ void DockState::setLayout(const QVariantMap& value) {
 }
 void DockState::reset() { setLayout(defaultLayout()); }
 bool DockState::movePane(const QString& pane, const QString& target, const QString& edge) {
-    if (!panes.contains(pane) || !panes.contains(target) || pane == target
+    if (!panes.contains(pane) || !panes.contains(target)
         || !QStringList{"left", "right", "top", "bottom", "center"}.contains(edge)) return false;
+    QString anchor = target;
+    if (pane == target) {
+        bool groupFound = false;
+        std::function<QString(const QVariantMap&)> sibling = [&](const QVariantMap& node) -> QString {
+            if (node.value("type") == "tabs") {
+                const auto ids = node.value("panes").toStringList();
+                if (ids.contains(pane)) {
+                    groupFound = true;
+                    for (const QString& id : ids) if (id != pane) return id;
+                }
+                return {};
+            }
+            QString found = sibling(node.value("first").toMap());
+            return groupFound ? found : sibling(node.value("second").toMap());
+        };
+        anchor = sibling(m_layout);
+        if (!groupFound || anchor.isEmpty()) return false;
+    }
     auto next = remove(m_layout, pane);
     bool found = false;
-    next = insert(next, pane, target, edge, found);
+    next = insert(next, pane, anchor, edge, found);
     if (!found || !valid(next)) return false;
     setLayout(next);
     return true;

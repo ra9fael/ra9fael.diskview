@@ -21,6 +21,12 @@ class ChartItem : public QQuickPaintedItem {
     // The accent the strokes take: the system's, through the theme tokens, so
     // a hover and a selection keep the colour the user picked for Windows.
     Q_PROPERTY(QColor accent READ accent WRITE setAccent NOTIFY accentChanged)
+    Q_PROPERTY(QColor surfaceToken READ surfaceToken WRITE setSurfaceToken NOTIFY paletteChanged)
+    Q_PROPERTY(QColor borderToken READ borderToken WRITE setBorderToken NOTIFY paletteChanged)
+    Q_PROPERTY(QColor neutralToken READ neutralToken WRITE setNeutralToken NOTIFY paletteChanged)
+    Q_PROPERTY(QColor dimToken READ dimToken WRITE setDimToken NOTIFY paletteChanged)
+    Q_PROPERTY(QString fontFamily READ fontFamily WRITE setFontFamily NOTIFY paletteChanged)
+    Q_PROPERTY(int fontPixels READ fontPixels WRITE setFontPixels NOTIFY paletteChanged)
     Q_PROPERTY(QString hoverId READ hoverId NOTIFY hoverChanged)
     Q_PROPERTY(QPointF hoverPosition READ hoverPosition NOTIFY hoverChanged)
 
@@ -51,6 +57,18 @@ public:
     void setTheme(const QString& theme);
     QColor accent() const { return m_accent; }
     void setAccent(const QColor& accent);
+    QColor surfaceToken() const { return m_surfaceToken; }
+    void setSurfaceToken(const QColor& color);
+    QColor borderToken() const { return m_borderToken; }
+    void setBorderToken(const QColor& color);
+    QColor neutralToken() const { return m_neutralToken; }
+    void setNeutralToken(const QColor& color);
+    QColor dimToken() const { return m_dimToken; }
+    void setDimToken(const QColor& color);
+    QString fontFamily() const { return m_fontFamily; }
+    void setFontFamily(const QString& family);
+    int fontPixels() const { return m_fontPixels; }
+    void setFontPixels(int pixels);
     QString hoverId() const { return m_hoverId; }
     QPointF hoverPosition() const { return m_hoverPosition; }
     // The name, path, size and kind of the node a region belongs to.
@@ -88,6 +106,7 @@ signals:
     // The host's light/dark choice; the chart's greys follow it.
     void themeChanged();
     void accentChanged();
+    void paletteChanged();
     // A right click on a region, in the item's own coordinates.
     void contextRequested(const QString& id, qreal x, qreal y);
     void centerActivated();
@@ -143,14 +162,18 @@ private:
     int m_revision = -1;
     QVector<HitRegion> m_regions;
     diskview::Node m_chartRoot;
+    std::wstring m_rootPath;
     QHash<std::wstring, QString> m_pathIds;
     QHash<QString, NodeInfo> m_nodeInfo;
     std::vector<diskview::Tile> m_tiles;
     std::vector<diskview::Slice> m_slices;
     int m_viewMode = 0;
-    int m_depth = 1;
+    int m_depth = 0;
     QString m_theme; // empty = light
     QColor m_accent = QColor("#2f7cd6");
+    QColor m_surfaceToken, m_borderToken, m_neutralToken, m_dimToken;
+    QString m_fontFamily = QStringLiteral("Segoe UI");
+    int m_fontPixels = 12;
     QString m_highlightExtension;
     QString m_selectedId;
     QString m_centerLabel;
