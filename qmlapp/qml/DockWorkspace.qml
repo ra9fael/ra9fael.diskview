@@ -89,7 +89,13 @@ Item {
         function onChanged() { workspace.refresh(); workspace.persisted() }
     }
 
-    Rectangle { anchors.fill: parent; color: theme.window }
+    Rectangle {
+        anchors.fill: parent
+        // Opaque on purpose: on Mica the window colour is fully transparent,
+        // and any row a pane stops short of the workspace edge would show
+        // the material (or what sits behind the window) through the gap.
+        color: theme.solidSurface
+    }
     Item { id: content; anchors.fill: parent }
     Repeater {
         model: workspace.geometry

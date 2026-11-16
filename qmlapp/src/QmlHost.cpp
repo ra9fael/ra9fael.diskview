@@ -892,16 +892,53 @@ bool QmlHost::runSelfTest(QString* report)
     const bool paused = m_options.scanPath.isEmpty() || m_pauseVerified;
     QString listDetail;
     const bool list = runListChecks(model, &listDetail);
+    // The rail button owns its menu: the same press has to open and close it,
+    // and the other panels' button has to switch the panel.
+    QString columnsMenuToggleFail;
+    {
+        QQmlExpression menuToggle(m_engine.rootContext(), window, QStringLiteral("verifyColumnsMenuToggle()"));
+        if (menuToggle.hasError())
+            columnsMenuToggleFail = menuToggle.error().toString();
+        else
+            columnsMenuToggleFail = menuToggle.evaluate().toString();
+    }
+    // The same toggle through real mouse events: a click on the rail button
+    // opens the menu, the next click lands on the dismiss layer and closes
+    // it. The events go to the window, so they pass the real hit test.
+    if (auto* rail = window->findChild<QQuickItem*>(QStringLiteral("columnsButton:tree"))) {
+        const auto send = [&](QEvent::Type type, const QPointF& position) {
+            QMouseEvent event(type, position, window->mapToGlobal(position.toPoint()), Qt::LeftButton,
+                              type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &event);
+            QCoreApplication::processEvents();
+        };
+        const auto shown = [&]() -> bool {
+            QQmlExpression expression(m_engine.rootContext(), window, QStringLiteral("columnsMenuShown()"));
+            return !expression.hasError() && expression.evaluate().toBool();
+        };
+        const QPointF center = rail->mapToScene(QPointF(rail->width() / 2, rail->height() / 2));
+        send(QEvent::MouseButtonPress, center);
+        send(QEvent::MouseButtonRelease, center);
+        const bool opened = shown();
+        send(QEvent::MouseButtonPress, center);
+        send(QEvent::MouseButtonRelease, center);
+        const bool closed = !shown();
+        if (!opened || !closed)
+            columnsMenuToggleFail += QStringLiteral("%1real-click opened=%2 closed=%3")
+                                         .arg(columnsMenuToggleFail.isEmpty() ? QString() : QStringLiteral(" "))
+                                         .arg(opened).arg(closed);
+    }
     if (viewFollows) {
         if (!listDetail.isEmpty()) listDetail += QStringLiteral(",view");
     } else {
         listDetail = listDetail.isEmpty() ? QStringLiteral("bad-view") : listDetail + QStringLiteral(",bad-view");
     }
     const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list
-                      && viewFollows && drag && chartOk && columnsOk && legendNameGripOk;
+                      && viewFollows && drag && chartOk && columnsOk && legendNameGripOk
+                      && columnsMenuToggleFail.isEmpty();
 
 
-    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\n")
+    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\t%12\n")
                   .arg(m_options.viewMode)
                   .arg(hit)
                   .arg(regions ? QStringLiteral("regions") : QStringLiteral("no-regions"))
@@ -916,6 +953,8 @@ bool QmlHost::runSelfTest(QString* report)
                   .arg(columnsOk && legendNameGripOk ? QStringLiteral("columns=%1,legend-name-grip").arg(columnDetail)
                                  : !legendNameGripOk ? QStringLiteral("bad-legend-name-grip")
                                  : QStringLiteral("bad-columns:%1").arg(columnDetail))
+                  .arg(columnsMenuToggleFail.isEmpty() ? QStringLiteral("columns-menu-toggle")
+                                 : QStringLiteral("bad-columns-menu-toggle:%1").arg(columnsMenuToggleFail))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
     if (!m_options.scanPath.isEmpty() && m_scanService) {
         // What the scan made of the settings, and how much of it was published
@@ -1317,6 +1356,9 @@ bool QmlHost::saveScreenshot(const QString& path)
             || state == QLatin1String("address-focus") || state == QLatin1String("dock-tabs")
             || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")
             || state == QLatin1String("maximized")
+            || state == QLatin1String("dock-maximized")
+            || state == QLatin1String("scan-settings-dialog")
+            || state == QLatin1String("theme-dialog")
             || state == QLatin1String("file-filter") || state == QLatin1String("extension-highlight")
             || state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")) {
             QQmlExpression prepare(m_engine.rootContext(), window,
@@ -1329,7 +1371,9 @@ bool QmlHost::saveScreenshot(const QString& path)
             QCoreApplication::processEvents();
             if (state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")
                 || state == QLatin1String("drives") || state == QLatin1String("dock-tabs")
-                || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")) {
+                || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")
+                || state == QLatin1String("dock-maximized") || state == QLatin1String("scan-settings-dialog")
+                || state == QLatin1String("theme-dialog")) {
                 for (int frame = 0; frame < 4; ++frame)
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
             }

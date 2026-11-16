@@ -11,7 +11,10 @@ Button {
     id: button
 
     property string iconName: ""
-    implicitHeight: metrics.control
+    // A slim row (a pane-header bar, a dialog footer) can ask for a lower
+    // button; anything else keeps the host's control height.
+    property real compactHeight: -1
+    implicitHeight: compactHeight > 0 ? compactHeight : metrics.control
     leftPadding: 10
     rightPadding: 10
     font.pixelSize: theme.fontSize

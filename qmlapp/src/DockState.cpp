@@ -92,6 +92,13 @@ QVariantMap activateIn(QVariantMap node, const QString& pane) {
 }
 void place(const QVariantMap& node, double x, double y, double w, double h,
            const QString& path, QVariantList& out) {
+    // Whole device pixels only: fractional slot edges let a pane stop a row
+    // short of the workspace edge, and on Mica the material shows through
+    // the gap. Rounding each edge keeps the slots covering the full area.
+    x = std::round(x);
+    y = std::round(y);
+    w = std::round(w);
+    h = std::round(h);
     QVariantMap rect{{"x", x}, {"y", y}, {"width", w}, {"height", h}, {"path", path}};
     if (node.value("type") == "tabs") {
         rect["type"] = "tabs";

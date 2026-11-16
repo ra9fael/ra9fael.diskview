@@ -61,25 +61,15 @@ Dialog {
 
     standardButtons: Dialog.NoButton
     // The rest of the window is Chinese, so the buttons are too: the system
-    // locale would name them in English.
-    footer: RowLayout {
-        spacing: 8
-        Item { Layout.fillWidth: true }
-        Button {
-            text: "取消"
-            onClicked: root.reject()
-        }
-        Button {
-            text: "确定"
-            onClicked: root.accept()
-        }
-    }
-
+    // locale would name them in English. The row lives inside the content
+    // rather than in a custom `footer`: the footer is docked to the popup's
+    // bottom edge without being part of its implicit height, and the buttons
+    // ended up over (or off) the frame.
     ColumnLayout {
         id: content
         width: root.availableWidth
         // No anchors.fill here: the dialog takes the height from the content,
-        // so the footer can never end up outside the frame.
+        // so the buttons can never end up outside the frame.
         spacing: 12
 
         GridLayout {
@@ -217,6 +207,15 @@ Dialog {
             color: theme.textMuted
             font.pixelSize: 11
             elide: Text.ElideMiddle
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: 2
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            ThemedButton { text: "取消"; onClicked: root.reject() }
+            ThemedButton { text: "确定"; onClicked: root.accept() }
         }
     }
 }

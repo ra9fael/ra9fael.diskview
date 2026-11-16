@@ -565,21 +565,23 @@ ApplicationWindow {
             Label { visible: destructiveDialog.permanent; text: "请输入：" + destructiveDialog.itemName; color: theme.text; font.pixelSize: metrics.caption }
             TextField { id: confirmation; visible: destructiveDialog.permanent; Layout.fillWidth: true; placeholderText: destructiveDialog.itemName; font.pixelSize: metrics.caption }
             Label { Layout.fillWidth: true; text: destructiveDialog.permanent ? "永久删除" : "移至回收站"; color: destructiveDialog.permanent ? theme.error : theme.text; font.pixelSize: metrics.small }
-        }
-        footer: RowLayout {
-            spacing: metrics.gap
-            Item { Layout.fillWidth: true }
-            Button {
-                text: destructiveDialog.permanent ? "永久删除" : "移至回收站"
-                enabled: !destructiveDialog.working && (!destructiveDialog.permanent || confirmation.text.localeCompare(destructiveDialog.itemName, Qt.CaseInsensitive) === 0)
-                onClicked: {
-                    destructiveDialog.working = true
-                    destructiveDialog.requestId += 1
-                    appHost.performFileActionAsync(destructiveDialog.actionPath, destructiveDialog.permanent,
-                                                   confirmation.text, destructiveDialog.actionId, destructiveDialog.requestId)
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                spacing: metrics.gap
+                Item { Layout.fillWidth: true }
+                ThemedButton {
+                    text: destructiveDialog.permanent ? "永久删除" : "移至回收站"
+                    enabled: !destructiveDialog.working && (!destructiveDialog.permanent || confirmation.text.localeCompare(destructiveDialog.itemName, Qt.CaseInsensitive) === 0)
+                    onClicked: {
+                        destructiveDialog.working = true
+                        destructiveDialog.requestId += 1
+                        appHost.performFileActionAsync(destructiveDialog.actionPath, destructiveDialog.permanent,
+                                                       confirmation.text, destructiveDialog.actionId, destructiveDialog.requestId)
+                    }
                 }
+                ThemedButton { text: "取消"; enabled: !destructiveDialog.working; onClicked: destructiveDialog.close() }
             }
-            Button { text: "取消"; enabled: !destructiveDialog.working; onClicked: destructiveDialog.close() }
         }
     }
 
@@ -638,6 +640,22 @@ ApplicationWindow {
         }
         if (state === "maximized") {
             window.maximizePane("tables")
+            return
+        }
+        if (state === "dock-maximized") {
+            window.chartLayout = "dock"
+            window.detachForDock()
+            dockState.reset()
+            dockWorkspace.refresh()
+            window.maximizePane("tree")
+            return
+        }
+        if (state === "scan-settings-dialog") {
+            settingsDialog.open()
+            return
+        }
+        if (state === "theme-dialog") {
+            themeDialog.open()
             return
         }
         if (state === "columns-menu") {
@@ -780,13 +798,16 @@ ApplicationWindow {
     }
 
     // Each table's own column menu, opened from the rail on that table's
-    // right edge. It stays open until the user picks an entry or clicks
-    // away: a menu that vanishes when the pointer strays is one the user
-    // cannot use. One Menu serves all three tables; `panel` picks whose
+    // right edge. Opening and closing belong to the rail button and the
+    // dismiss layer below, so the menu itself never closes on a click
+    // outside: a press on the rail button must close it, not fall through
+    // and open it again. Esc still closes it, and picking an entry closes
+    // it too. One Menu serves all three tables; `panel` picks whose
     // columns it lists.
     Menu {
         id: columnsMenu
         property string panel: "tree"
+        closePolicy: Popup.CloseOnEscape
         // One Repeater draws the whole menu: a Repeater's delegates land
         // after the Menu's own items, which put the reset entry first.
         readonly property var entries: {
@@ -806,11 +827,51 @@ ApplicationWindow {
                 enabled: !modelData.reset || modelData.label !== "─────────"
                 checkable: !modelData.reset
                 checked: !modelData.reset && !window.columnHidden(columnsMenu.panel, modelData.key)
-                onTriggered: modelData.reset
-                             ? window.resetColumnWidths(columnsMenu.panel)
-                             : window.toggleColumn(columnsMenu.panel, modelData.key)
+                onTriggered: {
+                    modelData.reset
+                         ? window.resetColumnWidths(columnsMenu.panel)
+                         : window.toggleColumn(columnsMenu.panel, modelData.key)
+                    columnsMenu.close()
+                }
             }
         }
+    }
+    // The toggle entry point every rail button shares: the same button that
+    // opened the menu closes it, and a different panel's button switches.
+    function toggleColumnsMenu(panel, button) {
+        if (columnsMenu.visible && columnsMenu.panel === panel) {
+            columnsMenu.close()
+            return
+        }
+        columnsMenu.panel = panel
+        columnsMenu.popup(button, 0, button.height)
+    }
+    // The self-test drives the toggle directly: open, close, switch panels.
+    // An empty string means every step behaved.
+    function verifyColumnsMenuToggle() {
+        toggleColumnsMenu("tree", treeRailButton)
+        const opened = columnsMenu.visible && columnsMenu.panel === "tree"
+        toggleColumnsMenu("tree", treeRailButton)
+        const closed = !columnsMenu.visible
+        toggleColumnsMenu("file", fileRailButton)
+        const switched = columnsMenu.visible && columnsMenu.panel === "file"
+        columnsMenu.close()
+        const settled = !columnsMenu.visible
+        return opened && closed && switched && settled ? "" : "opened=" + opened + " closed=" + closed + " switched=" + switched
+    }
+    // The C++ self-test asks only this; the real press goes through the
+    // window and the dismiss layer.
+    function columnsMenuShown() { return columnsMenu.visible }
+    // A press anywhere outside an open column menu closes it. The layer sits
+    // under the popup itself, so the menu's own entries still work, and the
+    // rail button keeps its toggle: it is covered while the menu is open, so
+    // its next press lands here and closes.
+    MouseArea {
+        anchors.fill: parent
+        z: 100000
+        visible: columnsMenu.visible
+        enabled: visible
+        onPressed: function(event) { columnsMenu.close(); event.accepted = true }
     }
 
     Shortcut {
@@ -1067,13 +1128,11 @@ ApplicationWindow {
                 }
                 Item { Layout.fillWidth: true }
                 BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: metrics.icon; implicitHeight: metrics.icon }
-                ToolButton {
-                    implicitWidth: metrics.control
-                    implicitHeight: metrics.control
-                    ToolTip.visible: hovered
-                    ToolTip.text: "主题设置"
+                ThemedButton {
+                    iconName: "paint-brush"
+                    text: "主题设置"
+                    Layout.minimumWidth: 88
                     onClicked: themeDialog.open()
-                    contentItem: Glyph { iconName: "paint-brush"; size: metrics.icon; color: theme.text }
                 }
             }
         }
@@ -1216,10 +1275,7 @@ ApplicationWindow {
                             height: metrics.headerRow
                             ToolTip.visible: hovered
                             ToolTip.text: "显示或隐藏列"
-                            onClicked: {
-                                columnsMenu.panel = "tree"
-                                columnsMenu.popup(treeRailButton, 0, treeRailButton.height)
-                            }
+                            onClicked: window.toggleColumnsMenu("tree", treeRailButton)
                             contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
                         }
                     }
@@ -1647,10 +1703,7 @@ ApplicationWindow {
                                 height: metrics.headerRow
                                 ToolTip.visible: hovered
                                 ToolTip.text: "显示或隐藏列"
-                                onClicked: {
-                                    columnsMenu.panel = "file"
-                                    columnsMenu.popup(fileRailButton, 0, fileRailButton.height)
-                                }
+                                onClicked: window.toggleColumnsMenu("file", fileRailButton)
                                 contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
                             }
                         }
@@ -1912,10 +1965,7 @@ ApplicationWindow {
                             height: metrics.headerRow
                             ToolTip.visible: hovered
                             ToolTip.text: "显示或隐藏列"
-                            onClicked: {
-                                columnsMenu.panel = "legend"
-                                columnsMenu.popup(legendRailButton, 0, legendRailButton.height)
-                            }
+                            onClicked: window.toggleColumnsMenu("legend", legendRailButton)
                             contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
                         }
                     }
@@ -2421,7 +2471,58 @@ ApplicationWindow {
                     color: theme.solidSurface
                     border.color: theme.border
                 }
-                Item { id: fullscreenSlot; anchors.fill: parent }
+                // In dock mode the layer covers the tab bar, and a maximized
+                // pane has no header of its own (chrome: false), so there was
+                // no way back out of the fullscreen. This thin bar names the
+                // pane and carries the restore button; the preset layouts
+                // keep the pane headers, so the bar stays dock-only.
+                Rectangle {
+                    id: fullscreenBar
+                    objectName: "fullscreenBar"
+                    visible: window.chartLayout === "dock"
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                    height: metrics.paneHeader
+                    color: theme.surfaceAlt
+                    Rectangle {
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        height: 1
+                        color: theme.border
+                    }
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: metrics.pad / 2
+                        anchors.rightMargin: metrics.pad / 2
+                        spacing: 4
+                        Glyph {
+                            iconName: dockWorkspace.icon(window.maximizedPane)
+                            size: metrics.icon
+                            color: theme.accent
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: dockWorkspace.title(window.maximizedPane)
+                            color: theme.text
+                            font.pixelSize: metrics.caption
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        ThemedButton {
+                            objectName: "fullscreenRestoreButton"
+                            compactHeight: Math.max(20, metrics.paneHeader - 6)
+                            font.pixelSize: metrics.small
+                            iconName: "corners-in"
+                            text: "还原"
+                            ToolTip.visible: hovered
+                            ToolTip.text: "还原 (Esc)"
+                            onClicked: window.maximizePane(window.maximizedPane)
+                        }
+                    }
+                }
+                Item {
+                    id: fullscreenSlot
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.top: parent.top
+                    anchors.topMargin: fullscreenBar.visible ? fullscreenBar.height : 0
+                }
             }
         } // the dock workspace
 

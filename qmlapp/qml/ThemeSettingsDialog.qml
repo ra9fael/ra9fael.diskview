@@ -10,6 +10,9 @@ Dialog {
     width: 430
     anchors.centerIn: Overlay.overlay
     standardButtons: Dialog.NoButton
+    // The buttons live inside the content, not in a custom `footer`: the
+    // footer is docked to the popup's bottom edge without being part of its
+    // implicit height, and the buttons ended up over (or off) the frame.
 
     onOpened: {
         fontBox.value = scanSettings.fontSize
@@ -80,23 +83,24 @@ Dialog {
             wrapMode: Text.WordWrap
             font.pixelSize: metrics.small
         }
-    }
 
-    footer: RowLayout {
-        spacing: metrics.gap
-        Item { Layout.fillWidth: true }
-        Button { text: "取消"; onClicked: root.reject() }
-        Button {
-            text: "确定"
-            onClicked: {
-                scanSettings.fontSize = fontBox.value
-                scanSettings.treeRowHeight = treeRowBox.value
-                scanSettings.fileRowHeight = fileRowBox.value
-                scanSettings.headerRowHeight = headerRowBox.value
-                scanSettings.appearanceMode = modeBox.currentIndex
-                scanSettings.save()
-                appHost.setLocalAppearanceMode(modeBox.currentIndex)
-                root.accept()
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: metrics.gap
+            Item { Layout.fillWidth: true }
+            ThemedButton { text: "取消"; onClicked: root.reject() }
+            ThemedButton {
+                text: "确定"
+                onClicked: {
+                    scanSettings.fontSize = fontBox.value
+                    scanSettings.treeRowHeight = treeRowBox.value
+                    scanSettings.fileRowHeight = fileRowBox.value
+                    scanSettings.headerRowHeight = headerRowBox.value
+                    scanSettings.appearanceMode = modeBox.currentIndex
+                    scanSettings.save()
+                    appHost.setLocalAppearanceMode(modeBox.currentIndex)
+                    root.accept()
+                }
             }
         }
     }

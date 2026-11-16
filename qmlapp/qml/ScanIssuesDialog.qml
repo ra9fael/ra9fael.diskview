@@ -15,11 +15,9 @@ Dialog {
     anchors.centerIn: Overlay.overlay
 
     standardButtons: Dialog.NoButton
-    footer: RowLayout {
-        spacing: 8
-        Item { Layout.fillWidth: true }
-        Button { text: "关闭"; onClicked: root.close() }
-    }
+    // The button lives inside the content, not in a custom `footer`: the
+    // footer is docked to the popup's bottom edge without being part of its
+    // implicit height, and it ended up over (or off) the frame.
 
     ColumnLayout {
         anchors.fill: parent
@@ -93,6 +91,13 @@ Dialog {
             text: "扫描方式：" + (scanService.fast ? "快扫（MFT）" : "普通遍历")
             color: theme.textMuted
             font.pixelSize: 11
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            ThemedButton { text: "关闭"; onClicked: root.close() }
         }
     }
 }

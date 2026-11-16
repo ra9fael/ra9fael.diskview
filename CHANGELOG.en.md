@@ -1,5 +1,24 @@
 # Changelog
 
+## [QML 0.3.8] - 2026-11-16
+
+### Fixed
+- Dock panes have a way out of fullscreen again: the fullscreen layer now carries a slim focus bar with the pane's name on the left and a Restore button (corners-in glyph) on the right; Esc still works. The preset layouts keep their pane headers, so the bar is dock-only.
+- The column-menu rail buttons now toggle: a second click closes the menu, another panel's button switches panels, and a click anywhere else closes without acting on what is underneath. The self-test gains a `columns-menu-toggle` check, including real mouse events.
+- The buttons of all four dialogs (scan settings, theme settings, scan issues, delete confirmation) moved from a custom `footer` into the content and onto ThemedButton: the footer is not part of the popup's implicit height, so the buttons ended up over or off the frame.
+- The dock workspace paints an opaque solidSurface background and its layout geometry is rounded to whole pixels, so on Mica nothing bleeds through the gap between panes and the status bar any more.
+- The theme-settings toolbar button shows its label ("Theme settings") next to the paint-brush glyph, matching the scan-settings button.
+
+## [QML 0.3.7] - 2026-11-16
+
+### Fixed
+- Controls align with WinShun: a shared ThemedButton (control fill/border/hover/pressed tokens + Phosphor glyph) is used by the scan toolbar buttons; combo boxes and palette.base/button follow the control colours, so they no longer sit translucent on Mica.
+- Column visibility is per list: each of the three tables has a fixed rail on its right edge with its own column menu; the menu no longer auto-closes; name/size stay locked. Shared hidden columns in old settings migrate to the file view's own set.
+- Dock mode drops the fold/maximize bar under the tab bar (pane headers collapse there); the file view merges its toolbar with the filter bar.
+- Expanded folders' left/right colour strips on chart tiles are neutral structure colours, not extra file blocks.
+- The maximized tab bar and the hover card use opaque solidSurface, so they no longer show the Mica material through.
+- List grid lines are fainter (alpha 0.5 → 0.3).
+
 ## [QML 0.3.6] - 2026-11-16
 
 ### Fixed
