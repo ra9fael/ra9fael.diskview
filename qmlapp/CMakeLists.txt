@@ -24,11 +24,14 @@ qt_add_executable(diskview-qml
     src/PhosphorGlyph.cpp src/PhosphorGlyph.h
     # The elevated scan helper reads the NTFS MFT with this reader.
     "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
+# Must be set before qt_add_qml_module: that is what writes
+# "singleton Metrics" into the module's qmldir. Set after, the module ships a
+# plain component and every metrics.* read silently becomes undefined.
+set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
     QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ThemedButton.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/Metrics.qml qml/PathSuggestions.qml)
-set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -112,11 +115,11 @@ if(DISKVIEW_BUILD_PLUGIN)
         src/Phosphor.cpp src/Phosphor.h
         src/PhosphorGlyph.cpp src/PhosphorGlyph.h
         "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/winshun/Ntfs.cpp")
+    set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
     qt_add_qml_module(diskview-qml-app
         URI DiskViewPrototype
         VERSION 1.0
         QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ThemedButton.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/Metrics.qml qml/PathSuggestions.qml)
-    set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
     qt_add_resources(diskview-qml-app "diskview_qml_fixture"
         PREFIX "/fixtures"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
