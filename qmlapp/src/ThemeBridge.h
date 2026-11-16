@@ -32,6 +32,11 @@ class ThemeBridge : public QObject {
     Q_PROPERTY(QColor window READ window NOTIFY changed)
     Q_PROPERTY(QColor surface READ surface NOTIFY changed)
     Q_PROPERTY(QColor surfaceAlt READ surfaceAlt NOTIFY changed)
+
+    // The surface flattened onto an opaque colour: on Mica the surfaces are
+    // translucent on purpose, and a card or a maximized pane needs one that
+    // never lets the material through.
+    Q_PROPERTY(QColor solidSurface READ solidSurface NOTIFY changed)
     Q_PROPERTY(QColor page READ page NOTIFY changed)
     Q_PROPERTY(QColor faint READ faint NOTIFY changed)
     Q_PROPERTY(QColor pressed READ pressed NOTIFY changed)
@@ -86,6 +91,8 @@ public:
     QColor window() const { return m_window; }
     QColor surface() const { return m_surface; }
     QColor surfaceAlt() const { return m_surfaceAlt; }
+
+    QColor solidSurface() const { return m_solidSurface; }
     QColor page() const { return m_page; }
     QColor faint() const { return m_faint; }
     QColor pressed() const { return m_pressed; }
@@ -168,7 +175,7 @@ private:
     bool m_transparency = false;
     QString m_renderer;
     QVariantMap m_look;
-    QColor m_window, m_surface, m_surfaceAlt, m_page, m_faint, m_pressed;
+    QColor m_window, m_surface, m_surfaceAlt, m_solidSurface, m_page, m_faint, m_pressed;
     QColor m_control, m_controlHover, m_controlBorder, m_menuBackground, m_menuHover, m_menuEdge, m_windowEdge;
     QColor m_handleFill, m_border, m_scrollThumb;
     QColor m_text, m_textMuted, m_selection, m_hoverRow;

@@ -572,7 +572,10 @@ void ChartItem::paint(QPainter* painter)
         const QColor scrim=m_theme==QStringLiteral("dark")?QColor(0,0,0,46):QColor(0,0,0,26);
         const bool dimOthers=!selectedPath.empty();
         // Pass 1: the content. Every tile is filled with its branch colour; an
-        // aggregate is neutral, because it is not one thing.
+        // aggregate is neutral, because it is not one thing. An expanded
+        // folder's fill only ever shows as the 2 px structure strips around
+        // its children, and a colour there reads as one more file block, so
+        // those strips take the chrome fill instead: structure, not content.
         for(const auto& tile:m_tiles){
             const QRectF rect(origin.x()+tile.rect.x,origin.y()+tile.rect.y,tile.rect.w,tile.rect.h);
             bool dimmed=false;
@@ -585,7 +588,8 @@ void ChartItem::paint(QPainter* painter)
                                                 ? QString() : m_highlightExtension)
                    : neutralFill());
             const QBrush fill=tile.remainder?QBrush(remainderColor)
-                                            :fillBrush(*tile.node,rect,tile.hue,tile.depth,&dimmed);
+                                            :tile.expanded?QBrush(chromeFill())
+                             :fillBrush(*tile.node,rect,tile.hue,tile.depth,&dimmed);
             painter->fillRect(rect,fill);
             painter->setPen(QPen(strokeColor(),1));
             painter->setBrush(Qt::NoBrush);

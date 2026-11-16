@@ -62,10 +62,13 @@ ComboBox {
     bottomPadding: 0
 
     background: Rectangle {
-        radius: theme.radius
-        color: box.visualFocus ? theme.surface : theme.surfaceAlt
+        radius: theme.controlRadius
+        // The control fill, not a surface: the Basic style reads
+        // palette.base, and on Mica the surfaces are see-through, so the box
+        // needs the same solid control colour WinShun's own field carries.
+        color: theme.control
         border.width: 1
-        border.color: box.visualFocus ? theme.accent : theme.border
+        border.color: box.visualFocus ? theme.accent : theme.controlBorder
     }
 
     contentItem: Label {

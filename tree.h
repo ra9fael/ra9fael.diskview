@@ -119,6 +119,10 @@ struct Tile {
     // around itself) reports the strip's height here. Zero means the tile is
     // one filled block with a single label: too small to nest anything.
     double header = 0;
+    // True when the folder's children were laid out inside it, so its own
+    // fill only shows as the 2 px structure strips around them. Those strips
+    // draw as neutral chrome, never as the folder's colour.
+    bool expanded = false;
     // The children too small to draw on their own, merged into one aggregate
     // block so the folder's area stays completely covered. `path` is the
     // folder's own, so a click on the aggregate resolves to the folder.
@@ -319,6 +323,7 @@ inline void treemapTiles(const Node& node, const Rect& area, int depth, double m
                 // the strip.
                 if (inner.area() >= 900.0 && depth + 1 <= maxDepth
                     && treemapBigChildren(*entry.node, inner.area(), 48.0) >= 1) {
+                    tile.expanded = true;
                     out.push_back(tile);
                     treemapTiles(*entry.node, inner, depth + 1, minArea, out, out.back().path,
                                  maxDepth, nullptr, entry.hue);

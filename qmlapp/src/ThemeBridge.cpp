@@ -262,6 +262,7 @@ void ThemeBridge::apply()
             m_page = m_window;
             m_faint = QColor(QStringLiteral("#8a8a8a"));
             m_pressed = QColor(QStringLiteral("#323232"));
+
             m_control = QColor(QStringLiteral("#373737"));
             m_controlHover = QColor(QStringLiteral("#3c3c3c"));
             m_controlBorder = QColor(QStringLiteral("#444444"));
@@ -294,6 +295,9 @@ void ThemeBridge::apply()
             m_menuEdge = QColor(0, 0, 0, 26);
             m_windowEdge = QColor(QStringLiteral("#b4b4b4"));
         }
+        // No host: everything is opaque already, so the solid surface is the
+        // surface itself.
+        m_solidSurface = m_surface;
         m_accent = systemAccent();
         if (m_dark) m_accent = m_accent.lighter(155);
         m_accentLine = m_accent;
@@ -361,6 +365,11 @@ void ThemeBridge::apply()
     m_menuBackground = lookColor("menuBackground");
     if (!m_menuBackground.isValid()) m_menuBackground = fallbackColor("menuBackground", m_dark);
     m_menuBackground = over(m_menuBackground, background);
+    // The opaque twin of the surface: on Mica the chrome goes translucent and
+    // the material shows through, and a maximized pane or a hover card must
+    // not. The menu background is the background flattened to opaque, so the
+    // surface over it keeps the surface's colour without its alpha.
+    m_solidSurface = over(m_surface, m_menuBackground);
     m_menuHover = lookColor("menuHover");
     if (!m_menuHover.isValid()) m_menuHover = hover;
     if (!m_menuHover.isValid()) m_menuHover = fallbackColor("menuHover", m_dark);

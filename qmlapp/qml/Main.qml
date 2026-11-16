@@ -29,10 +29,12 @@ ApplicationWindow {
     // light in a dark WinShun.
     palette.window: theme.backdrop ? theme.surface : theme.window
     palette.windowText: theme.text
-    palette.base: theme.surface
+    // base and button back the Basic style's own field and button: the
+    // control fill, which stays solid on Mica where the surfaces do not.
+    palette.base: theme.control
     palette.alternateBase: theme.surfaceAlt
     palette.text: theme.text
-    palette.button: theme.surfaceAlt
+    palette.button: theme.control
     palette.buttonText: theme.text
     palette.brightText: theme.error
     palette.highlight: theme.accent
@@ -119,7 +121,7 @@ ApplicationWindow {
     // The visible columns always fill the pane. Resizing transfers width to or
     // from the adjacent column; the name column absorbs pane-size changes.
     function visibleColumnKeys(panel) {
-        return columnSpec(panel).filter(function(column) { return !columnHidden(column.key) }).map(function(column) { return column.key })
+        return columnSpec(panel).filter(function(column) { return !columnHidden(panel, column.key) }).map(function(column) { return column.key })
     }
     function columnResizable(panel, key) {
         const keys = visibleColumnKeys(panel)
@@ -140,7 +142,9 @@ ApplicationWindow {
         const requested = requestedColumnWidths(panel)
         const keys = requested.keys
         const widths = requested.widths
-        const available = Math.max(0, Math.floor(columnPane(panel).width))
+        // The table's rail takes its 26 px off the right edge before the
+        // columns are budgeted.
+        const available = Math.max(0, Math.floor(columnPane(panel).width - railWidth))
         const total = requested.total
         if (total > available && total > 0) {
             const factor = available / total
@@ -167,7 +171,7 @@ ApplicationWindow {
         if (at < 0 || keys.length < 2 || !delta) return
         const neighborAt = at < keys.length - 1 ? at + 1 : at - 1
         const neighbor = keys[neighborAt]
-        const available = Math.max(0, Math.floor(columnPane(panel).width))
+        const available = Math.max(0, Math.floor(columnPane(panel).width - railWidth))
         const scale = requested.total > available && available > 0 ? requested.total / available : 1
         const requestedDelta = delta * scale
         const applied = Math.max(-requested.widths[key], Math.min(requested.widths[neighbor], requestedDelta))
@@ -253,28 +257,36 @@ ApplicationWindow {
         resizeColumn(panel, key, autoFitWidth(panel, key) - columnWidth(panel, key))
     }
     function tableContentWidth(panel) {
-        return Math.max(0, Math.floor(columnPane(panel).width))
+        return Math.max(0, Math.floor(columnPane(panel).width - railWidth))
     }
     // A column is drawn only while the fixed columns to its left still leave
     // the name column its minimum. That replaces the hand-tuned thresholds the
     // file panel used to carry, and it now applies to every table.
     function columnVisible(panel, key) {
         if (key === "name") return true
-        if (columnHidden(key)) return false
-        return true
+        return !columnHidden(panel, key)
     }
-    function gridColor() { return Qt.rgba(theme.border.r, theme.border.g, theme.border.b, 0.5) }
+    function gridColor() { return Qt.rgba(theme.border.r, theme.border.g, theme.border.b, 0.3) }
 
-    // Which columns the user switched off. The name column is not in the list:
-    // it never goes away.
-    function columnHidden(key) { return scanSettings.hiddenColumns.indexOf(key) >= 0 }
-    function toggleColumn(key) {
-        const hidden = scanSettings.hiddenColumns.slice()
+    // The fixed 26 px strip on the right of every table, carrying that
+    // table's own column button.
+    readonly property int railWidth: 26
+
+    // Which columns each table's user switched off. The name and the size
+    // are locked: they are not in the menu, so they cannot leave. One map
+    // holds all three tables, so a switch on one never moves the others.
+    property var hiddenColumns: ({})
+    function panelHidden(panel) { return hiddenColumns[panel] || [] }
+    function columnHidden(panel, key) { return panelHidden(panel).indexOf(key) >= 0 }
+    function toggleColumn(panel, key) {
+        const hidden = panelHidden(panel).slice()
         const at = hidden.indexOf(key)
         if (at >= 0) hidden.splice(at, 1)
         else hidden.push(key)
-        scanSettings.hiddenColumns = hidden
-        scanSettings.save()
+        const next = Object.assign({}, hiddenColumns)
+        next[panel] = hidden
+        hiddenColumns = next
+        persistColumnWidths()
     }
 
     // Widths: the stores hold what was dragged, ScanSettings keeps the three of
@@ -291,6 +303,13 @@ ApplicationWindow {
         columns.widths = saved.tree || ({})
         fileColumns.widths = saved.file || ({})
         legendColumns.widths = saved.legend || ({})
+        if (saved.hidden) {
+            hiddenColumns = saved.hidden
+        } else {
+            // The one shared hidden list the older builds kept becomes the
+            // file table's own; the other tables start with everything shown.
+            hiddenColumns = { tree: [], file: scanSettings.hiddenColumns.slice(), legend: [] }
+        }
     }
     function saveColumnWidths() {
         if (!columnsLoaded) return
@@ -301,14 +320,13 @@ ApplicationWindow {
         scanSettings.columnWidths = JSON.stringify({
             tree: columns.widths,
             file: fileColumns.widths,
-            legend: legendColumns.widths
+            legend: legendColumns.widths,
+            hidden: hiddenColumns
         })
         scanSettings.save()
     }
-    function resetColumnWidths() {
-        columns.resetAll()
-        fileColumns.resetAll()
-        legendColumns.resetAll()
+    function resetColumnWidths(panel) {
+        columnStore(panel).resetAll()
         persistColumnWidths()
     }
     Timer {
@@ -578,9 +596,6 @@ ApplicationWindow {
         return String(left || "").replace(/[\\\/]+$/, "").toLowerCase()
             === String(right || "").replace(/[\\\/]+$/, "").toLowerCase()
     }
-    function fileToolbarFits() {
-        return filePane.height >= metrics.paneHeader + metrics.headerRow * 2 + metrics.row
-    }
     function startScanAfterDelete(rootPath) {
         const parent = parentPath(rootPath)
         if (!parent.length) return false
@@ -621,8 +636,13 @@ ApplicationWindow {
             dockWorkspace.edge = "left"
             return
         }
+        if (state === "maximized") {
+            window.maximizePane("tables")
+            return
+        }
         if (state === "columns-menu") {
-            columnsMenu.popup(filePaneHeader, filePaneHeader.width - metrics.control, filePaneHeader.height)
+            columnsMenu.panel = "file"
+            columnsMenu.popup(fileRailButton, 0, fileRailButton.height)
             return
         }
         if (state === "file-filter") {
@@ -759,53 +779,38 @@ ApplicationWindow {
         }
     }
 
-    Timer {
-        id: columnsCloseTimer
-        interval: 350
-        repeat: false
-        onTriggered: if (columnsMenu.visible && !columnsHover.hovered) columnsMenu.close()
-    }
-
+    // Each table's own column menu, opened from the rail on that table's
+    // right edge. It stays open until the user picks an entry or clicks
+    // away: a menu that vanishes when the pointer strays is one the user
+    // cannot use. One Menu serves all three tables; `panel` picks whose
+    // columns it lists.
     Menu {
         id: columnsMenu
-        property bool wasHovered: false
-        onOpened: {
-            wasHovered = false
-            columnsCloseTimer.interval = 650
-            columnsCloseTimer.restart()
-        }
-        onClosed: { wasHovered = false; columnsCloseTimer.stop() }
-        HoverHandler {
-            id: columnsHover
-            onHoveredChanged: {
-                if (hovered) {
-                    columnsMenu.wasHovered = true
-                    columnsCloseTimer.stop()
-                } else if (columnsMenu.wasHovered) {
-                    columnsCloseTimer.interval = 350
-                    columnsCloseTimer.restart()
-                }
-            }
+        property string panel: "tree"
+        // One Repeater draws the whole menu: a Repeater's delegates land
+        // after the Menu's own items, which put the reset entry first.
+        readonly property var entries: {
+            if (!panel.length) return []
+            const rows = []
+            for (const column of window.columnSpec(panel).slice(1))
+                if (column.key !== "size") rows.push({ key: column.key, label: column.label })
+            rows.push({ reset: true, label: "─────────" })
+            rows.push({ reset: true, label: "列宽复位" })
+            return rows
         }
         Repeater {
-            model: [
-                { key: "pct", label: "% 父级" },
-                { key: "alloc", label: "已分配" },
-                { key: "items", label: "项目" },
-                { key: "files", label: "文件" },
-                { key: "dirs", label: "文件夹" },
-                { key: "modified", label: "修改时间" },
-                { key: "attributes", label: "属性" }
-            ]
+            model: columnsMenu.entries
             delegate: MenuItem {
+                required property var modelData
                 text: modelData.label
-                checkable: true
-                checked: !window.columnHidden(modelData.key)
-                onTriggered: window.toggleColumn(modelData.key)
+                enabled: !modelData.reset || modelData.label !== "─────────"
+                checkable: !modelData.reset
+                checked: !modelData.reset && !window.columnHidden(columnsMenu.panel, modelData.key)
+                onTriggered: modelData.reset
+                             ? window.resetColumnWidths(columnsMenu.panel)
+                             : window.toggleColumn(columnsMenu.panel, modelData.key)
             }
         }
-        MenuSeparator { }
-        MenuItem { text: "列宽复位"; onTriggered: window.resetColumnWidths() }
     }
 
     Shortcut {
@@ -1023,28 +1028,43 @@ ApplicationWindow {
                     }
                     contentItem: Glyph { iconName: "folder-open"; size: 16; color: theme.text }
                 }
-                Button {
+                ThemedButton {
+                    iconName: "arrow-clockwise"
                     text: (scanService.state === "done" || scanService.state === "cancelled") ? "重新扫描" : "扫描"
-                    Layout.minimumWidth: 72
+                    Layout.minimumWidth: 88
                     enabled: pathField.text.trim().length > 0 && scanService.state !== "scanning"
                     onClicked: scanService.start(pathField.text.trim())
                 }
-                Button {
+                ThemedButton {
+                    iconName: scanService.paused ? "play" : "pause"
                     text: scanService.paused ? "继续" : "暂停"
-                    Layout.minimumWidth: 60
+                    Layout.minimumWidth: 68
                     visible: scanService.state === "scanning"
                     enabled: scanService.state === "scanning"
                     onClicked: scanService.paused ? scanService.resume() : scanService.pause()
                 }
-                Button { text: "取消"; Layout.minimumWidth: 60; visible: scanService.state === "scanning"; enabled: scanService.state === "scanning"; onClicked: scanService.cancel() }
-                Button {
+                ThemedButton {
+                    iconName: "x"
+                    text: "取消"
+                    Layout.minimumWidth: 68
+                    visible: scanService.state === "scanning"
+                    enabled: scanService.state === "scanning"
+                    onClicked: scanService.cancel()
+                }
+                ThemedButton {
+                    iconName: "warning"
                     text: "扫描问题"
-                    Layout.minimumWidth: 76
+                    Layout.minimumWidth: 88
                     visible: scanService.skippedDirs > 0 || scanService.skippedLinks > 0
                           || scanService.unknownSizes > 0 || scanService.fallbackReason.length > 0
                     onClicked: issuesDialog.open()
                 }
-                Button { text: "扫描设置"; Layout.minimumWidth: 76; onClicked: settingsDialog.open() }
+                ThemedButton {
+                    iconName: "gear"
+                    text: "扫描设置"
+                    Layout.minimumWidth: 88
+                    onClicked: settingsDialog.open()
+                }
                 Item { Layout.fillWidth: true }
                 BusyIndicator { running: scanService.state === "scanning"; visible: running; implicitWidth: metrics.icon; implicitHeight: metrics.icon }
                 ToolButton {
@@ -1163,14 +1183,48 @@ ApplicationWindow {
                         id: treePaneHeader
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                         title: "树视图"; iconName: "tree-structure"
-                        showTitle: window.chartLayout !== "dock"
+                        chrome: window.chartLayout !== "dock"
                         maximized: window.maximizedPane === "tables"
                         collapsed: window.treeCollapsed
                         onMaximizeRequested: window.maximizePane("tables")
                         onCollapseRequested: window.treeCollapsed = !window.treeCollapsed
                     }
+                    // The table's rail: that table's own column button, at the
+                    // top of a strip along the right edge. It never covers the
+                    // scrollbar, which lives inside the list, left of it.
+                    Rectangle {
+                        id: treeRail
+                        anchors.right: parent.right
+                        anchors.top: treePaneHeader.bottom
+                        anchors.bottom: parent.bottom
+                        width: window.railWidth
+                        visible: !window.treeCollapsed
+                        color: theme.surfaceAlt
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: 1
+                            color: theme.border
+                        }
+                        ToolButton {
+                            id: treeRailButton
+                            objectName: "columnsButton:tree"
+                            anchors.top: parent.top
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: window.railWidth
+                            height: metrics.headerRow
+                            ToolTip.visible: hovered
+                            ToolTip.text: "显示或隐藏列"
+                            onClicked: {
+                                columnsMenu.panel = "tree"
+                                columnsMenu.popup(treeRailButton, 0, treeRailButton.height)
+                            }
+                            contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
+                        }
+                    }
                     ColumnLayout {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        anchors.left: parent.left; anchors.right: treeRail.left; anchors.bottom: parent.bottom
                         anchors.top: treePaneHeader.bottom
                         spacing: 0
                         visible: !window.treeCollapsed
@@ -1474,41 +1528,46 @@ ApplicationWindow {
                     Item {
                         id: filePane
                         SplitView.fillHeight: true
-                        SplitView.minimumHeight: window.fileCollapsed ? metrics.paneHeader : metrics.paneHeader + metrics.headerRow * 2 + metrics.row
-                        SplitView.preferredHeight: window.fileCollapsed ? metrics.paneHeader : -1
-                        PaneHeader {
+                        SplitView.minimumHeight: metrics.paneHeader + metrics.headerRow * 2 + metrics.row
+                        SplitView.preferredHeight: -1
+
+                        // One bar for the file table: its name, the filter
+                        // and the three ways the listing reads. Dock mode
+                        // drops the name — its tab carries it. There is no
+                        // fold or maximize button here: the bar is the pane.
+                        Rectangle {
                             id: filePaneHeader
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                            title: "文件视图"; iconName: "rows"
-                            showTitle: window.chartLayout !== "dock"
-                            maximized: window.maximizedPane === "tables"
-                            collapsed: window.fileCollapsed
-                            showFilter: true
-                            showColumnsButton: true
-                            onMaximizeRequested: window.maximizePane("tables")
-                            onCollapseRequested: window.fileCollapsed = !window.fileCollapsed
-                            onColumnsRequested: function(anchor) { columnsMenu.popup(anchor, 0, anchor.height) }
-                        }
-                        ColumnLayout {
-                            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                            anchors.top: filePaneHeader.bottom
-                            spacing: 0
-                            visible: !window.fileCollapsed
-                            Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: metrics.headerRow
-                            Layout.minimumHeight: metrics.headerRow
-                            visible: window.fileToolbarFits()
+                            height: metrics.paneHeader
                             color: theme.surfaceAlt
                             border.color: theme.border
+                            property alias filterField: filterInput
                             RowLayout {
-                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 4
+                                anchors.fill: parent
+                                anchors.leftMargin: metrics.pad / 2
+                                anchors.rightMargin: metrics.pad / 2
+                                spacing: 4
                                 Label {
+                                    visible: window.chartLayout !== "dock"
+                                    text: "文件视图"
+                                    color: theme.text
+                                    font.pixelSize: metrics.caption
+                                    font.weight: Font.DemiBold
+                                }
+                                TextField {
+                                    id: filterInput
+                                    objectName: "filterField"
+                                    Layout.preferredWidth: 180
                                     Layout.fillWidth: true
-                                    elide: Text.ElideRight
-                                    text: "文件列表" + (fileListModel.wholeTree ? " · 整个扫描"
-                                            : fileListModel.recursive ? " · 含子目录" : "")
-                                    font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
+                                    Layout.minimumWidth: 64
+                                    Layout.maximumWidth: 220
+                                    implicitHeight: Math.max(20, metrics.paneHeader - 6)
+                                    topPadding: 2
+                                    bottomPadding: 2
+                                    font.pixelSize: metrics.small
+                                    placeholderText: "筛选名称或文件…"
+                                    selectByMouse: true
+                                    onTextEdited: fileListModel.filter = text
                                 }
                                 // Where the files come from: the folder the
                                 // chart is on, or the whole scan.
@@ -1564,6 +1623,41 @@ ApplicationWindow {
                                 }
                             }
                         }
+                        // The file table's own rail with its own column menu.
+                        Rectangle {
+                            id: fileRail
+                            anchors.right: parent.right
+                            anchors.top: filePaneHeader.bottom
+                            anchors.bottom: parent.bottom
+                            width: window.railWidth
+                            color: theme.surfaceAlt
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: 1
+                                color: theme.border
+                            }
+                            ToolButton {
+                                id: fileRailButton
+                                objectName: "columnsButton:file"
+                                anchors.top: parent.top
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: window.railWidth
+                                height: metrics.headerRow
+                                ToolTip.visible: hovered
+                                ToolTip.text: "显示或隐藏列"
+                                onClicked: {
+                                    columnsMenu.panel = "file"
+                                    columnsMenu.popup(fileRailButton, 0, fileRailButton.height)
+                                }
+                                contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
+                            }
+                        }
+                        ColumnLayout {
+                            anchors.left: parent.left; anchors.right: fileRail.left; anchors.bottom: parent.bottom
+                            anchors.top: filePaneHeader.bottom
+                            spacing: 0
                         // Column headers, with the same drag strips as the
                         // tree table; widths live in fileColumns.
                         Flickable {
@@ -1787,14 +1881,46 @@ ApplicationWindow {
                         id: legendPaneHeader
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                         title: "扩展名视图"; iconName: "tag"
-                        showTitle: window.chartLayout !== "dock"
+                        chrome: window.chartLayout !== "dock"
                         maximized: window.maximizedPane === "tables"
                         collapsed: window.legendCollapsed
                         onMaximizeRequested: window.maximizePane("tables")
                         onCollapseRequested: window.legendCollapsed = !window.legendCollapsed
                     }
+                    // The extension table's own rail and column menu.
+                    Rectangle {
+                        id: legendRail
+                        anchors.right: parent.right
+                        anchors.top: legendPaneHeader.bottom
+                        anchors.bottom: parent.bottom
+                        width: window.railWidth
+                        visible: !window.legendCollapsed
+                        color: theme.surfaceAlt
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: 1
+                            color: theme.border
+                        }
+                        ToolButton {
+                            id: legendRailButton
+                            objectName: "columnsButton:legend"
+                            anchors.top: parent.top
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: window.railWidth
+                            height: metrics.headerRow
+                            ToolTip.visible: hovered
+                            ToolTip.text: "显示或隐藏列"
+                            onClicked: {
+                                columnsMenu.panel = "legend"
+                                columnsMenu.popup(legendRailButton, 0, legendRailButton.height)
+                            }
+                            contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
+                        }
+                    }
                     ColumnLayout {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        anchors.left: parent.left; anchors.right: legendRail.left; anchors.bottom: parent.bottom
                         anchors.top: legendPaneHeader.bottom
                         spacing: 0
                         visible: !window.legendCollapsed
@@ -1995,7 +2121,7 @@ ApplicationWindow {
                 PaneHeader {
                     Layout.fillWidth: true
                     title: "可视化视图"; iconName: window.chartKind === 0 ? "squares-four" : "chart-donut"
-                    showTitle: window.chartLayout !== "dock"
+                    chrome: window.chartLayout !== "dock"
                     maximized: window.maximizedPane === "chart"
                     collapsed: window.chartCollapsed
                     onMaximizeRequested: window.maximizePane("chart")
@@ -2238,7 +2364,10 @@ ApplicationWindow {
                             height: tip.implicitHeight + metrics.pad
                             x: Math.max(8, Math.min(parent.width - width - 8, chart.hoverPosition.x + 16))
                             y: Math.max(8, Math.min(parent.height - height - 8, chart.hoverPosition.y + 18))
-                            color: theme.hoverRow; border.color: theme.border; radius: metrics.cardRadius
+                            // The card is never see-through: a translucent
+                            // card over busy tiles cannot be read. Blur would
+                            // do, opacity does not.
+                            color: theme.solidSurface; border.color: theme.border; radius: metrics.cardRadius
                             Column {
                                 id: tip
                                 anchors.fill: parent; anchors.margins: metrics.pad / 2; spacing: 3
@@ -2286,7 +2415,10 @@ ApplicationWindow {
                 visible: window.maximizedPane !== ""
                 Rectangle {
                     anchors.fill: parent
-                    color: theme.window
+                    // Opaque on purpose: on Mica the window colour is the
+                    // see-through material, and a maximized pane with the
+                    // panes behind it showing through cannot be read.
+                    color: theme.solidSurface
                     border.color: theme.border
                 }
                 Item { id: fullscreenSlot; anchors.fill: parent }

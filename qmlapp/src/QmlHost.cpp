@@ -1316,6 +1316,7 @@ bool QmlHost::saveScreenshot(const QString& path)
             || state == QLatin1String("drives") || state == QLatin1String("resized-columns")
             || state == QLatin1String("address-focus") || state == QLatin1String("dock-tabs")
             || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")
+            || state == QLatin1String("maximized")
             || state == QLatin1String("file-filter") || state == QLatin1String("extension-highlight")
             || state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")) {
             QQmlExpression prepare(m_engine.rootContext(), window,
