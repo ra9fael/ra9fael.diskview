@@ -12,6 +12,26 @@ int main(int argc, char** argv) {
     };
     DockState state;
     check(DockState::valid(state.layout()), "default contains four unique panes");
+    const auto defaultLayout = state.layout();
+    const auto topTabs = defaultLayout.value("first").toMap();
+    check(topTabs.value("type") == "tabs", "default top group is tabbed");
+    const QStringList topPaneIds = topTabs.value("panes").toStringList();
+    check(topPaneIds == QStringList{"tree", "files", "legend"},
+          "default top tabs are tree, files and extensions");
+    const auto bottomTabs = defaultLayout.value("second").toMap();
+    check(bottomTabs.value("active") == "chart",
+          "default visualization is below the list dock");
+    const auto placements = state.placements(900, 600);
+    bool topGroupAtTop = false;
+    bool chartAtBottom = false;
+    for (const auto& value : placements) {
+        const auto placement = value.toMap();
+        if (placement.value("type") != "tabs") continue;
+        const auto ids = placement.value("panes").toStringList();
+        if (ids == topPaneIds) topGroupAtTop = placement.value("y").toDouble() == 0;
+        if (ids == QStringList{"chart"}) chartAtBottom = placement.value("y").toDouble() > 0;
+    }
+    check(topGroupAtTop && chartAtBottom, "default placements put list tabs above visualization");
     for (const QString pane : {"tree", "files", "chart", "legend"}) {
         for (const QString target : {"tree", "files", "chart", "legend"}) {
             if (pane == target) continue;
@@ -29,10 +49,12 @@ int main(int argc, char** argv) {
     check(grouped.movePane("files", "tree", "center"), "merge files into tree tabs");
     check(grouped.movePane("chart", "tree", "center"), "merge chart into tree tabs");
     check(grouped.movePane("legend", "tree", "center"), "merge legend into tree tabs");
-    check(grouped.movePane("legend", "legend", "left"), "split active tab from all-in-one group");
+    check(grouped.movePane("legend", "tree", "left"), "split an extension tab from the list group");
     check(DockState::valid(grouped.layout()), "split tab layout remains valid");
     DockState single;
-    check(!single.movePane("tree", "tree", "left"), "reject self drop from single-pane group");
+    check(!single.movePane("tree", "tree", "left"), "reject self drop without another target");
+    check(single.movePane("files", "tree", "center"), "group a second pane before self drop");
+    check(!single.movePane("tree", "tree", "left"), "reject self drop of an active tab");
     DockState restored;
     restored.setLayout(QJsonDocument::fromJson(QJsonDocument::fromVariant(saved).toJson()).object().toVariantMap());
     check(restored.layout() == saved, "JSON round trip");

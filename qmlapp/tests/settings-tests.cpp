@@ -63,6 +63,7 @@ void testDefaults()
     check(settings.fileRowHeight() == 28, "a fresh settings object uses the compact file row height");
     check(settings.headerRowHeight() == 26, "a fresh settings object uses the compact header row height");
     check(settings.appearanceMode() == 0, "a fresh settings object follows the host theme");
+    check(settings.chartLayout() == QStringLiteral("dock"), "a fresh workspace uses the default Dock layout");
     check(settings.excludedPaths().isEmpty(), "a fresh settings object excludes nothing");
 }
 
@@ -149,6 +150,7 @@ void testRoundTrip()
     saved.setFuzzyMatch(true);
     saved.setWholeTree(true);
     saved.setChartDepth(4);
+    saved.setChartLayout(QStringLiteral("tablesLeft"));
     saved.setFontSize(14);
     saved.setTreeRowHeight(27);
     saved.setFileRowHeight(31);
@@ -169,6 +171,7 @@ void testRoundTrip()
     check(back.fuzzyMatch(), "the fuzzy mode survives the round trip");
     check(back.wholeTree(), "the whole-tree scope survives the round trip");
     check(back.chartDepth() == 4, "the chart depth survives the round trip");
+    check(back.chartLayout() == QStringLiteral("dock"), "legacy layout settings migrate to Dock");
     check(back.fontSize() == 14, "the font size survives the round trip");
     check(back.treeRowHeight() == 27, "the tree row height survives the round trip");
     check(back.fileRowHeight() == 31, "the file row height survives the round trip");

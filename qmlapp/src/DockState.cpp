@@ -130,8 +130,10 @@ void place(const QVariantMap& node, double x, double y, double w, double h,
 
 DockState::DockState(QObject* parent) : QObject(parent), m_layout(defaultLayout()) {}
 QVariantMap DockState::defaultLayout() {
-    return split(split(tabs("tree"), tabs("files"), "vertical", .62),
-                 split(tabs("chart"), tabs("legend"), "vertical", .68), "horizontal", .46);
+    const QVariantMap listTabs{{"type", "tabs"},
+                               {"panes", QVariantList{"tree", "files", "legend"}},
+                               {"active", "tree"}};
+    return split(listTabs, tabs("chart"), "vertical", .34);
 }
 bool DockState::valid(const QVariantMap& value) {
     QSet<QString> seen;
@@ -148,21 +150,7 @@ bool DockState::movePane(const QString& pane, const QString& target, const QStri
         || !QStringList{"left", "right", "top", "bottom", "center"}.contains(edge)) return false;
     QString anchor = target;
     if (pane == target) {
-        bool groupFound = false;
-        std::function<QString(const QVariantMap&)> sibling = [&](const QVariantMap& node) -> QString {
-            if (node.value("type") == "tabs") {
-                const auto ids = node.value("panes").toStringList();
-                if (ids.contains(pane)) {
-                    groupFound = true;
-                    for (const QString& id : ids) if (id != pane) return id;
-                }
-                return {};
-            }
-            QString found = sibling(node.value("first").toMap());
-            return groupFound ? found : sibling(node.value("second").toMap());
-        };
-        anchor = sibling(m_layout);
-        if (!groupFound || anchor.isEmpty()) return false;
+        return false;
     }
     auto next = remove(m_layout, pane);
     bool found = false;

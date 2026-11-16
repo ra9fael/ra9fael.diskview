@@ -64,14 +64,19 @@ ApplicationWindow {
         // ... and so does the chart: how many levels of blocks it draws.
         diskModel.chartDepth = scanSettings.chartDepth
         chart.depth = scanSettings.chartDepth
-        window.chartLayout = scanSettings.chartLayout
-        try { dockState.layout = JSON.parse(scanSettings.dockLayout) } catch (e) {}
+        // New windows use the dock workspace. Keep a user's saved dock tree,
+        // but replace the former split preset tree with the new default.
+        window.chartLayout = "dock"
+        try {
+            const savedDock = JSON.parse(scanSettings.dockLayout)
+            if (DockState.valid(savedDock)) dockState.layout = savedDock
+        } catch (e) {}
+        scanSettings.chartLayout = "dock"
         // The column widths the user dragged last time, then the stores may
         // persist again.
         window.loadColumnWidths()
         window.columnsLoaded = true
-        verticalSplit.applyLayoutOrder()
-        if (window.chartLayout === "dock") Qt.callLater(dockWorkspace.refresh)
+        Qt.callLater(function() { window.attachDockPanes(); dockWorkspace.refresh() })
     }
 
     // ---- table columns ------------------------------------------------------
@@ -355,42 +360,37 @@ ApplicationWindow {
     property int chartKind: diskViewMode
     // Address-bar suggestions from WinShun's own index (the ws CLI).
     property var pathSuggestions: []
-    // The two panels' arrangement: "tablesTop" (default), "tablesBottom",
-    // "tablesLeft" or "tablesRight". The tables keep their tree|legend split,
-    // turned to match (side by side above/below, stacked left/right).
-    property string chartLayout: "tablesTop"
-    // "" or the pane that fills the window ("tables" / "chart").
+    // The default workspace docks all list panes above the visualization.
+    property string chartLayout: "dock"
+    // Empty or a pane id that fills the workspace.
     property string maximizedPane: ""
     property bool treeCollapsed: false
     property bool fileCollapsed: false
     property bool legendCollapsed: false
     property bool chartCollapsed: false
     property var dockPanes: ({tree: treePane, files: filePane, legend: legendPane, chart: chartPane})
-    function detachForDock() {
-        for (const pair of [[topSplit, treePane], [tablesInnerSplit, filePane],
-                            [tablesInnerSplit, legendPane], [verticalSplit, chartPane]]) {
-            for (let i = pair[0].count - 1; i >= 0; --i) {
-                if (pair[0].itemAt(i) === pair[1]) pair[0].takeItem(i)
-            }
-        }
+    // A maximized pane is anchored to the fullscreen slot; the workspace puts
+    // it back into its tab group on the way out.
+    function attachDockPanes() {
+        for (const pane of [treePane, filePane, legendPane, chartPane]) pane.anchors.fill = null
+        dockWorkspace.refresh()
     }
     // Invoked by the standalone interaction checks. These are the very same
     // state operations as the drag/drop and divider handlers use.
     function verifyDock() {
         const saved = dockState.layout
-        const oldLayout = chartLayout
         const ok = function() {
             return chartPane.parent !== null && chartPane.width > 0 && chartPane.height > 0
         }
         chartLayout = "dock"
-        detachForDock()
+        attachDockPanes()
         dockWorkspace.refresh()
         let passed = ok()
         dockState.reset()
         passed = dockState.movePane("files", "tree", "center") && passed
         passed = dockState.movePane("chart", "tree", "center") && passed
         passed = dockState.movePane("legend", "tree", "center") && passed
-        passed = dockState.movePane("legend", "legend", "left") && passed
+        passed = dockState.movePane("legend", "tree", "left") && passed
         let tabGroups = 0
         for (const placement of dockState.placements(900, 600))
             if (placement.type === "tabs") tabGroups += 1
@@ -401,6 +401,19 @@ ApplicationWindow {
         passed = filePane.visible && !treePane.visible && passed
         passed = dockState.movePane("files", "chart", "bottom") && passed
         passed = dockState.setRatio("", .55) && passed
+        dockState.reset()
+        let defaultTreeGroup = null
+        let defaultChartGroup = null
+        for (const placement of dockState.placements(900, 600)) {
+            if (placement.type !== "tabs") continue
+            const ids = placement.panes || []
+            if (["tree", "files", "legend"].every(id => ids.indexOf(id) >= 0)
+                && ids.indexOf("chart") < 0) defaultTreeGroup = placement
+            if (ids.indexOf("chart") >= 0) defaultChartGroup = placement
+        }
+        passed = !!defaultTreeGroup && !!defaultChartGroup
+                   && defaultTreeGroup.panes.length === 3
+                   && defaultTreeGroup.y < defaultChartGroup.y && passed
         for (const id of ["tree", "files", "legend", "chart"]) {
             maximizePane(id)
             passed = dockPanes[id].parent === fullscreenSlot && passed
@@ -408,51 +421,23 @@ ApplicationWindow {
             passed = dockPanes[id].parent !== fullscreenSlot && passed
         }
         dockState.layout = saved
-        chartLayout = oldLayout
-        if (oldLayout !== "dock") { restorePresetParents(); verticalSplit.applyLayoutOrder() }
-        else dockWorkspace.refresh()
+        chartLayout = "dock"
+        attachDockPanes()
+        dockWorkspace.refresh()
         return passed
     }
     function flushDockLayout() {
         scanSettings.dockLayout = JSON.stringify(dockState.layout)
         return scanSettings.save()
     }
-    function restorePresetParents() {
-        for (const id of ["tree", "files", "legend", "chart"]) {
-            const pane = dockPanes[id]
-            pane.anchors.fill = null
-            pane.visible = true
-            pane.parent = null
-            if (id === "tree") topSplit.insertItem(0, pane)
-            else if (id === "files") tablesInnerSplit.insertItem(0, pane)
-            else if (id === "legend") tablesInnerSplit.addItem(pane)
-            else verticalSplit.addItem(pane)
-        }
-    }
-    function layoutVertical() { return chartLayout === "tablesTop" || chartLayout === "tablesBottom" }
-    function layoutTablesFirst() { return chartLayout === "tablesTop" || chartLayout === "tablesLeft" }
     // Fullscreen: the named group is lifted into a layer of its own, over the
     // split, so no other panel can cover it. The pane is reparented into the
     // layer (it can only have one parent) and put back where the layout wants
     // it on the way out. "tables" is the whole tree|files|legend split, so a
     // table fullscreen is one move, not three.
     function maximizePane(group) {
-        if (chartLayout === "dock") {
-            if (group === "tables") group = "tree"
-            const old = dockPanes[maximizedPane]
-            if (old) old.anchors.fill = null
-            maximizedPane = maximizedPane === group ? "" : group
-            dockWorkspace.refresh()
-            const pane = dockPanes[maximizedPane]
-            if (pane) {
-                pane.parent = fullscreenSlot
-                pane.visible = true
-                pane.anchors.fill = fullscreenSlot
-            }
-            return
-        }
-        const current = maximizedPane === "chart" ? chartPane : maximizedPane === "tables" ? topSplit : null
-        const target = group === "chart" ? chartPane : group === "tables" ? topSplit : null
+        const current = dockPanes[maximizedPane]
+        const target = dockPanes[group]
         // The same group again: back to the split.
         if (maximizedPane === group) {
             maximizedPane = ""
@@ -463,8 +448,6 @@ ApplicationWindow {
         if (current && current !== target) {
             current.anchors.fill = null
             current.parent = null
-            verticalSplit.addItem(current)
-            verticalSplit.applyLayoutOrder()
         }
         if (!target) {
             maximizedPane = ""
@@ -478,15 +461,13 @@ ApplicationWindow {
     // Put the maximized pane back into the split, in the order the layout
     // asks for, and let the layout set the size budgets again.
     function restorePanes() {
-        if (chartLayout === "dock") { dockWorkspace.refresh(); return }
-        for (const pane of [topSplit, chartPane]) {
+        for (const pane of [treePane, filePane, legendPane, chartPane]) {
             if (pane.parent === fullscreenSlot) {
                 pane.anchors.fill = null
                 pane.parent = null
-                verticalSplit.addItem(pane)
             }
         }
-        verticalSplit.applyLayoutOrder()
+        dockWorkspace.refresh()
     }
     // The host's look, through the theme tokens: one object holds every
     // colour, so the window, the chart and the dialogs follow the host's
@@ -623,14 +604,16 @@ ApplicationWindow {
         }
         if (state === "dock-tabs") {
             window.chartLayout = "dock"
-            window.detachForDock()
-            dockState.layout = ({type: "tabs", panes: ["tree", "files", "chart", "legend"], active: "tree"})
+            window.attachDockPanes()
+            dockState.layout = ({type: "split", orientation: "vertical", ratio: .52,
+                                 first: ({type: "tabs", panes: ["tree", "files", "legend"], active: "tree"}),
+                                 second: ({type: "tabs", panes: ["chart"], active: "chart"})})
             Qt.callLater(dockWorkspace.refresh)
             return
         }
         if (state === "dock-compass") {
             window.chartLayout = "dock"
-            window.detachForDock()
+            window.attachDockPanes()
             dockState.reset()
             dockWorkspace.refresh()
             dockWorkspace.dragged = "chart"
@@ -644,7 +627,7 @@ ApplicationWindow {
         }
         if (state === "dock-maximized") {
             window.chartLayout = "dock"
-            window.detachForDock()
+            window.attachDockPanes()
             dockState.reset()
             dockWorkspace.refresh()
             window.maximizePane("tree")
@@ -853,8 +836,15 @@ ApplicationWindow {
         const opened = columnsMenu.visible && columnsMenu.panel === "tree"
         toggleColumnsMenu("tree", treeRailButton)
         const closed = !columnsMenu.visible
-        toggleColumnsMenu("file", fileRailButton)
-        const switched = columnsMenu.visible && columnsMenu.panel === "file"
+        // In the dock layout each table's column button belongs to that table,
+        // and the other table's rail exists only while its tab is shown, so the
+        // cross-panel switch is checked on whichever rail is actually there.
+        const otherPanel = fileRailButton.visible ? "file" : (legendRailButton.visible ? "legend" : "")
+        let switched = true
+        if (otherPanel.length) {
+            toggleColumnsMenu(otherPanel, otherPanel === "file" ? fileRailButton : legendRailButton)
+            switched = columnsMenu.visible && columnsMenu.panel === otherPanel
+        }
         columnsMenu.close()
         const settled = !columnsMenu.visible
         return opened && closed && switched && settled ? "" : "opened=" + opened + " closed=" + closed + " switched=" + switched
@@ -1089,6 +1079,12 @@ ApplicationWindow {
                     }
                     contentItem: Glyph { iconName: "folder-open"; size: 16; color: theme.text }
                 }
+                // Group divider: where to scan | what to do with the scan.
+                Rectangle {
+                    Layout.preferredWidth: 1; Layout.preferredHeight: 18
+                    Layout.alignment: Qt.AlignVCenter
+                    color: theme.border
+                }
                 ThemedButton {
                     iconName: "arrow-clockwise"
                     text: (scanService.state === "done" || scanService.state === "cancelled") ? "重新扫描" : "扫描"
@@ -1134,106 +1130,37 @@ ApplicationWindow {
                     Layout.minimumWidth: 88
                     onClicked: themeDialog.open()
                 }
+                // Group divider: appearance | layout.
+                Rectangle {
+                    Layout.preferredWidth: 1; Layout.preferredHeight: 18
+                    Layout.alignment: Qt.AlignVCenter
+                    color: theme.border
+                }
+                Label { text: "布局"; font.pixelSize: metrics.small; color: theme.textMuted }
+                ThemedButton {
+                    iconName: "layout"
+                    text: "自由 Dock"
+                    Layout.minimumWidth: 96
+                    ToolTip.visible: hovered
+                    ToolTip.text: "列表在上、图表在下；点击恢复默认 Dock 布局"
+                    onClicked: dockState.reset()
+                }
             }
         }
 
-        // ---- tables and the chart, in the order the user picked ----------
-        // A plain Item is the dock workspace: the split fills it, and the
-        // fullscreen layer draws over the split when a pane is maximized, so
-        // a maximized panel is never covered by another one.
+        // ---- dock workspace and fullscreen layer ------------------------
+        // Each stable pane moves between the dock tree and fullscreen layer
+        // without resetting its model, selection, or scroll position.
         Item {
+            id: workspaceHost
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-
-        SplitView {
-            id: verticalSplit
-            visible: window.chartLayout !== "dock"
-            orientation: Qt.Vertical
-            anchors.fill: parent
-            handle: Rectangle { implicitHeight: 5; color: theme.handleFill; border.color: theme.border }
-
-            // A SplitView's pane order is the order its children were added in.
-            // Both panes are real items with stable ids; applyLayoutOrder() puts
-            // them back in the chosen order and orientation, which is the whole
-            // layout switch.
-            function applyLayoutOrder() {
-                if (window.chartLayout === "dock") {
-                    window.detachForDock()
-                    Qt.callLater(dockWorkspace.refresh)
-                    return
-                }
-                const vertical = window.layoutVertical()
-                // The outer split turns with the layout; the tables' inner one
-                // carries the three panels.
-                const first = window.layoutTablesFirst() ? topSplit : chartPane
-                const second = window.layoutTablesFirst() ? chartPane : topSplit
-                verticalSplit.orientation = vertical ? Qt.Vertical : Qt.Horizontal
-                for (const pane of [first, second]) {
-                    pane.parent = null
-                    verticalSplit.addItem(pane)
-                }
-                // A pane in a vertical split needs a height budget, in a
-                // horizontal one a width budget; anything else collapses it.
-                if (vertical) {
-                    // tables above/below the chart: the tree | the files over
-                    // the legend
-                    topSplit.orientation = Qt.Horizontal
-                    topSplit.SplitView.preferredHeight = 320
-                    topSplit.SplitView.preferredWidth = -1
-                    treePane.SplitView.fillWidth = true
-                    treePane.SplitView.preferredWidth = -1
-                    treePane.SplitView.minimumWidth = 430
-                    treePane.SplitView.minimumHeight = -1
-                    tablesInnerSplit.SplitView.fillWidth = false
-                    tablesInnerSplit.SplitView.preferredWidth = 380
-                    tablesInnerSplit.SplitView.minimumWidth = 280
-                    tablesInnerSplit.orientation = Qt.Vertical
-                    filePane.SplitView.fillHeight = true
-                    filePane.SplitView.preferredHeight = -1
-                    filePane.SplitView.minimumHeight = metrics.paneHeader + metrics.headerRow * 2 + metrics.row
-                    filePane.SplitView.minimumWidth = -1
-                    legendPane.SplitView.fillHeight = false
-                    legendPane.SplitView.preferredHeight = 190
-                    legendPane.SplitView.minimumHeight = metrics.paneHeader + metrics.row
-                    legendPane.SplitView.minimumWidth = -1
-                } else {
-                    // tables beside the chart: the three panels side by side
-                    topSplit.orientation = Qt.Vertical
-                    topSplit.SplitView.preferredWidth = 640
-                    topSplit.SplitView.preferredHeight = -1
-                    tablesInnerSplit.orientation = Qt.Horizontal
-                    treePane.SplitView.fillWidth = true
-                    treePane.SplitView.preferredWidth = -1
-                    treePane.SplitView.minimumWidth = 300
-                    treePane.SplitView.minimumHeight = -1
-                    filePane.SplitView.fillHeight = false
-                    filePane.SplitView.preferredHeight = -1
-                    filePane.SplitView.minimumHeight = -1
-                    filePane.SplitView.fillWidth = false
-                    filePane.SplitView.preferredWidth = 300
-                    filePane.SplitView.minimumWidth = 220
-                    legendPane.SplitView.fillWidth = false
-                    legendPane.SplitView.preferredWidth = 280
-                    legendPane.SplitView.minimumWidth = 220
-                    legendPane.SplitView.minimumHeight = -1
-                }
-                // The fullscreen layer holds a maximized pane now; the split
-                // keeps its own children, so nothing is hidden here.
-            }
-
-            // folder table | extension legend — a third panel, the file list,
-            // joins them when the dock layout gives it room. The tree keeps
-            // its own width, the file list opens beside it.
-            SplitView {
-                id: topSplit
-                orientation: Qt.Horizontal
-                SplitView.preferredHeight: 320
-                SplitView.minimumHeight: 110
-                handle: Rectangle { implicitWidth: 5; color: theme.handleFill; border.color: theme.border }
+            Rectangle { anchors.fill: parent; color: theme.solidSurface }
 
                 Item {
                     id: treePane
+                    parent: workspaceHost
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 430
                     SplitView.minimumHeight: window.treeCollapsed ? metrics.paneHeader : -1
@@ -1243,9 +1170,9 @@ ApplicationWindow {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                         title: "树视图"; iconName: "tree-structure"
                         chrome: window.chartLayout !== "dock"
-                        maximized: window.maximizedPane === "tables"
+                        maximized: window.maximizedPane === "tree"
                         collapsed: window.treeCollapsed
-                        onMaximizeRequested: window.maximizePane("tables")
+                        onMaximizeRequested: window.maximizePane("tree")
                         onCollapseRequested: window.treeCollapsed = !window.treeCollapsed
                     }
                     // The table's rail: that table's own column button, at the
@@ -1570,19 +1497,9 @@ ApplicationWindow {
                     }
                 }
 
-                // The three panels: the tree | the files above the legend.
-                // The inner split keeps the files and the legend stacked so a
-                // narrow window still leaves the tree its columns.
-                SplitView {
-                    id: tablesInnerSplit
-                    orientation: Qt.Vertical
-                    SplitView.fillWidth: false
-                    SplitView.preferredWidth: 380
-                    SplitView.minimumWidth: 280
-                    handle: Rectangle { implicitWidth: 5; color: theme.handleFill; border.color: theme.border }
-
-                    Item {
-                        id: filePane
+                Item {
+                    id: filePane
+                    parent: workspaceHost
                         SplitView.fillHeight: true
                         SplitView.minimumHeight: metrics.paneHeader + metrics.headerRow * 2 + metrics.row
                         SplitView.preferredHeight: -1
@@ -1922,10 +1839,10 @@ ApplicationWindow {
                             }
                         }
                     }
-                }
 
                 Item {
                     id: legendPane
+                    parent: workspaceHost
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 250
                     SplitView.minimumHeight: window.legendCollapsed ? metrics.headerRow : -1
@@ -1935,9 +1852,9 @@ ApplicationWindow {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                         title: "扩展名视图"; iconName: "tag"
                         chrome: window.chartLayout !== "dock"
-                        maximized: window.maximizedPane === "tables"
+                        maximized: window.maximizedPane === "legend"
                         collapsed: window.legendCollapsed
-                        onMaximizeRequested: window.maximizePane("tables")
+                        onMaximizeRequested: window.maximizePane("legend")
                         onCollapseRequested: window.legendCollapsed = !window.legendCollapsed
                     }
                     // The extension table's own rail and column menu.
@@ -2155,7 +2072,6 @@ ApplicationWindow {
                         }
                     }
                 }
-                } // tablesInnerSplit
             }
 
             // the chart pane: its toolbar (picture, depth, layout) and the
@@ -2163,6 +2079,7 @@ ApplicationWindow {
             // two panels always describe the same folder.
             ColumnLayout {
                 id: chartPane
+                parent: workspaceHost
                 SplitView.fillHeight: true
                 SplitView.minimumHeight: window.chartCollapsed ? metrics.headerRow : 110
                 SplitView.preferredHeight: window.chartCollapsed ? metrics.headerRow : -1
@@ -2240,10 +2157,6 @@ ApplicationWindow {
                             }
                         }
                         Item { Layout.fillWidth: true }
-                        Label {
-                            text: "当前目录 · " + diskModel.totalText + " · " + diskModel.formatCount(diskModel.nodeItems) + " 项"
-                            color: theme.textMuted; font.pixelSize: metrics.small
-                        }
                     }
                 }
 
@@ -2321,33 +2234,6 @@ ApplicationWindow {
                             diskModel.chartDepth = index
                             scanSettings.chartDepth = index
                             scanSettings.save()
-                        }
-                    }
-                    ToolButton {
-                        visible: window.chartLayout === "dock"
-                        implicitWidth: 28; implicitHeight: 26
-                        ToolTip.visible: hovered
-                        ToolTip.text: "恢复默认 Dock 布局"
-                        onClicked: dockState.reset()
-                        contentItem: Glyph { iconName: "layout"; size: 15; color: theme.text }
-                    }
-                    Label { text: "布局"; font.pixelSize: metrics.small; color: theme.textMuted }
-                    ThemedComboBox {
-                        id: layoutBox
-                        implicitHeight: 26
-                        model: ["表格在上", "图表在上", "表格在左", "图表在左", "自由 Dock"]
-                        currentIndex: Math.max(0, ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight", "dock"].indexOf(window.chartLayout))
-                        ToolTip.visible: hovered
-                        ToolTip.text: "表格与图表怎么排"
-                        onActivated: {
-                            const names = ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight", "dock"]
-                            if (window.maximizedPane) window.maximizePane(window.maximizedPane)
-                            const wasDock = window.chartLayout === "dock"
-                            window.chartLayout = names[index]
-                            if (wasDock && window.chartLayout !== "dock") window.restorePresetParents()
-                            scanSettings.chartLayout = window.chartLayout
-                            scanSettings.save()
-                            verticalSplit.applyLayoutOrder()
                         }
                     }
                 }
@@ -2438,93 +2324,78 @@ ApplicationWindow {
             }
         }
 
-            DockWorkspace {
-                id: dockWorkspace
-                objectName: "diskViewDockWorkspace"
-                anchors.fill: parent
-                visible: window.chartLayout === "dock"
-                panes: window.dockPanes
-                state: dockState
-                fullscreen: window.maximizedPane
-                onMaximizeRequested: function(pane) { window.maximizePane(pane) }
-                onPersisted: {
-                    scanSettings.dockLayout = JSON.stringify(dockState.layout)
-                    dockSave.restart()
-                }
+        DockWorkspace {
+            id: dockWorkspace
+            parent: workspaceHost
+            objectName: "diskViewDockWorkspace"
+            anchors.fill: workspaceHost
+            panes: window.dockPanes
+            state: dockState
+            rowHeight: metrics.row
+            fullscreen: window.maximizedPane
+            onMaximizeRequested: function(pane) { window.maximizePane(pane) }
+            onPersisted: {
+                scanSettings.dockLayout = JSON.stringify(dockState.layout)
+                dockSave.restart()
             }
-            Timer { id: dockSave; interval: 300; onTriggered: scanSettings.save() }
+        }
+        Timer { id: dockSave; interval: 300; onTriggered: scanSettings.save() }
 
-            // The fullscreen layer: the maximized pane lives here, above the
-            // split, so nothing behind it can cover it. It is a layer of its
-            // own rather than a hidden sibling, which is what the old
-            // visibility toggle got wrong.
-            Item {
-                id: fullscreenLayer
+        Item {
+            id: fullscreenLayer
+            parent: workspaceHost
+            anchors.fill: workspaceHost
+            z: 10000
+            visible: window.maximizedPane !== ""
+            Rectangle {
                 anchors.fill: parent
-                z: 10000
-                visible: window.maximizedPane !== ""
+                color: theme.solidSurface
+                border.color: theme.border
+            }
+            Rectangle {
+                id: fullscreenBar
+                objectName: "fullscreenBar"
+                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                height: metrics.paneHeader
+                color: theme.surfaceAlt
                 Rectangle {
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    height: 1
+                    color: theme.border
+                }
+                RowLayout {
                     anchors.fill: parent
-                    // Opaque on purpose: on Mica the window colour is the
-                    // see-through material, and a maximized pane with the
-                    // panes behind it showing through cannot be read.
-                    color: theme.solidSurface
-                    border.color: theme.border
-                }
-                // In dock mode the layer covers the tab bar, and a maximized
-                // pane has no header of its own (chrome: false), so there was
-                // no way back out of the fullscreen. This thin bar names the
-                // pane and carries the restore button; the preset layouts
-                // keep the pane headers, so the bar stays dock-only.
-                Rectangle {
-                    id: fullscreenBar
-                    objectName: "fullscreenBar"
-                    visible: window.chartLayout === "dock"
-                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                    height: metrics.paneHeader
-                    color: theme.surfaceAlt
-                    Rectangle {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-                        height: 1
-                        color: theme.border
+                    anchors.leftMargin: metrics.pad / 2
+                    anchors.rightMargin: metrics.pad / 2
+                    spacing: 4
+                    Glyph { iconName: dockWorkspace.icon(window.maximizedPane); size: metrics.icon; color: theme.accent }
+                    Label {
+                        Layout.fillWidth: true
+                        text: dockWorkspace.title(window.maximizedPane)
+                        color: theme.text
+                        font.pixelSize: metrics.caption
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
                     }
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: metrics.pad / 2
-                        anchors.rightMargin: metrics.pad / 2
-                        spacing: 4
-                        Glyph {
-                            iconName: dockWorkspace.icon(window.maximizedPane)
-                            size: metrics.icon
-                            color: theme.accent
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: dockWorkspace.title(window.maximizedPane)
-                            color: theme.text
-                            font.pixelSize: metrics.caption
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideRight
-                        }
-                        ThemedButton {
-                            objectName: "fullscreenRestoreButton"
-                            compactHeight: Math.max(20, metrics.paneHeader - 6)
-                            font.pixelSize: metrics.small
-                            iconName: "corners-in"
-                            text: "还原"
-                            ToolTip.visible: hovered
-                            ToolTip.text: "还原 (Esc)"
-                            onClicked: window.maximizePane(window.maximizedPane)
-                        }
+                    ThemedButton {
+                        objectName: "fullscreenRestoreButton"
+                        compactHeight: Math.max(20, metrics.paneHeader - 6)
+                        font.pixelSize: metrics.small
+                        iconName: "corners-in"
+                        text: "还原"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "还原 (Esc)"
+                        onClicked: window.maximizePane(window.maximizedPane)
                     }
-                }
-                Item {
-                    id: fullscreenSlot
-                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.top: parent.top
-                    anchors.topMargin: fullscreenBar.visible ? fullscreenBar.height : 0
                 }
             }
-        } // the dock workspace
+            Item {
+                id: fullscreenSlot
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom; anchors.top: parent.top
+                anchors.topMargin: fullscreenBar.height
+            }
+        }
 
         // ---- status bar --------------------------------------------------
         Rectangle {
@@ -2550,10 +2421,14 @@ ApplicationWindow {
                     elide: Text.ElideRight
                 }
                 Label {
+                    text: "当前目录 " + diskModel.totalText + " · " + diskModel.formatCount(diskModel.nodeItems) + " 项"
+                    color: theme.textMuted; font.pixelSize: metrics.small
+                }
+                Label {
                     text: chart.hoverId.length ? (chart.hoveredInfo(chart.hoverId).path || "") : ""
                     color: theme.textMuted; font.pixelSize: metrics.small
                     elide: Text.ElideMiddle
-                    Layout.maximumWidth: parent.width * 0.5
+                    Layout.maximumWidth: parent.width * 0.35
                 }
             }
         }

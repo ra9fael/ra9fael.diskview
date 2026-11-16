@@ -16,7 +16,7 @@ public:
     QVariantMap layout() const { return m_layout; }
     void setLayout(const QVariantMap& value);
     static QVariantMap defaultLayout();
-    static bool valid(const QVariantMap& value);
+    Q_INVOKABLE static bool valid(const QVariantMap& value);
     Q_INVOKABLE void reset();
     Q_INVOKABLE bool movePane(const QString& pane, const QString& target, const QString& edge);
     Q_INVOKABLE bool setRatio(const QString& path, double ratio);

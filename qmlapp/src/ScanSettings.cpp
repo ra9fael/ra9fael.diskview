@@ -208,11 +208,8 @@ void ScanSettings::setChartOnTop(bool onTop)
 
 void ScanSettings::setChartLayout(const QString& layout)
 {
-    static const QStringList known = {QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"),
-                                      QStringLiteral("tablesLeft"), QStringLiteral("tablesRight"), QStringLiteral("dock")};
-    // Anything unknown falls back to the default instead of leaving the window
-    // in a layout it cannot draw.
-    const QString kept = known.contains(layout) ? layout : QStringLiteral("tablesTop");
+    Q_UNUSED(layout);
+    const QString kept = QStringLiteral("dock");
     if (kept == m_chartLayout) {
         return;
     }
@@ -349,8 +346,7 @@ bool ScanSettings::load()
     m_appearanceMode = std::clamp(object.value(QStringLiteral("appearanceMode")).toInt(0), 0, 2);
     m_chartOnTop = object.value(QStringLiteral("chartOnTop")).toBool(false);
     const QString layout = object.value(QStringLiteral("chartLayout")).toString();
-    m_chartLayout = layout.isEmpty() ? (m_chartOnTop ? QStringLiteral("tablesBottom") : QStringLiteral("tablesTop"))
-                                 : (QStringList{QStringLiteral("tablesTop"), QStringLiteral("tablesBottom"), QStringLiteral("tablesLeft"), QStringLiteral("tablesRight"), QStringLiteral("dock")}.contains(layout) ? layout : QStringLiteral("tablesTop"));
+    m_chartLayout = QStringLiteral("dock");
     emit changed();
     return true;
 }

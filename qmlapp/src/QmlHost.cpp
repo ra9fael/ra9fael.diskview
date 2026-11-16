@@ -254,8 +254,7 @@ bool QmlHost::load(QString* error)
                 }
             });
         }
-        // --maximize drives the window's own function, so the fullscreen layer
-        // is exercised the way a press on the toolbar would.
+        // --maximize drives the same pane action as its dock title-bar button.
         if (!m_options.maximizeOnStart.isEmpty()) {
             QQmlExpression expression(m_engine.rootContext(), window,
                                       QStringLiteral("maximizePane(\"%1\")").arg(m_options.maximizeOnStart));
@@ -458,18 +457,21 @@ bool QmlHost::runDockChecks(QString* report)
             QCoreApplication::sendEvent(window, &event);
             QCoreApplication::processEvents();
         };
+        QString dragDetail;
         const auto dragTab = [&](const QString& pane, const QString& target, bool center) {
             const auto before = state->layout();
             auto* source = findVisual(window->contentItem(), QStringLiteral("dock-tab-") + pane);
             auto* destination = findVisual(window->contentItem(), QStringLiteral("dock-group-") + target);
-            if (!source || !destination) return false;
+            if (!source) { dragDetail += pane + ": no tab; "; return false; }
+            if (!destination) { dragDetail += target + ": no group; "; return false; }
             const QPointF start = source->mapToScene(QPointF(source->width() / 2, source->height() / 2));
             auto* workspace = window->findChild<QQuickItem*>(QStringLiteral("diskViewDockWorkspace"));
             if (!workspace) return false;
             QPointF end;
             for (const auto& entry : state->placements(workspace->width(), workspace->height())) {
                 const auto rect = entry.toMap();
-                if (rect.value("type") == "tabs" && rect.value("active") == target) {
+                if (rect.value("type") == "tabs"
+                    && rect.value("panes").toStringList().contains(target)) {
                     end = workspace->mapToScene(QPointF(rect.value("x").toDouble() + rect.value("width").toDouble() * .5,
                         rect.value("y").toDouble() + rect.value("height").toDouble() * (center ? .5 : .9)));
                     break;
@@ -478,11 +480,18 @@ bool QmlHost::runDockChecks(QString* report)
             send(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
             send(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
             send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
-            return state->layout() != before;
+            if (state->layout() == before) {
+                dragDetail += QStringLiteral("%1->%2 tab %3x%4 at (%5,%6), drop (%7,%8) did not move it; ")
+                    .arg(pane, target)
+                    .arg(source->width()).arg(source->height())
+                    .arg(start.x()).arg(start.y()).arg(end.x()).arg(end.y());
+                return false;
+            }
+            return true;
         };
-        if (!dragTab(QStringLiteral("files"), QStringLiteral("tree"), true)
-            || !dragTab(QStringLiteral("files"), QStringLiteral("chart"), false)) {
-            *report = QStringLiteral("FAIL\tdock pointer drag\n");
+        if (!dragTab(QStringLiteral("files"), QStringLiteral("chart"), true)
+            || !dragTab(QStringLiteral("files"), QStringLiteral("tree"), false)) {
+            *report = QStringLiteral("FAIL\tdock pointer drag %1\n").arg(dragDetail);
             state->setLayout(original);
             return false;
         }
@@ -734,8 +743,12 @@ bool QmlHost::runSelfTest(QString* report)
         }
         // This header cell is not a Repeater delegate, so it is part of the
         // regular QObject tree and can be checked by its stable object name.
-        if (auto* legendGrip = root->findChild<QQuickItem*>(QStringLiteral("columnHandle:legend:name")))
-            legendNameGripOk = legendGrip->isVisible() && legendGrip->width() > 0;
+        // In the dock layout the extension table may be behind another tab;
+        // there is no grip to measure then, which is not a failure.
+        if (auto* legendGrip = root->findChild<QQuickItem*>(QStringLiteral("columnHandle:legend:name"))) {
+            legendNameGripOk = !legendGrip->isVisible() || legendGrip->width() > 0;
+            if (!legendGrip->isVisible()) columnDetail = QStringLiteral("legend-not-shown");
+        }
     }
     if (!columnsOk && columnDetail.isEmpty()) columnDetail = QStringLiteral("no-window");
     if (!runDockChecks(report)) return false;
@@ -1510,8 +1523,10 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->holdWindow = true;
         } else if (argument == QStringLiteral("--maximize")) {
             const QString group = value(argument);
-            if (group != QStringLiteral("tables") && group != QStringLiteral("chart")) {
-                *error = QStringLiteral("--maximize takes tables or chart");
+            if (group != QStringLiteral("tables") && group != QStringLiteral("tree")
+                && group != QStringLiteral("files") && group != QStringLiteral("legend")
+                && group != QStringLiteral("chart")) {
+                *error = QStringLiteral("--maximize takes tree, files, legend, chart or tables");
                 return false;
             }
             options->maximizeOnStart = group;
@@ -1546,7 +1561,7 @@ QString QmlHost::usage()
         "  --settings         open the scan settings dialog on startup\n"
         "  --pause            start the scan and hold it there\n"
         "  --hold-window      keep a standalone validation window open after scan\n"
-        "  --maximize <tables|chart>  open with that pane in the fullscreen layer\n"
+        "  --maximize <tree|files|legend|chart|tables>  open with that pane in the fullscreen layer\n"
         "  --bench-chart <n>  build a tree of n nodes and time the chart pipeline\n"
         "  --self-test        run the interaction checks and print the verdict\n"
         "  --fixture-only     use built-in data without enumerating mounted volumes\n"

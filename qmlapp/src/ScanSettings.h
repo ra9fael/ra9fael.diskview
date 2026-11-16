@@ -35,11 +35,10 @@ class ScanSettings : public QObject {
     // native plugin offers the same switch; a deeper chart is what makes a
     // drive readable at a glance.
     Q_PROPERTY(int chartDepth READ chartDepth WRITE setChartDepth NOTIFY changed)
-    // Whether the chart panel sits above the tables (true) or below (false).
+    // Legacy setting retained so older settings files can still be read.
     Q_PROPERTY(bool chartOnTop READ chartOnTop WRITE setChartOnTop NOTIFY changed)
-    // Which side the tables take: "tablesTop" (default), "tablesBottom",
-    // "tablesLeft" or "tablesRight". Replaces the boolean above, which is kept
-    // only so an older settings file still reads.
+    // Legacy preset selector retained for settings compatibility. The QML
+    // workspace now defaults to the persisted Dock layout.
     Q_PROPERTY(QString chartLayout READ chartLayout WRITE setChartLayout NOTIFY changed)
     Q_PROPERTY(QString dockLayout READ dockLayout WRITE setDockLayout NOTIFY changed)
     // The table column widths, one JSON object per table ("tree", "file",
@@ -128,7 +127,7 @@ private:
     bool m_defaultVolumeEnumerationEnabled = true;
     int m_chartDepth = 0; // 0 = auto: the area budget picks the depth
     bool m_chartOnTop = false;
-    QString m_chartLayout = QStringLiteral("tablesTop");
+    QString m_chartLayout = QStringLiteral("dock");
     QString m_dockLayout;
     QString m_columnWidths;
     int m_fontSize = 13;

@@ -3,12 +3,20 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import DiskViewPrototype
 
+pragma ComponentBehavior: Bound
+
 // The existing panes are placed, not instantiated. Moving a tab therefore
 // preserves chart transforms, model selection and list scroll positions.
+//
+// Every tab group gets a body item of its own; the active pane is anchored to
+// that body. Anchoring (rather than assigning x/y/width/height by hand) also
+// survives panes that are themselves layouts.
 Item {
     id: workspace
     required property var panes
     required property var state
+    // The tab strip's height, passed in from the window's metric store.
+    required property int rowHeight
     property string fullscreen: ""
     property var geometry: []
     property string dragged: ""
@@ -16,6 +24,8 @@ Item {
     property string edge: ""
     property point pointer
     property var collapsedGroups: ({})
+    // path -> body item, filled by the body repeater.
+    property var bodies: ({})
     signal maximizeRequested(string pane)
     signal persisted()
 
@@ -35,27 +45,48 @@ Item {
         return id === "tree" ? "tree-structure" : id === "files" ? "rows"
              : id === "chart" ? "chart-donut" : "tag"
     }
+
+    function registerBody(path, body) {
+        const next = Object.assign({}, bodies)
+        next[path] = body
+        bodies = next
+        Qt.callLater(refresh)
+    }
+    function unregisterBody(path) {
+        const next = Object.assign({}, bodies)
+        delete next[path]
+        bodies = next
+    }
+
     function refresh() {
-        if (!visible || !width || !height) return
+        if (!width || !height) return
         geometry = state.placements(width, height)
         for (const id of ["tree", "files", "legend", "chart"]) {
             const pane = panes[id]
-            if (fullscreen === id) continue
-            pane.parent = content
+            if (!pane || fullscreen === id) continue
             pane.visible = false
             pane.clip = true
         }
         for (const slot of geometry) {
             if (slot.type !== "tabs") continue
-            const pane = panes[slot.active]
-            if (fullscreen === slot.active) continue
-            pane.x = slot.x
-            pane.y = slot.y + Metrics.row
-            pane.width = slot.width
-            pane.height = groupCollapsed(slot.active) ? 0 : Math.max(0, slot.height - Metrics.row)
-            pane.visible = !groupCollapsed(slot.active)
+            const body = bodies[slot.path]
+            if (!body) continue
+            const collapsed = groupCollapsed(slot.active)
+            for (const id of slot.panes || []) {
+                const pane = panes[id]
+                if (!pane || fullscreen === id) continue
+                if (id === slot.active && !collapsed) {
+                    if (pane.parent !== body) {
+                        pane.anchors.fill = null
+                        pane.parent = body
+                    }
+                    pane.anchors.fill = body
+                    pane.visible = true
+                }
+            }
         }
     }
+
     function hoverDrop(position) {
         pointer = position
         target = ""
@@ -64,13 +95,10 @@ Item {
             if (slot.type !== "tabs") continue
             if (position.x < slot.x || position.x > slot.x + slot.width
                 || position.y < slot.y || position.y > slot.y + slot.height) continue
-            target = slot.active
             const panesInGroup = slot.panes || []
-            if (target === dragged) {
-                for (const candidate of panesInGroup) {
-                    if (candidate !== dragged) { target = candidate; break }
-                }
-            }
+            target = slot.active === dragged
+                ? (panesInGroup.find(candidate => candidate !== dragged) || dragged)
+                : slot.active
             const x = (position.x - slot.x) / slot.width
             const y = (position.y - slot.y) / slot.height
             if (x > .3 && x < .7 && y > .3 && y < .7) edge = "center"
@@ -81,22 +109,32 @@ Item {
             return
         }
     }
-    onWidthChanged: refresh()
-    onHeightChanged: refresh()
+    onWidthChanged: Qt.callLater(refresh)
+    onHeightChanged: Qt.callLater(refresh)
     onVisibleChanged: if (visible) Qt.callLater(refresh)
     Connections {
         target: workspace.state
         function onChanged() { workspace.refresh(); workspace.persisted() }
     }
 
-    Rectangle {
-        anchors.fill: parent
-        // Opaque on purpose: on Mica the window colour is fully transparent,
-        // and any row a pane stops short of the workspace edge would show
-        // the material (or what sits behind the window) through the gap.
-        color: theme.solidSurface
+    // Each tab group's body: below its tab strip, filling the rest of the slot.
+    Repeater {
+        model: workspace.geometry
+        delegate: Item {
+            id: body
+            required property var modelData
+            objectName: "dock-body-" + modelData.path
+            visible: modelData.type === "tabs"
+            x: modelData.x
+            y: modelData.y + rowHeight
+            width: modelData.width
+            height: Math.max(0, modelData.height - rowHeight)
+            Component.onCompleted: workspace.registerBody(modelData.path, body)
+            Component.onDestruction: workspace.unregisterBody(modelData.path)
+        }
     }
-    Item { id: content; anchors.fill: parent }
+
+    // The tab strips and the split handles.
     Repeater {
         model: workspace.geometry
         delegate: Item {
@@ -106,10 +144,11 @@ Item {
             x: modelData.x
             y: modelData.y
             width: modelData.width
-            height: modelData.type === "tabs" ? Metrics.row : modelData.height
+            height: modelData.type === "tabs" ? rowHeight : modelData.height
             z: 2
             Rectangle {
                 anchors.fill: parent
+                visible: region.modelData.type === "tabs"
                 color: theme.surfaceAlt
                 border.color: theme.border
             }
@@ -171,14 +210,14 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 ToolButton {
-                    implicitWidth: Metrics.row; implicitHeight: Metrics.row
+                    implicitWidth: rowHeight; implicitHeight: rowHeight
                     ToolTip.visible: hovered
                     ToolTip.text: workspace.groupCollapsed(region.modelData.active) ? "展开" : "折叠"
                     onClicked: workspace.toggleGroup(region.modelData.active)
                     contentItem: Glyph { iconName: workspace.groupCollapsed(region.modelData.active) ? "plus" : "minus"; size: 14; color: theme.textMuted }
                 }
                 ToolButton {
-                    implicitWidth: Metrics.row; implicitHeight: Metrics.row
+                    implicitWidth: rowHeight; implicitHeight: rowHeight
                     ToolTip.visible: hovered
                     ToolTip.text: workspace.fullscreen === region.modelData.active ? "还原" : "最大化"
                     onClicked: workspace.maximizeRequested(region.modelData.active)
@@ -200,7 +239,7 @@ Item {
                     resizeLine.x = region.modelData.horizontal ? at.x : region.x
                     resizeLine.y = region.modelData.horizontal ? region.y : at.y
                     resizeLine.width = region.modelData.horizontal ? 3 : region.width
-                    resizeLine.height = region.modelData.horizontal ? region.height : 3
+                    resizeLine.height = region.modelData.horizontal ? 3 : region.height
                 }
                 onReleased: { resizeLine.visible = false; workspace.state.setRatio(region.modelData.path, proposed) }
                 onPressed: proposed = region.modelData.ratio
@@ -213,6 +252,7 @@ Item {
     Repeater {
         model: workspace.dragged && workspace.target ? workspace.geometry : []
         delegate: Item {
+            id: dropPreview
             required property var modelData
             visible: modelData.type === "tabs" && (modelData.panes || []).indexOf(workspace.target) >= 0
             x: modelData.x; y: modelData.y
@@ -238,7 +278,7 @@ Item {
                         required property var modelData
                         x: modelData.x; y: modelData.y; width: 32; height: 32; radius: 3
                         color: workspace.edge === modelData.e ? theme.selection : "transparent"
-                        Glyph { anchors.centerIn: parent; iconName: modelData.i; size: 17; color: theme.accent }
+                        Glyph { anchors.centerIn: parent; iconName: dropPreview.modelData.i; size: 17; color: theme.accent }
                     }
                 }
             }
