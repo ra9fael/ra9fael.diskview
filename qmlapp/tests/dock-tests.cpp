@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
         if (!ok) { std::fprintf(stderr, "FAIL %s\n", name); ++failures; }
     };
     DockState state;
-    check(DockState::valid(state.layout()), "default contains four unique panes");
+    check(state.valid(state.layout()), "default contains four unique panes");
     const auto defaultLayout = state.layout();
     const auto topTabs = defaultLayout.value("first").toMap();
     check(topTabs.value("type") == "tabs", "default top group is tabbed");
@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
             if (pane == target) continue;
             for (const QString edge : {"left", "right", "top", "bottom", "center"}) {
                 check(state.movePane(pane, target, edge), "move accepted");
-                check(DockState::valid(state.layout()), "move preserves every pane exactly once");
+                check(state.valid(state.layout()), "move preserves every pane exactly once");
                 check(state.activate(pane), "activate detached or merged tab");
             }
         }
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     check(grouped.movePane("chart", "tree", "center"), "merge chart into tree tabs");
     check(grouped.movePane("legend", "tree", "center"), "merge legend into tree tabs");
     check(grouped.movePane("legend", "tree", "left"), "split an extension tab from the list group");
-    check(DockState::valid(grouped.layout()), "split tab layout remains valid");
+    check(grouped.valid(grouped.layout()), "split tab layout remains valid");
     DockState single;
     check(!single.movePane("tree", "tree", "left"), "reject self drop without another target");
     check(single.movePane("files", "tree", "center"), "group a second pane before self drop");
@@ -61,6 +61,25 @@ int main(int argc, char** argv) {
     restored.setLayout({{"type", "tabs"}, {"panes", QVariantList{"tree", "tree"}}, {"active", "tree"}});
     check(restored.layout() == saved, "invalid saved layout cannot hide panes");
     state.reset();
+    check(state.valid(state.layout()), "reset returns a valid layout");
+    check(state.preset() == "lists-top", "the default tick is the lists-top preset");
+    for (const QString id : DockState::presetIds()) {
+        DockState byPreset;
+        check(byPreset.applyPreset(id), "preset applies");
+        check(byPreset.valid(byPreset.layout()), "preset is a valid layout");
+        check(byPreset.preset() == id, "preset reads back");
+    }
+    {
+        DockState orientation;
+        const auto side = DockState::presetLayout(QStringLiteral("lists-left"));
+        check(side.value("orientation") == "horizontal", "left preset splits horizontally");
+        const auto top = DockState::presetLayout(QStringLiteral("lists-top"));
+        check(top.value("orientation") == "vertical", "top preset splits vertically");
+        check(!orientation.applyPreset("nope"), "unknown preset is rejected");
+        orientation.reset();
+        check(orientation.movePane("files", "chart", "center"), "manual drag after a preset");
+        check(orientation.preset().isEmpty(), "a dragged layout is custom, not a preset");
+    }
     check(state.setRatio("", .7), "resize root");
     check(state.layout().value("ratio").toDouble() == .7, "ratio stored");
     check(!state.setRatio("000", .5), "reject leaf path");

@@ -109,6 +109,16 @@ int main(int argc, char** argv)
             }
             QTextStream(stdout) << report;
         }
+        if (!options.fileAction.isEmpty()) {
+            // The Windows half of the two file actions, without a pointer:
+            // the same IFileOperation call the dialog makes.
+            QString error;
+            const bool ok = host.runFileActionTest(options.fileAction, options.fileActionPath, &error);
+            QTextStream(stdout) << (ok ? "file-action\t" : "file-action FAILED\t")
+                                << options.fileAction << "\t" << options.fileActionPath
+                                << (ok ? QString() : "\t" + error) << "\n";
+            if (!ok) code = 1;
+        }
         if (!options.screenshotPath.isEmpty() && !host.saveScreenshot(options.screenshotPath)) {
             QTextStream(stderr) << "error: could not save " << options.screenshotPath << "\n";
             code = 1;
@@ -142,7 +152,8 @@ int main(int argc, char** argv)
             // delay instead.
             QTimer::singleShot(options.screenshotDelayMs, &app, runChecks);
         }
-    } else if (options.selfTest || options.benchNodes > 0 || !options.screenshotPath.isEmpty()) {
+    } else if (options.selfTest || options.benchNodes > 0 || !options.screenshotPath.isEmpty()
+               || !options.fileAction.isEmpty()) {
         QTimer::singleShot(options.screenshotDelayMs, &app, runChecks);
     }
     return app.exec();

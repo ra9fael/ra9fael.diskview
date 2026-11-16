@@ -48,8 +48,9 @@ ComboBox {
     Component.onCompleted: measure()
     readonly property real widestText: textMeasure.implicitWidth
     // A popup row's width beyond the box; a delegate with more in a row
-    // raises it.
-    property real popupContentWidth: widestText + 16
+    // raises it. The floor matters: a box squeezed by a narrow toolbar used
+    // to give its menu that same width, and every entry came out as "...".
+    property real popupContentWidth: Math.max(widestText + 20, 80)
 
     implicitWidth: widestText + 9 + indicator.width + 8 + 2
 

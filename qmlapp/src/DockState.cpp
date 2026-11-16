@@ -129,16 +129,43 @@ void place(const QVariantMap& node, double x, double y, double w, double h,
 }
 
 DockState::DockState(QObject* parent) : QObject(parent), m_layout(defaultLayout()) {}
-QVariantMap DockState::defaultLayout() {
+QVariantMap DockState::defaultLayout() { return presetLayout(QStringLiteral("lists-top")); }
+QStringList DockState::presetIds()
+{
+    return {QStringLiteral("lists-top"), QStringLiteral("lists-bottom"),
+            QStringLiteral("lists-left"), QStringLiteral("lists-right")};
+}
+QVariantMap DockState::presetLayout(const QString& id)
+{
     const QVariantMap listTabs{{"type", "tabs"},
                                {"panes", QVariantList{"tree", "files", "legend"}},
                                {"active", "tree"}};
+    if (id == QStringLiteral("lists-bottom"))
+        return split(tabs("chart"), listTabs, "vertical", .66);
+    if (id == QStringLiteral("lists-left"))
+        return split(listTabs, tabs("chart"), "horizontal", .4);
+    if (id == QStringLiteral("lists-right"))
+        return split(tabs("chart"), listTabs, "horizontal", .6);
     return split(listTabs, tabs("chart"), "vertical", .34);
 }
-bool DockState::valid(const QVariantMap& value) {
+bool DockState::valid(const QVariantMap& value) const
+{
     QSet<QString> seen;
     return inspect(value, seen, 0) && seen == panes;
 }
+QString DockState::preset() const
+{
+    for (const QString& id : presetIds())
+        if (presetLayout(id) == m_layout) return id;
+    return {};
+}
+bool DockState::applyPreset(const QString& id)
+{
+    if (!presetIds().contains(id)) return false;
+    setLayout(presetLayout(id));
+    return true;
+}
+
 void DockState::setLayout(const QVariantMap& value) {
     if (!valid(value) || value == m_layout) return;
     m_layout = value;

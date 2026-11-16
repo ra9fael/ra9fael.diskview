@@ -23,6 +23,13 @@ ApplicationWindow {
     property bool acceptingSuggestion: false
     property int suggestionRequestId: 0
     property string notice: ""
+    // A short-lived status line: an operation's result should not become a
+    // label that stays there forever.
+    Timer {
+        interval: 8000
+        running: window.notice.length > 0
+        onTriggered: window.notice = ""
+    }
     property alias filterField: filePaneHeader.filterField
     // The Basic style's controls take their colours from the palette; feeding
     // it the same tokens keeps a TextField, Button and ComboBox from staying
@@ -69,7 +76,7 @@ ApplicationWindow {
         window.chartLayout = "dock"
         try {
             const savedDock = JSON.parse(scanSettings.dockLayout)
-            if (DockState.valid(savedDock)) dockState.layout = savedDock
+            if (dockState.valid(savedDock)) dockState.layout = savedDock
         } catch (e) {}
         scanSettings.chartLayout = "dock"
         // The column widths the user dragged last time, then the stores may
@@ -528,42 +535,98 @@ ApplicationWindow {
         property bool permanent: false
         property string actionPath: ""
         property string actionId: ""
-        property string itemName: ""
         property string sizeText: ""
         property int requestId: 0
         property bool working: false
+        // A failure belongs where the user is looking: the dialog stays open
+        // and says what went wrong instead of closing over a hidden notice.
+        property string error: ""
         title: destructiveDialog.permanent ? "永久删除" : "移至回收站"
         modal: true
         width: 480
         anchors.centerIn: Overlay.overlay
+        closePolicy: Popup.CloseOnEscape
         standardButtons: Dialog.NoButton
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
+        // The height comes from the content: the buttons live inside it, so
+        // they cannot end up under or past the frame.
+        contentItem: ColumnLayout {
+            width: destructiveDialog.availableWidth
             spacing: 10
-            Label { Layout.fillWidth: true; text: destructiveDialog.permanent ? "此操作不可恢复，且不会进入回收站。" : "项目将移入系统回收站，可以还原。"; color: destructiveDialog.permanent ? theme.error : theme.text; font.pixelSize: metrics.caption; font.weight: Font.DemiBold; wrapMode: Text.WordWrap }
-            Label { Layout.fillWidth: true; text: destructiveDialog.actionPath + (destructiveDialog.sizeText.length ? "  ·  " + destructiveDialog.sizeText : ""); color: theme.textMuted; elide: Text.ElideMiddle; font.pixelSize: metrics.small }
-            Label { visible: destructiveDialog.permanent; text: "请输入：" + destructiveDialog.itemName; color: theme.text; font.pixelSize: metrics.caption }
-            TextField { id: confirmation; visible: destructiveDialog.permanent; Layout.fillWidth: true; placeholderText: destructiveDialog.itemName; font.pixelSize: metrics.caption }
-            Label { Layout.fillWidth: true; text: destructiveDialog.permanent ? "永久删除" : "移至回收站"; color: destructiveDialog.permanent ? theme.error : theme.text; font.pixelSize: metrics.small }
+            Label {
+                Layout.fillWidth: true
+                text: destructiveDialog.permanent ? "此操作不可恢复，且不会进入回收站。"
+                                                  : "项目将移入系统回收站，可以还原。"
+                color: destructiveDialog.permanent ? theme.error : theme.text
+                font.pixelSize: metrics.caption
+                font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: destructiveDialog.actionPath
+                      + (destructiveDialog.sizeText.length ? "  ·  " + destructiveDialog.sizeText : "")
+                color: theme.textMuted
+                elide: Text.ElideMiddle
+                font.pixelSize: metrics.small
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: destructiveDialog.error.length > 0
+                text: destructiveDialog.error
+                color: theme.error
+                wrapMode: Text.WordWrap
+                font.pixelSize: metrics.small
+            }
             RowLayout {
                 Layout.fillWidth: true
                 Layout.topMargin: 4
                 spacing: metrics.gap
+                Label {
+                    visible: destructiveDialog.working
+                    text: "正在处理…"
+                    color: theme.textMuted
+                    font.pixelSize: metrics.small
+                }
                 Item { Layout.fillWidth: true }
                 ThemedButton {
+                    objectName: "destructiveCancel"
+                    text: "取消"
+                    enabled: !destructiveDialog.working
+                    onClicked: destructiveDialog.close()
+                }
+                ThemedButton {
+                    objectName: "destructiveConfirm"
                     text: destructiveDialog.permanent ? "永久删除" : "移至回收站"
-                    enabled: !destructiveDialog.working && (!destructiveDialog.permanent || confirmation.text.localeCompare(destructiveDialog.itemName, Qt.CaseInsensitive) === 0)
+                    enabled: !destructiveDialog.working
                     onClicked: {
+                        destructiveDialog.error = ""
                         destructiveDialog.working = true
                         destructiveDialog.requestId += 1
-                        appHost.performFileActionAsync(destructiveDialog.actionPath, destructiveDialog.permanent,
-                                                       confirmation.text, destructiveDialog.actionId, destructiveDialog.requestId)
+                        appHost.performFileActionAsync(destructiveDialog.actionPath,
+                                                       destructiveDialog.permanent,
+                                                       destructiveDialog.actionId,
+                                                       destructiveDialog.requestId)
                     }
                 }
-                ThemedButton { text: "取消"; enabled: !destructiveDialog.working; onClicked: destructiveDialog.close() }
             }
         }
+        onClosed: {
+            destructiveDialog.working = false
+            destructiveDialog.error = ""
+        }
+    }
+
+    // One place to arm the dialog, so both the context menu and the fixture
+    // state reset the previous run's error and spinner.
+    function askDestructive(path, nodeId, permanent) {
+        destructiveDialog.permanent = permanent
+        destructiveDialog.actionPath = path
+        destructiveDialog.actionId = nodeId
+        destructiveDialog.sizeText = nodeId.length ? diskModel.formatSize(diskModel.sizeForNode(nodeId)) : ""
+        destructiveDialog.requestId += 1
+        destructiveDialog.error = ""
+        destructiveDialog.working = false
+        destructiveDialog.open()
     }
 
     function parentPath(path) {
@@ -646,6 +709,10 @@ ApplicationWindow {
             columnsMenu.popup(fileRailButton, 0, fileRailButton.height)
             return
         }
+        if (state === "preset-menu") {
+            window.togglePresetMenu()
+            return
+        }
         if (state === "file-filter") {
             filePaneHeader.filterField.text = "bin"
             filePaneHeader.filterField.forceActiveFocus()
@@ -676,16 +743,14 @@ ApplicationWindow {
         if (state === "context-menu") {
             contextMenu.popup(window.contentItem, Qt.point(100, 100))
         } else if (state === "delete-confirmation") {
-            destructiveDialog.permanent = true
-            destructiveDialog.actionPath = contextMenu.targetPath
-            destructiveDialog.actionId = targetId
-            destructiveDialog.itemName = contextMenu.targetPath.split(/[\\/]/).pop()
-            destructiveDialog.sizeText = diskModel.formatSize(diskModel.sizeForNode(targetId))
-            destructiveDialog.working = true
-            confirmation.text = ""
-            destructiveDialog.open()
-            destructiveDialog.visible = true
-            destructiveDialog.forceActiveFocus()
+            window.askDestructive(contextMenu.targetPath, targetId, true)
+        } else if (state === "recycle-confirmation") {
+            window.askDestructive(contextMenu.targetPath, targetId, false)
+        } else if (state === "recycle-error") {
+            // What a refused recycle looks like: the dialog stays open with
+            // the reason inside its frame, not a notice hidden behind it.
+            window.askDestructive(contextMenu.targetPath, targetId, false)
+            destructiveDialog.error = "该位置无法移入回收站，未删除任何内容。如确认不需要恢复，可改用「永久删除」。"
         }
     }
     function acceptSuggestion(entry) {
@@ -711,6 +776,7 @@ ApplicationWindow {
             if (requestId !== destructiveDialog.requestId || nodeId !== destructiveDialog.actionId) return
             destructiveDialog.working = false
             if (!result.ok) {
+                destructiveDialog.error = result.error
                 window.notice = result.error
                 return
             }
@@ -769,14 +835,14 @@ ApplicationWindow {
             enabled: targetAllowed() && scanService.state !== "scanning"
             ToolTip.visible: hovered && !enabled
             ToolTip.text: scanService.state === "scanning" ? "扫描完成后才能操作" : targetDeniedReason()
-            onClicked: { destructiveDialog.permanent = false; destructiveDialog.actionPath = targetPath(); destructiveDialog.actionId = contextMenu.targetId; destructiveDialog.sizeText = diskModel.formatSize(diskModel.sizeForNode(contextMenu.targetId)); destructiveDialog.open() }
+            onClicked: window.askDestructive(targetPath(), contextMenu.targetId, false)
         }
         MenuItem {
             text: "永久删除…"
             enabled: targetAllowed() && scanService.state !== "scanning"
             ToolTip.visible: hovered && !enabled
             ToolTip.text: scanService.state === "scanning" ? "扫描完成后才能操作" : targetDeniedReason()
-            onClicked: { destructiveDialog.permanent = true; destructiveDialog.actionPath = targetPath(); destructiveDialog.actionId = contextMenu.targetId; destructiveDialog.sizeText = diskModel.formatSize(diskModel.sizeForNode(contextMenu.targetId)); destructiveDialog.itemName = targetPath().split(/[\\/]/).pop(); confirmation.text = ""; destructiveDialog.open() }
+            onClicked: window.askDestructive(targetPath(), contextMenu.targetId, true)
         }
     }
 
@@ -818,6 +884,61 @@ ApplicationWindow {
                 }
             }
         }
+    }
+    // The four arrangements the window ships with, in the order of the
+    // toolbar button's menu. Picking one applies a whole dock tree; dragging
+    // any tab afterwards makes the layout custom and clears every tick.
+    Menu {
+        id: presetMenu
+        width: 220
+        closePolicy: Popup.CloseOnEscape
+        MenuItem {
+            text: "列表在上，图表在下"
+            checkable: true
+            checked: dockState.preset === "lists-top"
+            onTriggered: dockState.applyPreset("lists-top")
+        }
+        MenuItem {
+            text: "列表在下，图表在上"
+            checkable: true
+            checked: dockState.preset === "lists-bottom"
+            onTriggered: dockState.applyPreset("lists-bottom")
+        }
+        MenuItem {
+            text: "列表在左，图表在右"
+            checkable: true
+            checked: dockState.preset === "lists-left"
+            onTriggered: dockState.applyPreset("lists-left")
+        }
+        MenuItem {
+            text: "列表在右，图表在左"
+            checkable: true
+            checked: dockState.preset === "lists-right"
+            onTriggered: dockState.applyPreset("lists-right")
+        }
+        MenuSeparator { visible: dockState.preset.length === 0 }
+        MenuItem {
+            visible: dockState.preset.length === 0
+            enabled: false
+            text: "当前布局：自定义"
+        }
+    }
+    function togglePresetMenu() {
+        if (presetMenu.visible) { presetMenu.close(); return }
+        presetMenu.popup(presetButton, 0, presetButton.height)
+    }
+    // The self-test drives the same path as the button: open, tick the
+    // requested preset, and report which tick each step produced.
+    function verifyPresetMenu() {
+        togglePresetMenu()
+        const opened = presetMenu.visible
+        let applied = true
+        for (const id of ["lists-bottom", "lists-left", "lists-right", "lists-top"]) {
+            if (!dockState.applyPreset(id) || dockState.preset !== id) applied = false
+        }
+        presetMenu.close()
+        return opened && applied && !presetMenu.visible ? ""
+               : "opened=" + opened + " applied=" + applied
     }
     // The toggle entry point every rail button shares: the same button that
     // opened the menu closes it, and a different panel's button switches.
@@ -1136,14 +1257,14 @@ ApplicationWindow {
                     Layout.alignment: Qt.AlignVCenter
                     color: theme.border
                 }
-                Label { text: "布局"; font.pixelSize: metrics.small; color: theme.textMuted }
                 ThemedButton {
+                    id: presetButton
                     iconName: "layout"
-                    text: "自由 Dock"
-                    Layout.minimumWidth: 96
+                    text: "预设布局"
+                    Layout.minimumWidth: 104
                     ToolTip.visible: hovered
-                    ToolTip.text: "列表在上、图表在下；点击恢复默认 Dock 布局"
-                    onClicked: dockState.reset()
+                    ToolTip.text: "切换列表与图表的排布；拖动标签后变为自定义"
+                    onClicked: window.togglePresetMenu()
                 }
             }
         }
@@ -1386,23 +1507,7 @@ ApplicationWindow {
                                             visible: window.columnVisible("tree", "pct")
                                             cellWidth: window.columnWidth("tree", "pct")
                                             lineColor: window.gridColor()
-                                              Rectangle {
-                                                  anchors.left: parent.left
-                                                  anchors.top: parent.top
-                                                  anchors.bottom: parent.bottom
-                                                  width: Math.max(rowItem.percent > 0 ? 2 : 0,
-                                                                 Math.min(1, rowItem.percent / 100) * parent.width)
-                                                  color: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b,
-                                                                window.dark ? 0.30 : 0.18)
-                                              }
-                                            Label {
-                                                anchors.fill: parent
-                                                anchors.leftMargin: 6
-                                                anchors.rightMargin: 6
-                                                verticalAlignment: Text.AlignVCenter
-                                                text: rowItem.percent.toFixed(1) + "%"
-                                                color: theme.text; font.pixelSize: metrics.small
-                                            }
+                                            PercentCell { anchors.fill: parent; percent: rowItem.percent }
                                         }
                                         TableCell {
                                             visible: window.columnVisible("tree", "size")
@@ -1515,11 +1620,17 @@ ApplicationWindow {
                             color: theme.surfaceAlt
                             border.color: theme.border
                             property alias filterField: filterInput
+                            // One height for every control in this bar: mixing
+                            // implicit heights is what made the filter field
+                            // and the two pickers sit at different baselines.
+                            readonly property int controlHeight: Math.max(20, height - 8)
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: metrics.pad / 2
-                                anchors.rightMargin: metrics.pad / 2
-                                spacing: 4
+                                // Clear the column rail: a control under it
+                                // looks cut off and cannot be clicked.
+                                anchors.rightMargin: window.railWidth + metrics.pad / 2
+                                spacing: 6
                                 Label {
                                     visible: window.chartLayout !== "dock"
                                     text: "文件视图"
@@ -1530,11 +1641,11 @@ ApplicationWindow {
                                 TextField {
                                     id: filterInput
                                     objectName: "filterField"
-                                    Layout.preferredWidth: 180
                                     Layout.fillWidth: true
-                                    Layout.minimumWidth: 64
-                                    Layout.maximumWidth: 220
-                                    implicitHeight: Math.max(20, metrics.paneHeader - 6)
+                                    Layout.minimumWidth: 60
+                                    Layout.maximumWidth: 260
+                                    Layout.alignment: Qt.AlignVCenter
+                                    implicitHeight: filePaneHeader.controlHeight
                                     topPadding: 2
                                     bottomPadding: 2
                                     font.pixelSize: metrics.small
@@ -1545,7 +1656,13 @@ ApplicationWindow {
                                 // Where the files come from: the folder the
                                 // chart is on, or the whole scan.
                                 ThemedComboBox {
-                                    implicitHeight: 22
+                                    id: scopeBox
+                                    implicitHeight: filePaneHeader.controlHeight
+                                    // The box keeps its own text width: a
+                                    // squeezed combo shows "..." and its popup
+                                    // inherits that width.
+                                    Layout.minimumWidth: implicitWidth
+                                    Layout.alignment: Qt.AlignVCenter
                                     model: ["当前", "整个扫描"]
                                     currentIndex: fileListModel.wholeTree ? 1 : 0
                                     onActivated: {
@@ -1559,8 +1676,10 @@ ApplicationWindow {
                                 // the first paint slow.
                                 ToolButton {
                                     id: recursiveButton
-                                    implicitWidth: 26
-                                    implicitHeight: 22
+                                    implicitWidth: filePaneHeader.controlHeight
+                                    implicitHeight: filePaneHeader.controlHeight
+                                    Layout.alignment: Qt.AlignVCenter
+                                    padding: 0
                                     checkable: true
                                     checked: fileListModel.recursive
                                     ToolTip.visible: hovered
@@ -1571,13 +1690,14 @@ ApplicationWindow {
                                         scanSettings.save()
                                     }
                                     background: Rectangle {
-                                        radius: 3
+                                        radius: theme.smallRadius
                                         color: recursiveButton.checked ? theme.selection : "transparent"
                                         border.color: theme.border
                                     }
                                     contentItem: Glyph {
                                         iconName: "folders"
                                         size: 13
+                                        anchors.centerIn: parent
                                         color: recursiveButton.checked ? theme.text : theme.textMuted
                                     }
                                 }
@@ -1585,7 +1705,10 @@ ApplicationWindow {
                                 // the path, or the fuzzy subsequence of the
                                 // name.
                                 ThemedComboBox {
-                                    implicitHeight: 22
+                                    id: matchBox
+                                    implicitHeight: filePaneHeader.controlHeight
+                                    Layout.minimumWidth: implicitWidth
+                                    Layout.alignment: Qt.AlignVCenter
                                     model: ["子串", "模糊"]
                                     currentIndex: fileListModel.fuzzyMatch ? 1 : 0
                                     onActivated: {
@@ -1666,6 +1789,7 @@ ApplicationWindow {
                                     }
                                 }
                                 Repeater {
+                                    objectName: "fileColumnRepeater"
                                     model: window.fileColumnSpec.slice(1)
                                     delegate: TableCell {
                                         cellWidth: window.columnWidth("file", modelData.key)
@@ -1765,23 +1889,7 @@ ApplicationWindow {
                                             visible: window.columnVisible("file", "pct")
                                             cellWidth: window.columnWidth("file", "pct")
                                             lineColor: window.gridColor()
-                                              Rectangle {
-                                                  anchors.left: parent.left
-                                                  anchors.top: parent.top
-                                                  anchors.bottom: parent.bottom
-                                                  width: Math.max(fileRow.percent > 0 ? 2 : 0,
-                                                                 Math.min(1, fileRow.percent / 100) * parent.width)
-                                                  color: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b,
-                                                                window.dark ? 0.30 : 0.18)
-                                              }
-                                            Label {
-                                                anchors.fill: parent
-                                                anchors.leftMargin: 6
-                                                anchors.rightMargin: 6
-                                                verticalAlignment: Text.AlignVCenter
-                                                text: fileRow.percent.toFixed(1) + "%"
-                                                color: theme.text; font.pixelSize: metrics.small
-                                            }
+                                            PercentCell { anchors.fill: parent; percent: fileRow.percent }
                                         }
                                         TableCell {
                                             visible: window.columnVisible("file", "size")
@@ -2264,11 +2372,15 @@ ApplicationWindow {
                             theme: window.dark ? "dark" : "light"
                             centerLabel: diskModel.currentName
                             highlightExtension: window.chartHighlight()
-                             accent: window.themeTokens.accent
-                             surfaceToken: theme.surfaceAlt
-                             borderToken: theme.border
-                             neutralToken: theme.textMuted
-                             dimToken: theme.faint
+                            accent: window.themeTokens.accent
+                            // Through `window.themeTokens`: inside this item
+                            // `theme` is the string property above, so
+                            // `theme.surfaceAlt` was undefined and the chart
+                            // silently painted with its fallback palette.
+                            surfaceToken: window.themeTokens.surfaceAlt
+                            borderToken: window.themeTokens.border
+                            neutralToken: window.themeTokens.textMuted
+                            dimToken: window.themeTokens.faint
                              fontFamily: metrics.fontFamily
                              fontPixels: metrics.caption
                             onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
@@ -2419,6 +2531,14 @@ ApplicationWindow {
                           : scanService.paused || diskModel.partial || scanService.skippedDirs > 0 ? theme.warn : theme.textMuted
                     font.pixelSize: metrics.small
                     elide: Text.ElideRight
+                }
+                Label {
+                    visible: window.notice.length > 0
+                    text: window.notice
+                    color: theme.warn
+                    font.pixelSize: metrics.small
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: parent.width * 0.35
                 }
                 Label {
                     text: "当前目录 " + diskModel.totalText + " · " + diskModel.formatCount(diskModel.nodeItems) + " 项"

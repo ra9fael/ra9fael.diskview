@@ -105,23 +105,31 @@ bool protectedPath(const QString& source)
 }
 
 class FileOperationSink final : public Microsoft::WRL::RuntimeClass<
-    Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IFileOperationProgressSink> {
-public:
+    Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IFileOperationProgressSink> {public:
     bool requireRecycle = true;
     bool completed = false;
     bool recycled = false;
     HRESULT itemResult = E_PENDING;
+    // Which callback refused, for the error text when an operation is aborted.
+    QString abortedAt;
     Microsoft::WRL::ComPtr<IShellItem> destination;
     IFACEMETHODIMP StartOperations() override { return S_OK; }
     IFACEMETHODIMP FinishOperations(HRESULT) override { return S_OK; }
-    IFACEMETHODIMP PreRenameItem(DWORD, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PreRenameItem(DWORD, IShellItem*, LPCWSTR) override { abortedAt = QStringLiteral("rename"); return E_ABORT; }
     IFACEMETHODIMP PostRenameItem(DWORD, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
-    IFACEMETHODIMP PreMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PreMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { abortedAt = QStringLiteral("move"); return E_ABORT; }
     IFACEMETHODIMP PostMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
-    IFACEMETHODIMP PreCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return E_ABORT; }
+    IFACEMETHODIMP PreCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { abortedAt = QStringLiteral("copy"); return E_ABORT; }
     IFACEMETHODIMP PostCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
     IFACEMETHODIMP PreDeleteItem(DWORD flags, IShellItem*) override
-    { return !requireRecycle || (flags & TSF_DELETE_RECYCLE_IF_POSSIBLE) ? S_OK : E_ABORT; }
+    {
+        // Refuse a silent hard delete: when the shell will not recycle this
+        // item (a drive without a recycle bin, an oversized file), the caller
+        // asked for a recoverable delete and must not get an irreversible one.
+        if (!requireRecycle || (flags & TSF_DELETE_RECYCLE_IF_POSSIBLE)) return S_OK;
+        abortedAt = QStringLiteral("delete-without-recycle");
+        return E_ABORT;
+    }
     IFACEMETHODIMP PostDeleteItem(DWORD, IShellItem*, HRESULT hr, IShellItem* binItem) override
     { completed = true; itemResult = hr; recycled = SUCCEEDED(hr) && hr != S_FALSE && binItem; destination = binItem; return S_OK; }
     IFACEMETHODIMP PreNewItem(DWORD, IShellItem*, LPCWSTR) override { return E_ABORT; }
@@ -131,6 +139,66 @@ public:
     IFACEMETHODIMP PauseTimer() override { return S_OK; }
     IFACEMETHODIMP ResumeTimer() override { return S_OK; }
 };
+
+// The one place the window deletes anything. Both the dialog's action and the
+// command-line check go through it, so what is verified is what ships.
+bool runDeleteOperation(const QString& path, bool permanent, QString* error)
+{
+    // Shell parsing names require native path separators.
+    const QString nativePath = QDir::toNativeSeparators(path);
+    const HRESULT initialized = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    Microsoft::WRL::ComPtr<IFileOperation> operation;
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    auto sink = Microsoft::WRL::Make<FileOperationSink>();
+    sink->requireRecycle = !permanent;
+    HRESULT hr = ::CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(operation.GetAddressOf()));
+    QString step = QStringLiteral("create");
+    if (SUCCEEDED(hr)) {
+        step = QStringLiteral("shell-item");
+        hr = ::SHCreateItemFromParsingName(reinterpret_cast<LPCWSTR>(nativePath.utf16()), nullptr,
+                                           IID_PPV_ARGS(item.GetAddressOf()));
+    }
+    if (SUCCEEDED(hr)) {
+        step = QStringLiteral("flags");
+        hr = operation->SetOperationFlags(permanent
+            ? (FOF_NOCONFIRMATION | FOF_NOERRORUI | FOFX_EARLYFAILURE)
+            : (FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOFX_EARLYFAILURE));
+    }
+    if (SUCCEEDED(hr)) { step = QStringLiteral("queue"); hr = operation->DeleteItem(item.Get(), sink.Get()); }
+    if (SUCCEEDED(hr)) { step = QStringLiteral("perform"); hr = operation->PerformOperations(); }
+    BOOL aborted = TRUE;
+    if (SUCCEEDED(hr)) { step = QStringLiteral("aborted"); hr = operation->GetAnyOperationsAborted(&aborted); }
+    const bool ok = SUCCEEDED(hr) && !aborted && sink->completed
+        && (permanent ? SUCCEEDED(sink->itemResult) : sink->recycled);
+    if (!ok && error) {
+        // The first failure is the interesting one: PerformOperations can
+        // succeed while the single item was refused, and an unfinished sink
+        // still holds E_PENDING.
+        const HRESULT failed = FAILED(hr) ? hr
+            : (sink->itemResult != E_PENDING ? sink->itemResult : hr);
+        const QString code = QStringLiteral("0x%1")
+            .arg(static_cast<quint32>(failed), 8, 16, QLatin1Char('0'));
+        // Which call failed is worth keeping: a shell-item failure means the
+        // path itself was rejected, a perform failure means Windows refused
+        // the operation on an otherwise valid item.
+        if (!permanent && sink->abortedAt == QStringLiteral("delete-without-recycle")) {
+            // We refused the operation ourselves: the shell was about to delete
+            // for good on a "move to the recycle bin" request.
+            *error = QStringLiteral("该位置无法移入回收站，未删除任何内容。"
+                                    "如确认不需要恢复，可改用「永久删除」。");
+        } else {
+            *error = QStringLiteral("%1（%2，Windows 错误 %3）")
+                .arg(permanent ? QStringLiteral("永久删除失败") : QStringLiteral("无法移入回收站"),
+                     step, code);
+        }
+    }
+    sink.Reset();
+    item.Reset();
+    operation.Reset();
+    if (SUCCEEDED(initialized)) ::CoUninitialize();
+    return ok;
+}
 }
 
 QmlHost::QmlHost(Options options, QObject* parent) : QObject(parent), m_options(std::move(options)) {}
@@ -667,34 +735,55 @@ bool QmlHost::runSelfTest(QString* report)
             return false;
         }
     }
-    // The column grips: dragging the tree's "size" header has to widen that
-    // one column, and a double click has to put it back. The events go to the
-    // window, so they pass the real hit test and the real mouse area.
+    // The column grips: dragging a table's "size" header has to widen that one
+    // column, and a double click has to put it back. Each table is brought to
+    // the front first: in the dock layout a pane behind another tab has no
+    // visible grip, and a check that passes without dragging anything proves
+    // nothing about the table it claims to have checked.
     bool columnsOk = false;
     bool legendNameGripOk = false;
     QString columnDetail;
     if (QObject* root = m_engine.rootObjects().value(0)) {
         auto* columnWindow = qobject_cast<QQuickWindow*>(root);
+        auto* dockStateObject = root->findChild<QObject*>(QStringLiteral("diskViewDockState"));
+        // Bring the pane that owns a table to the front of whatever tab group
+        // holds it, so its headers really are on screen.
+        const auto showPane = [&](const QString& pane) {
+            // Through the object, not through a QML expression: `dockState` is
+            // an id of the window's component and is not visible from the
+            // engine's root context.
+            bool shown = false;
+            if (dockStateObject)
+                QMetaObject::invokeMethod(dockStateObject, "activate", Q_RETURN_ARG(bool, shown),
+                                          Q_ARG(QString, pane));
+            QCoreApplication::processEvents();
+            return shown;
+        };
         // A Repeater's delegates are visual children only, so they are not in
         // the window's QObject tree. The Repeater itself is, and itemAt(i)
         // gives each cell, which owns its grip.
-        QQuickItem* grip = nullptr;
-        if (auto* repeater = root->findChild<QObject*>(QStringLiteral("treeColumnRepeater"))) {
+        const auto findGrip = [&](const QString& repeaterName, const QString& gripName) -> QQuickItem* {
+            auto* repeater = root->findChild<QObject*>(repeaterName);
+            if (!repeater) return nullptr;
             const int count = repeater->property("count").toInt();
-            for (int i = 0; i < count && !grip; ++i) {
+            for (int i = 0; i < count; ++i) {
                 QQuickItem* cell = nullptr;
                 if (!QMetaObject::invokeMethod(repeater, "itemAt", Q_RETURN_ARG(QQuickItem*, cell),
                                                Q_ARG(int, i)))
-                    break;
-                if (cell) grip = cell->findChild<QQuickItem*>(QStringLiteral("columnHandle:tree:size"));
+                    return nullptr;
+                if (!cell) continue;
+                if (auto* found = cell->findChild<QQuickItem*>(gripName)) return found;
             }
-        }
-        if (!grip || !grip->isVisible() || grip->width() <= 0) {
-            // The dock layout may have the tree behind another tab; there is
-            // nothing to drag, so this check is not a failure.
-            columnsOk = true;
-            columnDetail = QStringLiteral("not-shown");
-        } else if (columnWindow) {
+            return nullptr;
+        };
+        // Widen one column by 24 px, then double click it back: the neighbour
+        // has to give up exactly what the dragged column took, the table's
+        // total width has to stay, and the reset has to match the fit width.
+        const auto dragWiden = [&](QQuickItem* grip, const QString& listName, QString* detail) {
+            if (!columnWindow || !grip) {
+                *detail = QStringLiteral("no-window");
+                return false;
+            }
             const auto widthOf = [&](const QString& key) {
                 QVariant result;
                 if (auto* store = grip->property("store").value<QObject*>())
@@ -712,11 +801,11 @@ bool QmlHost::runSelfTest(QString* report)
                 QMouseEvent event(type, local, area->mapToGlobal(local), button, buttons, Qt::NoModifier);
                 QCoreApplication::sendEvent(area, &event);
             };
+            auto* list = columnWindow->findChild<QQuickItem*>(listName);
             const QPointF center(grip->width() / 2, grip->height() / 2);
             const int before = widthOf(QStringLiteral("size"));
             const int neighborBefore = widthOf(QStringLiteral("alloc"));
-            const int totalBefore = columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))
-                                        ? int(columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))->width()) : 0;
+            const int totalBefore = list ? int(list->width()) : 0;
             send(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
             send(QEvent::MouseMove, center + QPointF(24, 0), Qt::NoButton, Qt::LeftButton);
             send(QEvent::MouseButtonRelease, center + QPointF(24, 0), Qt::LeftButton, Qt::NoButton);
@@ -730,24 +819,67 @@ bool QmlHost::runSelfTest(QString* report)
             send(QEvent::MouseButtonRelease, again, Qt::LeftButton, Qt::NoButton);
             QCoreApplication::processEvents();
             const int reset = widthOf(QStringLiteral("size"));
-            QQmlExpression expectedExpression(m_engine.rootContext(), root,
-                                               QStringLiteral("autoFitWidth('tree', 'size')"));
-            const int expected = expectedExpression.evaluate().toInt();
-            const int totalAfter = columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))
-                                       ? int(columnWindow->findChild<QQuickItem*>(QStringLiteral("diskViewList"))->width()) : -1;
-            columnsOk = dragged == before + 24 && neighborDragged == neighborBefore - 24
-                        && totalBefore == totalAfter && reset == expected;
-            columnDetail = QStringLiteral("%1->%2 neighbor=%3->%4 autofit=%5 total=%6/%7")
-                               .arg(before).arg(dragged).arg(neighborBefore).arg(neighborDragged)
-                               .arg(reset).arg(totalBefore).arg(totalAfter);
+            QVariant expectedFit;
+            const QString panel = listName == QLatin1String("diskViewList")
+                ? QStringLiteral("tree") : QStringLiteral("file");
+            const bool fitAvailable = QMetaObject::invokeMethod(root, "autoFitWidth",
+                Q_RETURN_ARG(QVariant, expectedFit), Q_ARG(QVariant, panel),
+                Q_ARG(QVariant, QStringLiteral("size")));
+            const int totalAfter = list ? int(list->width()) : -1;
+            *detail = QStringLiteral("%1->%2 neighbor=%3->%4 autofit=%5 total=%6/%7")
+                          .arg(before).arg(dragged).arg(neighborBefore).arg(neighborDragged)
+                          .arg(reset).arg(totalBefore).arg(totalAfter);
+            return dragged == before + 24 && neighborDragged == neighborBefore - 24
+                   && totalBefore == totalAfter && fitAvailable && reset == expectedFit.toInt();
+        };
+
+        struct TableCheck {
+            const char* pane;      // the dock pane that has to be shown
+            const char* repeater;  // its column-header repeater
+            const char* grip;      // the draggable header of one column
+            const char* listName;  // the table itself, for the total width
+        };
+        const TableCheck tables[] = {
+            {"tree", "treeColumnRepeater", "columnHandle:tree:size", "diskViewList"},
+            {"files", "fileColumnRepeater", "columnHandle:file:size", "diskViewFileList"},
+        };
+        // Showing one pane after another changes which tab each group has in
+        // front; put that back, so the checks leave the window as they found it.
+        const QVariant savedLayout = dockStateObject ? dockStateObject->property("layout") : QVariant();
+        columnsOk = true;
+        QStringList parts;
+        for (const TableCheck& table : tables) {
+            const QString pane = QString::fromLatin1(table.pane);
+            if (!showPane(pane)) {
+                columnsOk = false;
+                parts << pane + "=not-shown";
+                continue;
+            }
+            QQuickItem* grip = findGrip(QString::fromLatin1(table.repeater),
+                                        QString::fromLatin1(table.grip));
+            QString detail;
+            if (!grip || !grip->isVisible() || grip->width() <= 0) {
+                columnsOk = false;
+                detail = QStringLiteral("grip-not-shown");
+            } else if (!dragWiden(grip, QString::fromLatin1(table.listName), &detail)) {
+                columnsOk = false;
+            }
+            parts << pane + "=" + detail;
         }
-        // This header cell is not a Repeater delegate, so it is part of the
-        // regular QObject tree and can be checked by its stable object name.
-        // In the dock layout the extension table may be behind another tab;
-        // there is no grip to measure then, which is not a failure.
-        if (auto* legendGrip = root->findChild<QQuickItem*>(QStringLiteral("columnHandle:legend:name"))) {
-            legendNameGripOk = !legendGrip->isVisible() || legendGrip->width() > 0;
-            if (!legendGrip->isVisible()) columnDetail = QStringLiteral("legend-not-shown");
+        // The legend's header cells are declared directly rather than in a
+        // Repeater, so they are part of the regular QObject tree. Its pane has
+        // to be shown for that name grip to have a width to check.
+        const bool legendShown = showPane(QStringLiteral("legend"));
+        auto* legendGrip = root->findChild<QQuickItem*>(QStringLiteral("columnHandle:legend:name"));
+        legendNameGripOk = legendShown && legendGrip && legendGrip->isVisible()
+                           && legendGrip->width() > 0;
+        columnDetail += (columnDetail.isEmpty() ? QString() : QStringLiteral(" "))
+                        + parts.join(QLatin1Char(' '))
+                        + QStringLiteral(" legend=")
+                        + (legendNameGripOk ? QStringLiteral("shown") : QStringLiteral("missing"));
+        if (dockStateObject && savedLayout.isValid()) {
+            dockStateObject->setProperty("layout", savedLayout);
+            QCoreApplication::processEvents();
         }
     }
     if (!columnsOk && columnDetail.isEmpty()) columnDetail = QStringLiteral("no-window");
@@ -946,12 +1078,36 @@ bool QmlHost::runSelfTest(QString* report)
     } else {
         listDetail = listDetail.isEmpty() ? QStringLiteral("bad-view") : listDetail + QStringLiteral(",bad-view");
     }
+    // The toolbar's layout menu has to apply each preset and tick it.
+    QString presetFail;
+    {
+        QQmlExpression presets(m_engine.rootContext(), window, QStringLiteral("verifyPresetMenu()"));
+        presetFail = presets.hasError() ? presets.error().toString() : presets.evaluate().toString();
+    }
+    // A live light/dark switch must reach the chart without a restart. The
+    // chart's theme and tokens are QML bindings onto the token object, so this
+    // only holds while nothing writes those properties from C++.
+    bool themeSwitch = true;
+    if (auto* chartItem = window->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
+        const int previousMode = m_scanSettings ? m_scanSettings->appearanceMode() : 0;
+        const bool wasDark = window->property("dark").toBool();
+        const QColor surfaceBefore = chartItem->surfaceToken();
+        setLocalAppearanceMode(wasDark ? 1 : 2);
+        QCoreApplication::processEvents();
+        const QColor surfaceAfter = chartItem->surfaceToken();
+        themeSwitch = chartItem->theme() == (wasDark ? QStringLiteral("light") : QStringLiteral("dark"))
+                      && surfaceAfter != surfaceBefore;
+        setLocalAppearanceMode(previousMode);
+        QCoreApplication::processEvents();
+    } else {
+        themeSwitch = false;
+    }
     const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list
                       && viewFollows && drag && chartOk && columnsOk && legendNameGripOk
-                      && columnsMenuToggleFail.isEmpty();
+                      && columnsMenuToggleFail.isEmpty() && presetFail.isEmpty() && themeSwitch;
 
 
-    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\t%12\n")
+    *report = QStringLiteral("%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\t%12\t%13\t%14\n")
                   .arg(m_options.viewMode)
                   .arg(hit)
                   .arg(regions ? QStringLiteral("regions") : QStringLiteral("no-regions"))
@@ -964,10 +1120,13 @@ bool QmlHost::runSelfTest(QString* report)
                   .arg(chartOk ? QStringLiteral("chart=%1").arg(chartDetail.join(QLatin1Char(',')))
                                : QStringLiteral("bad-chart:%1").arg(chartDetail.join(QLatin1Char(','))))
                   .arg(columnsOk && legendNameGripOk ? QStringLiteral("columns=%1,legend-name-grip").arg(columnDetail)
-                                 : !legendNameGripOk ? QStringLiteral("bad-legend-name-grip")
+                                 : !legendNameGripOk ? QStringLiteral("bad-legend-name-grip:%1").arg(columnDetail)
                                  : QStringLiteral("bad-columns:%1").arg(columnDetail))
                   .arg(columnsMenuToggleFail.isEmpty() ? QStringLiteral("columns-menu-toggle")
                                  : QStringLiteral("bad-columns-menu-toggle:%1").arg(columnsMenuToggleFail))
+                  .arg(presetFail.isEmpty() ? QStringLiteral("presets")
+                                 : QStringLiteral("bad-presets:%1").arg(presetFail))
+                  .arg(themeSwitch ? QStringLiteral("theme-live") : QStringLiteral("bad-theme-live"))
                   .arg(pass ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
     if (!m_options.scanPath.isEmpty() && m_scanService) {
         // What the scan made of the settings, and how much of it was published
@@ -1169,15 +1328,9 @@ QString QmlHost::chooseFolder(const QString& initial) const
 
 void QmlHost::setAppearance(const QVariantMap& appearance)
 {
+    // The tokens only: the chart reads them through QML bindings (see
+    // setTheme), and writing its properties here would break those bindings.
     if (m_theme) m_theme->setAppearance(appearance);
-    if (auto* chart = window() ? window()->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr) {
-        chart->setSurfaceToken(m_theme->backdrop() ? QColor() : m_theme->surfaceAlt());
-        chart->setBorderToken(m_theme->border());
-        chart->setNeutralToken(m_theme->textMuted());
-        chart->setDimToken(m_theme->dark() ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));
-        chart->setFontFamily(m_theme->fontFamily());
-        chart->setFontPixels(m_theme->fontSmall());
-    }
 }
 
 void QmlHost::setLocalAppearanceMode(int mode)
@@ -1187,41 +1340,19 @@ void QmlHost::setLocalAppearanceMode(int mode)
 }
 
 void QmlHost::performFileActionAsync(const QString& path, bool permanent,
-                                     const QString& confirmation, const QString& nodeId,
-                                     int requestId)
+                                     const QString& nodeId, int requestId)
 {
     const QVariantMap validation = validateFileActionPath(path);
     if (!validation.value(QStringLiteral("ok")).toBool()) {
         emit fileActionFinished(requestId, nodeId, {{"ok", false}, {"error", validation.value(QStringLiteral("reason"))}});
         return;
     }
-    if (permanent && confirmation.compare(QFileInfo(path).fileName(), Qt::CaseInsensitive) != 0) {
-        emit fileActionFinished(requestId, nodeId, {{"ok", false}, {"error", QStringLiteral("名称不匹配，未删除")}});
-        return;
-    }
 
     const QString checkedPath = validation.value(QStringLiteral("path")).toString();
     QPointer<QmlHost> guard(this);
     QThread* worker = QThread::create([guard, checkedPath, permanent, nodeId, requestId] {
-        const HRESULT initialized = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        Microsoft::WRL::ComPtr<IFileOperation> operation;
-        Microsoft::WRL::ComPtr<IShellItem> item;
-        auto sink = Microsoft::WRL::Make<FileOperationSink>();
-        sink->requireRecycle = !permanent;
-        HRESULT hr = ::CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(operation.GetAddressOf()));
-        if (SUCCEEDED(hr)) hr = ::SHCreateItemFromParsingName(reinterpret_cast<LPCWSTR>(checkedPath.utf16()), nullptr, IID_PPV_ARGS(item.GetAddressOf()));
-        if (SUCCEEDED(hr)) hr = operation->SetOperationFlags(permanent
-            ? (FOF_NOCONFIRMATION | FOF_NOERRORUI | FOFX_EARLYFAILURE)
-            : (FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOFX_EARLYFAILURE));
-        if (SUCCEEDED(hr)) hr = operation->DeleteItem(item.Get(), sink.Get());
-        if (SUCCEEDED(hr)) hr = operation->PerformOperations();
-        BOOL aborted = TRUE;
-        if (SUCCEEDED(hr)) hr = operation->GetAnyOperationsAborted(&aborted);
-        const bool ok = SUCCEEDED(hr) && !aborted && sink->completed
-            && (permanent ? SUCCEEDED(sink->itemResult) : sink->recycled);
-        const QString error = ok ? QString() : QStringLiteral("Windows 文件操作失败 (HRESULT 0x%1)")
-            .arg(static_cast<quint32>(FAILED(hr) ? hr : sink->itemResult), 8, 16, QLatin1Char('0'));
-        if (SUCCEEDED(initialized)) ::CoUninitialize();
+        QString error;
+        const bool ok = runDeleteOperation(checkedPath, permanent, &error);
         if (guard) QMetaObject::invokeMethod(guard, [guard, requestId, nodeId, ok, error] {
             if (guard) emit guard->fileActionFinished(requestId, nodeId, {{"ok", ok}, {"error", error}});
         }, Qt::QueuedConnection);
@@ -1230,23 +1361,25 @@ void QmlHost::performFileActionAsync(const QString& path, bool permanent,
     worker->start();
 }
 
+bool QmlHost::runFileActionTest(const QString& action, const QString& path, QString* error)
+{
+    const bool permanent = action != QStringLiteral("recycle");
+    const QVariantMap validation = validateFileActionPath(path);
+    if (!validation.value(QStringLiteral("ok")).toBool()) {
+        if (error) *error = validation.value(QStringLiteral("reason")).toString();
+        return false;
+    }
+    return runDeleteOperation(validation.value(QStringLiteral("path")).toString(), permanent, error);
+}
+
 void QmlHost::setTheme(const QString& theme) const
 {
-    // The tokens land in one object the whole window reads; the chart keeps
-    // its plain light/dark string for its greys, and the accent reaches it
-    // through the QML binding on the tokens.
+    // Only the token bridge is written from here. The chart's own theme string
+    // and palette are QML bindings onto those tokens; assigning them from C++
+    // would replace the bindings, and the window would then keep the look it
+    // had when the host first sent an appearance — a live light/dark switch
+    // would reach the window but never the chart.
     if (m_theme) m_theme->setTheme(theme);
-    if (auto* chart = window()->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
-        chart->setTheme(theme);
-        if (m_theme) {
-            chart->setSurfaceToken(m_theme->backdrop() ? QColor() : m_theme->surfaceAlt());
-            chart->setBorderToken(m_theme->border());
-            chart->setNeutralToken(m_theme->textMuted());
-            chart->setDimToken(m_theme->dark() ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));
-            chart->setFontFamily(m_theme->fontFamily());
-            chart->setFontPixels(m_theme->fontSmall());
-        }
-    }
 }
 
 void QmlHost::copyToClipboard(const QString& text) const
@@ -1373,7 +1506,9 @@ bool QmlHost::saveScreenshot(const QString& path)
             || state == QLatin1String("scan-settings-dialog")
             || state == QLatin1String("theme-dialog")
             || state == QLatin1String("file-filter") || state == QLatin1String("extension-highlight")
-            || state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")) {
+            || state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")
+            || state == QLatin1String("recycle-confirmation") || state == QLatin1String("recycle-error")
+            || state == QLatin1String("preset-menu")) {
             QQmlExpression prepare(m_engine.rootContext(), window,
                                   QStringLiteral("prepareFixtureVisualState('%1')").arg(state));
             prepare.evaluate();
@@ -1383,6 +1518,8 @@ bool QmlHost::saveScreenshot(const QString& path)
             }
             QCoreApplication::processEvents();
             if (state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")
+                || state == QLatin1String("recycle-confirmation") || state == QLatin1String("recycle-error")
+                || state == QLatin1String("preset-menu")
                 || state == QLatin1String("drives") || state == QLatin1String("dock-tabs")
                 || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")
                 || state == QLatin1String("dock-maximized") || state == QLatin1String("scan-settings-dialog")
@@ -1530,6 +1667,16 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
                 return false;
             }
             options->maximizeOnStart = group;
+        } else if (argument == QStringLiteral("--file-action")) {
+            // --file-action recycle|delete <path>: run the same IFileOperation
+            // the dialog runs, then print the result and exit.
+            const QString action = value(argument);
+            if (action != QStringLiteral("recycle") && action != QStringLiteral("delete")) {
+                *error = QStringLiteral("--file-action takes recycle or delete");
+                return false;
+            }
+            options->fileAction = action;
+            options->fileActionPath = value(argument);
         } else if (argument == QStringLiteral("--bench-chart")) {
             bool ok = false;
             const int nodes = value(argument).toInt(&ok);
@@ -1563,6 +1710,8 @@ QString QmlHost::usage()
         "  --hold-window      keep a standalone validation window open after scan\n"
         "  --maximize <tree|files|legend|chart|tables>  open with that pane in the fullscreen layer\n"
         "  --bench-chart <n>  build a tree of n nodes and time the chart pipeline\n"
+        "  --file-action <recycle|delete> <path>  run the same file operation the\n"
+        "                     context menu runs, print the result and exit\n"
         "  --self-test        run the interaction checks and print the verdict\n"
         "  --fixture-only     use built-in data without enumerating mounted volumes\n"
         "  -h, --help         show this help\n");

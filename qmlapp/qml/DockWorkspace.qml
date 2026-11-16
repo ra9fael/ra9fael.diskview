@@ -146,11 +146,26 @@ Item {
             width: modelData.width
             height: modelData.type === "tabs" ? rowHeight : modelData.height
             z: 2
+            // A tab group's own strip. The split handle gets a visible line in
+            // the same border colour, and thickens to the accent while the
+            // pointer is on it, so the divider reads as something draggable.
             Rectangle {
                 anchors.fill: parent
                 visible: region.modelData.type === "tabs"
                 color: theme.surfaceAlt
                 border.color: theme.border
+            }
+            Rectangle {
+                id: divider
+                visible: region.modelData.type === "handle"
+                anchors.centerIn: parent
+                width: region.modelData.horizontal
+                       ? (handleArea.containsMouse || handleArea.pressed ? 3 : 1)
+                       : region.width
+                height: region.modelData.horizontal
+                        ? region.height
+                        : (handleArea.containsMouse || handleArea.pressed ? 3 : 1)
+                color: handleArea.containsMouse || handleArea.pressed ? theme.accent : theme.border
             }
             RowLayout {
                 anchors.fill: parent
@@ -225,9 +240,14 @@ Item {
                 }
             }
             MouseArea {
+                id: handleArea
+                // A 5 px strip is easy to miss: the grab area reaches a few
+                // pixels past the divider on both sides.
                 anchors.fill: parent
+                anchors.margins: region.modelData.type === "handle" ? -3 : 0
                 enabled: region.modelData.type === "handle"
                 visible: enabled
+                hoverEnabled: true
                 cursorShape: region.modelData.horizontal ? Qt.SplitHCursor : Qt.SplitVCursor
                 property real proposed: region.modelData.ratio || .5
                 onPositionChanged: function(event) {

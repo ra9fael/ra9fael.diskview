@@ -51,6 +51,11 @@ public:
         // raw manifest values. Non-empty means the window must not edit them:
         // the host is where they are changed.
         QVariantMap hostSettings;
+        // A one-off file action, so the Windows side of "move to the recycle
+        // bin" and "delete for good" can be checked without a pointer:
+        // "recycle" or "delete", with the path in `fileActionPath`.
+        QString fileAction;
+        QString fileActionPath;
     };
 
     explicit QmlHost(Options options, QObject* parent = nullptr);
@@ -87,8 +92,10 @@ public:
     Q_INVOKABLE bool copyFilesToClipboard(const QString& path, bool cut) const;
     Q_INVOKABLE QVariantMap canModifyPath(const QString& path) const;
     Q_INVOKABLE void performFileActionAsync(const QString& path, bool permanent,
-                                            const QString& confirmation, const QString& nodeId,
-                                            int requestId);
+                                            const QString& nodeId, int requestId);
+    // The same call from the command line ("recycle" or "delete"), so the
+    // Windows side can be checked on a machine without a pointer.
+    bool runFileActionTest(const QString& action, const QString& path, QString* error);
     // The fixed drives, for the address bar's location menu: path, label and
     // a short free/total line.
     Q_INVOKABLE QVariantList drives() const;
