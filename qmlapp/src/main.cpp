@@ -110,8 +110,7 @@ int main(int argc, char** argv)
             QTextStream(stdout) << report;
         }
         if (!options.fileAction.isEmpty()) {
-            // The Windows half of the two file actions, without a pointer:
-            // the same IFileOperation call the dialog makes.
+            // Exercise the confirmation button and its asynchronous operation.
             QString error;
             const bool ok = host.runFileActionTest(options.fileAction, options.fileActionPath, &error);
             QTextStream(stdout) << (ok ? "file-action\t" : "file-action FAILED\t")

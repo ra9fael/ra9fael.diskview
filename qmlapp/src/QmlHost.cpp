@@ -32,6 +32,7 @@
 #include <shlobj.h>
 #include <objbase.h>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHoverEvent>
@@ -1102,7 +1103,40 @@ bool QmlHost::runSelfTest(QString* report)
     } else {
         themeSwitch = false;
     }
-    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list
+    bool selectionSync = false;
+    {
+        QQmlExpression check(qmlContext(window), window, QStringLiteral(R"JS(
+            (function() {
+                dockState.activate("tree");
+                for (let i = 0; i < list.count; ++i) {
+                    list.positionViewAtIndex(i, ListView.Contain);
+                    list.forceLayout();
+                    let row = list.itemAtIndex(i);
+                    if (!row) continue;
+                    chart.clicked(row.nodeId, 0, 0);
+                    list.forceLayout();
+                    row = list.itemAtIndex(diskModel.selectedRow);
+                    if (!row || !row.highlighted || row.background.color != theme.selection) return false;
+                    const id = row.nodeId;
+                    diskModel.select("");
+                    row.clicked();
+                    if (chart.selectedId !== id || !row.highlighted) return false;
+                    if (row.directory) {
+                        chart.activated(id, true);
+                        list.forceLayout();
+                        row = list.itemAtIndex(diskModel.selectedRow);
+                        return row !== null && row.highlighted && chart.selectedId === id;
+                    }
+                }
+                return false;
+            })()
+        )JS"));
+        selectionSync = check.evaluate().toBool() && !check.hasError();
+        if (check.hasError()) listDetail += check.error().toString();
+    }
+    if (selectionSync) listDetail += QStringLiteral(",selection-sync");
+    else listDetail += QStringLiteral(",bad-selection-sync");
+    const bool pass = !hit.isEmpty() && regions && transform && navigate && back && paused && list && selectionSync
                       && viewFollows && drag && chartOk && columnsOk && legendNameGripOk
                       && columnsMenuToggleFail.isEmpty() && presetFail.isEmpty() && themeSwitch;
 
@@ -1369,7 +1403,39 @@ bool QmlHost::runFileActionTest(const QString& action, const QString& path, QStr
         if (error) *error = validation.value(QStringLiteral("reason")).toString();
         return false;
     }
-    return runDeleteOperation(validation.value(QStringLiteral("path")).toString(), permanent, error);
+    auto* window = qobject_cast<QQuickWindow*>(m_engine.rootObjects().value(0));
+    if (!window) return false;
+    const bool opened = QMetaObject::invokeMethod(window, "askDestructive",
+        Q_ARG(QVariant, validation.value(QStringLiteral("path"))),
+        Q_ARG(QVariant, QString()), Q_ARG(QVariant, permanent));
+    QCoreApplication::processEvents();
+    auto* button = window->findChild<QQuickItem*>(QStringLiteral("destructiveConfirm"));
+    if (!opened || !button || !button->isVisible()) {
+        if (error) *error = QStringLiteral("Confirmation button is not visible");
+        return false;
+    }
+    QEventLoop loop;
+    bool ok = false;
+    const auto connection = connect(this, &QmlHost::fileActionFinished, &loop,
+        [&](int, const QString&, const QVariantMap& result) {
+            ok = result.value(QStringLiteral("ok")).toBool();
+            if (error) *error = result.value(QStringLiteral("error")).toString();
+            loop.quit();
+        });
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeout.start(15000);
+    const QPointF point = button->mapToScene(QPointF(button->width() / 2, button->height() / 2));
+    for (const auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+        QMouseEvent event(type, point, window->mapToGlobal(point.toPoint()), Qt::LeftButton,
+            type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(window, &event);
+    }
+    loop.exec();
+    disconnect(connection);
+    if (!timeout.isActive() && error) *error = QStringLiteral("File action timed out");
+    return ok;
 }
 
 void QmlHost::setTheme(const QString& theme) const

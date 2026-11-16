@@ -504,7 +504,9 @@ ApplicationWindow {
             }
         }
         function onSelectedChanged() {
-            if (diskModel.selectedRow >= 0) list.positionViewAtIndex(diskModel.selectedRow, ListView.Contain)
+            Qt.callLater(function() {
+                if (diskModel.selectedRow >= 0) list.positionViewAtIndex(diskModel.selectedRow, ListView.Contain)
+            })
         }
         function onListChanged() {
             // Navigating clears the filter in the model, so the field has to
@@ -1451,6 +1453,16 @@ ApplicationWindow {
                                 height: metrics.row
                                 padding: 0
                                 highlighted: nodeId === diskModel.selectedId
+                                background: Rectangle {
+                                    color: rowItem.highlighted ? theme.selection
+                                        : rowItem.hovered ? theme.hoverRow : "transparent"
+                                    Rectangle {
+                                        width: 3
+                                        height: parent.height
+                                        visible: rowItem.highlighted
+                                        color: theme.accent
+                                    }
+                                }
                                 // A click only selects; the triangle and the
                                 // double click are the two ways to open a
                                 // folder, so a single click never jumps.
@@ -2383,7 +2395,7 @@ ApplicationWindow {
                             dimToken: window.themeTokens.faint
                              fontFamily: metrics.fontFamily
                              fontPixels: metrics.caption
-                            onClicked: function(nodeId) { if (nodeId.length) diskModel.select(nodeId) }
+                             onClicked: function(nodeId) { if (nodeId.length) diskModel.revealNode(nodeId) }
                             onActivated: function(nodeId, directory) {
                                 // The chart is a map: a double click enters the
                                 // folder, the same way the native one does. The
