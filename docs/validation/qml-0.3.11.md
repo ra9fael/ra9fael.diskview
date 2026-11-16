@@ -16,8 +16,10 @@
 - 实际程序从 C: 临时目录执行 `--file-action recycle`：确认按钮触发异步回收，返回 0，源文件消失。offscreen 与 Windows D3D11 均通过。
 - D: 回收站元数据精确匹配 `build/recycle-fix/async.txt` 和 `build/recycle-fix/desktop.txt` 的完整原路径，对应内容分别为 `async dialog fixture`、`desktop async fixture`。
 - 本机插件从 0.3.10 升级至 0.3.11，`ws plugin list --json` 显示 `on / ready`，安装位置在 C: 用户插件目录。
+- 已安装 `diskview-qml.exe` 使用 `C:\Program Files\WinShun` 的 Qt 运行时启动，真实 JSON-lines 协议的 `initialize` 返回 `ra9fael.diskview.qml / protocolVersion=1`，`action` 返回「磁盘透视已打开」。测试数据和配置使用独立目录。
 
 ## 已知限制
 
 - D: 开发目录的进程仍无法回收；路径相关的 Windows 行为根因未确定。失败时保护逻辑保留源文件。
 - 回收成功证据来自独立程序的真实 QML 弹窗与异步链路，尚未验证宿主加载 DLL 后的实际回收交互。
+- 已安装插件的鼠标回收及文件下拉框验证被断开的 Windows 桌面会话阻塞：`quser` 显示会话 1 为 `Disc`，`OpenInputDesktop` 返回空句柄及 Win32 错误 5，桌面截图返回 `screen grab failed`。需恢复可交互桌面后继续。
