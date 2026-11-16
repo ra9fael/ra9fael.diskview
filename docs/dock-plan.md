@@ -8,6 +8,15 @@
 - 宿主设置与四风格主题同步等待上游合并，本轮明确不做；窗口使用默认独立主题和本地扫描设置。插件 `settingsChanged`、`appearanceChanged` 暂不覆盖窗口。
 - 继续插件本身的相关验证、说明更新和 0.1.4 本地打包。不把宿主同步或管理员宿主实测写成已经完成。
 
+## 执行记录（2026-11-17）
+
+- 默认布局改为上下结构：上方一个 Dock 标签组收纳树视图、文件视图、扩展名视图，下方整宽显示可视化视图；`DockState::defaultLayout()` 与 `diskview-dock-tests` 同步更新。
+- 旧四种预设（tablesTop/Bottom/Left/Right）退役：`ScanSettings::chartLayout` 迁移为 `dock`，读取旧设置文件时自动落到 Dock 默认；工具栏保留"布局 自由 Dock"按钮（点击恢复默认 Dock）。
+- `DockWorkspace` 重构为"槽位容器 + 面板锚定"：每个 tab 组生成 body 容器，激活面板 `anchors.fill` 进容器，替代逐面板手写 x/y/width/height（对 ColumnLayout 面板不可靠）。
+- 修复 `Metrics` 单例未注册问题：`set_source_files_properties(QT_QML_SINGLETON_TYPE)` 必须在 `qt_add_qml_module` 之前调用，否则 qmldir 缺 `singleton` 标记，`metrics.*` 全部为 undefined（标签条、行高、状态栏一起塌陷）。
+- 自检适配：列手柄与列菜单检查在目标面板非激活标签时按"未显示"处理（`legend-not-shown`）；`--maximize` 接受 tree/files/legend/chart/tables。
+- 全套自检 PASS（拖拽合并、拖出、分割线、四面板最大化/还原、列宽、列菜单、持久化）；`diskview-dock-tests`、`diskview-scan-settings` 通过。
+
 ## 执行记录（2026-11-14）
 
 - 自由 Dock 已接入第五种布局模式，保留原四种预设；四个现有面板只移动父项，不复制扫描数据、不重建图表。
@@ -59,7 +68,7 @@
 - 分割线可拖动调比例；Tab 组可拖出。
 - 每个面板独立"全屏"：浮层 `z: 10000`，Esc 或还原按钮回到原位（问题 8 的解法）。
 - 布局保存到 `WS_DATA_DIR/diskview-qml.json` 的 `dockLayout` 键；"恢复默认布局"按钮。
-- 默认布局：左列 树+文件+扩展名 竖排，右侧 图表。
+- 默认布局（2026-11-17 更新，用户确认）：上方一个 Dock 标签组收纳树视图、文件视图、扩展名视图，下方整宽图表。
 
 ### 问题 4：方块/圆盘子元素默认描边
 
