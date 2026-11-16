@@ -1,6 +1,6 @@
 # 0.3.9 默认 Dock 布局：三视图同组在上，可视化视图在下
 
-本轮只做本地构建与验证；未发布 Release、未同步插件库、未跑安装升级链路。
+本轮只做本地构建、验证与本机插件安装；未发布 Release、未同步插件库。
 
 ## 变更
 
@@ -21,4 +21,4 @@
 
 - Mica 下的实际观感需真实 d3d11 宿主复核（截图为软件渲染路径）。
 - 旧版预设布局不再提供；保存过 `tablesTop` 等值的用户会看到新的默认 Dock，其 `dockLayout` 不受影响。
-- 未发布 Release、未同步插件库；本机安装与升级链路留到正式发布时执行。
+- 本机安装：`tools/package-qml.py --out dist` 生成 `dist/ra9fael.diskview.qml-0.3.9.wsplugin`（8 文件，3044 KB，SHA256 `e9c23b9e32ca56d2457caaa4a5aac43810b484760bce76fa1bec853747625adf`），`ws plugin install` 覆盖 0.3.8，`ws plugin list` 显示 `0.3.9 / on / ready`。未发布 Release、未同步插件库。
