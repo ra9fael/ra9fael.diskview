@@ -41,6 +41,7 @@
 #include <QQmlError>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QTimer>
 #include <QUrl>
 
@@ -217,11 +218,29 @@ bool QmlHost::load(QString* error)
         // its rc and picks it up through WM_SETICON. The resource is compiled
         // into this binary, so both editions show one icon.
         window->setIcon(QIcon(QStringLiteral(":/app.ico")));
+        // An alpha swap chain, so a see-through window background shows the
+        // Mica behind it instead of black. Qt drops the alpha from the format
+        // whenever the window colour turns opaque, so it is put back on every
+        // colour change. The software renderer has no swap chain.
+        if (QQuickWindow::graphicsApi() == QSGRendererInterface::Direct3D11) {
+            const auto keepAlpha = [window] {
+                QSurfaceFormat format = window->requestedFormat();
+                if (format.alphaBufferSize() < 8) {
+                    format.setAlphaBufferSize(8);
+                    window->setFormat(format);
+                }
+            };
+            keepAlpha();
+            connect(window, &QQuickWindow::colorChanged, window, keepAlpha);
+        }
         const auto applyTitleBarTheme = [this, window] {
             if (!m_theme) return;
             const BOOL darkAttribute = m_theme->dark() ? TRUE : FALSE;
             ::DwmSetWindowAttribute(reinterpret_cast<HWND>(window->winId()), 20,
                                     &darkAttribute, sizeof(darkAttribute));
+            // The main window only. ComboBox popups are their own windows and
+            // stay opaque.
+            m_theme->applyWindowBackdrop(reinterpret_cast<HWND>(window->winId()));
         };
         applyTitleBarTheme();
         connect(m_theme, &ThemeBridge::changed, this, applyTitleBarTheme);
@@ -1100,7 +1119,7 @@ void QmlHost::setAppearance(const QVariantMap& appearance)
 {
     if (m_theme) m_theme->setAppearance(appearance);
     if (auto* chart = window() ? window()->findChild<ChartItem*>(QStringLiteral("diskViewChart")) : nullptr) {
-        chart->setSurfaceToken(m_theme->surfaceAlt());
+        chart->setSurfaceToken(m_theme->backdrop() ? QColor() : m_theme->surfaceAlt());
         chart->setBorderToken(m_theme->border());
         chart->setNeutralToken(m_theme->textMuted());
         chart->setDimToken(m_theme->dark() ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));
@@ -1168,7 +1187,7 @@ void QmlHost::setTheme(const QString& theme) const
     if (auto* chart = window()->findChild<ChartItem*>(QStringLiteral("diskViewChart"))) {
         chart->setTheme(theme);
         if (m_theme) {
-            chart->setSurfaceToken(m_theme->surfaceAlt());
+            chart->setSurfaceToken(m_theme->backdrop() ? QColor() : m_theme->surfaceAlt());
             chart->setBorderToken(m_theme->border());
             chart->setNeutralToken(m_theme->textMuted());
             chart->setDimToken(m_theme->dark() ? QColor(QStringLiteral("#323232")) : QColor(QStringLiteral("#e8e8e8")));

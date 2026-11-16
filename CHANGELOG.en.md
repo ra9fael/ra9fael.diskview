@@ -1,5 +1,14 @@
 # Changelog
 
+## [QML 0.3.6] - 2026-11-16
+
+### Fixed
+- ComboBox text no longer gets clipped: the box now sizes to its widest entry and the Basic style's own left/right padding is cleared, so the text area is no longer eaten by double padding; the drive popup sizes to the longest row.
+- Scroll bars fade out while idle and reappear on hover.
+- Dock mode no longer repeats each pane's name in its header; the tab bar and the header title are mutually exclusive.
+- Tree view default column widths now fit inside the pane, so the name column is not squeezed on first open; dragging and auto-fit are unchanged.
+- The main window enables the Windows 11 Mica/acrylic backdrop when conditions allow (following the host's transparency setting and uiStyle), and falls back to opaque colours under software rendering, older Windows, or high contrast. Popup windows are left alone.
+
 ## [QML 0.3.5] - 2026-11-16
 
 ### Fixed

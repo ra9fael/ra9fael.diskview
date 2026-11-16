@@ -15,7 +15,6 @@ Item {
     property string target: ""
     property string edge: ""
     property point pointer
-    property bool showHeaders: true
     property var collapsedGroups: ({})
     signal maximizeRequested(string pane)
     signal persisted()
@@ -179,7 +178,6 @@ Item {
                     onClicked: workspace.maximizeRequested(region.modelData.active)
                     contentItem: Glyph { iconName: workspace.fullscreen === region.modelData.active ? "corners-in" : "corners-out"; size: 14; color: theme.textMuted }
                 }
-                Label { visible: workspace.showHeaders; text: workspace.title(region.modelData.active); font.family: Metrics.fontFamily; font.pixelSize: Metrics.caption; color: theme.textMuted; Layout.preferredWidth: 80 }
             }
             MouseArea {
                 anchors.fill: parent

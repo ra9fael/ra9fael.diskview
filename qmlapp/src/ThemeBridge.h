@@ -3,6 +3,8 @@
 #include <QColor>
 #include <QObject>
 #include <QVariantMap>
+
+#include <windows.h>
 #include <QtQml/qqmlregistration.h>
 
 // The window's whole look, as named tokens: every colour the QML and the chart
@@ -23,6 +25,10 @@ class ThemeBridge : public QObject {
     Q_PROPERTY(bool rounded READ rounded NOTIFY changed)
     // True when the host sent nativeLook and the window is drawing from it.
     Q_PROPERTY(bool native READ native NOTIFY changed)
+    // True when this window stands on Mica: the host asked for transparency,
+    // the machine can draw a system backdrop, and the window background is
+    // see-through. Translucent tokens are then drawn as the host sent them.
+    Q_PROPERTY(bool backdrop READ backdrop NOTIFY changed)
     Q_PROPERTY(QColor window READ window NOTIFY changed)
     Q_PROPERTY(QColor surface READ surface NOTIFY changed)
     Q_PROPERTY(QColor surfaceAlt READ surfaceAlt NOTIFY changed)
@@ -76,6 +82,7 @@ public:
     QString style() const { return m_style; }
     bool rounded() const { return m_rounded; }
     bool native() const { return m_native; }
+    bool backdrop() const { return m_backdrop; }
     QColor window() const { return m_window; }
     QColor surface() const { return m_surface; }
     QColor surfaceAlt() const { return m_surfaceAlt; }
@@ -128,6 +135,9 @@ public:
     // The host's appearance object (initialize's `appearance` or an
     // `appearance` notification), as a QVariantMap. Empty clears it.
     void setAppearance(const QVariantMap& appearance);
+    // Puts the system backdrop on the main window, or takes it off. Popup
+    // windows are left alone: Mica on a small transient window looks wrong.
+    void applyWindowBackdrop(HWND window) const;
     // The named Phosphor icon, as {text, family}; empty when the name is not
     // one of the bundled set (Glyph.qml then draws nothing, never a wrong
     // character from another font).
@@ -153,6 +163,10 @@ private:
     QString m_uiSize = QStringLiteral("normal");
     bool m_rounded = true;
     bool m_native = false;
+    bool m_backdrop = false;
+    // What the host asked for. Applied only when the machine can draw it.
+    bool m_transparency = false;
+    QString m_renderer;
     QVariantMap m_look;
     QColor m_window, m_surface, m_surfaceAlt, m_page, m_faint, m_pressed;
     QColor m_control, m_controlHover, m_controlBorder, m_menuBackground, m_menuHover, m_menuEdge, m_windowEdge;

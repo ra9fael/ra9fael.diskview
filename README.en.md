@@ -6,11 +6,11 @@ A QML disk-space viewer for WinShun. Explore a treemap or sunburst, hover for fu
 
 ## Install and update
 
-Obtain **ra9fael.diskview.qml-0.3.5.wsplugin** from the repository release or local dist/. Verify the adjacent .sha256 with PowerShell's Get-FileHash if desired. In WinShun, open Settings → Plugins → Installed → Add plugin → Archive. Enable the locally installed plugin and review its permissions. Installing the same id updates it after the host's replacement prompt and preserves the plugin data directory.
+Obtain **ra9fael.diskview.qml-0.3.6.wsplugin** from the repository release or local dist/. Verify the adjacent .sha256 with PowerShell's Get-FileHash if desired. In WinShun, open Settings → Plugins → Installed → Add plugin → Archive. Enable the locally installed plugin and review its permissions. Installing the same id updates it after the host's replacement prompt and preserves the plugin data directory.
 
 Version 0.2.0 adds `files:write` for Recycle Bin and permanent-delete actions. WinShun asks you to confirm this permission during upgrade.
 
-Version 0.3.1 improves light-theme contrast, percentage bars, column resizing, drive selection, address suggestions, and chart navigation. Version 0.3.2 restores WinShun surface roles, allows splitting a fully merged Dock group, and keeps table width fixed while resizing adjacent columns. Version 0.3.3 shows Dock direction controls, scopes filtering to the file view, and highlights chart items by extension. Version 0.3.4 permits scan-root actions, fixes narrow-Dock and Extension View resizing, and closes the column menu on pointer exit. Version 0.3.5 switches back to a drive ComboBox and aligns the fallback palette with WinShun's default theme.
+Version 0.3.1 improves light-theme contrast, percentage bars, column resizing, drive selection, address suggestions, and chart navigation. Version 0.3.2 restores WinShun surface roles, allows splitting a fully merged Dock group, and keeps table width fixed while resizing adjacent columns. Version 0.3.3 shows Dock direction controls, scopes filtering to the file view, and highlights chart items by extension. Version 0.3.4 permits scan-root actions, fixes narrow-Dock and Extension View resizing, and closes the column menu on pointer exit. Version 0.3.5 switches back to a drive ComboBox and aligns the fallback palette with WinShun's default theme. Version 0.3.6 fixes clipped ComboBox text, idle-fading scroll bars, duplicate Dock pane titles and tree column widths, and enables a Mica backdrop where supported.
 
 Version 0.2.0 adds **processes** for a short-lived scan helper. Windows administrator consent is separate. Uninstall through the host's plugin list. This native executable is outside the script-only community index.
 

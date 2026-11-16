@@ -3,7 +3,10 @@
 #include "Phosphor.h"
 
 #include <QGuiApplication>
+#include <QOperatingSystemVersion>
 #include <QPalette>
+#include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QWindow>
 
 #include <dwmapi.h>
@@ -31,6 +34,28 @@ QColor overColor(const QColor& translucent, const QColor& base)
         static_cast<int>(translucent.red() * a + base.red() * (1 - a)),
         static_cast<int>(translucent.green() * a + base.green() * (1 - a)),
         static_cast<int>(translucent.blue() * a + base.blue() * (1 - a)));
+}
+
+// Windows 11 22H2 is the first release that draws a system backdrop.
+bool systemBackdropSupported()
+{
+    static const bool supported = QOperatingSystemVersion::current() >= QOperatingSystemVersion::Windows11_22H2;
+    return supported;
+}
+
+// The same two checks WinShun makes: high contrast has no materials, and the
+// user can switch transparency off in the system settings.
+bool systemMaterialsEnabled()
+{
+    HIGHCONTRASTW contrast {sizeof contrast};
+    if (::SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof contrast, &contrast, 0)
+        && (contrast.dwFlags & HCF_HIGHCONTRASTON))
+        return false;
+    DWORD transparency = 1;
+    DWORD size = sizeof transparency;
+    ::RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                   L"EnableTransparency", RRF_RT_REG_DWORD, nullptr, &transparency, &size);
+    return transparency != 0;
 }
 
 } // namespace
@@ -157,6 +182,10 @@ void ThemeBridge::setAppearance(const QVariantMap& appearance)
     if (!family.trimmed().isEmpty()) m_fontFamily = family.trimmed();
     const QString corners = appearance.value(QStringLiteral("corners")).toString();
     if (!corners.isEmpty()) m_rounded = corners != QStringLiteral("square");
+    const QString transparency = appearance.value(QStringLiteral("transparency")).toString();
+    if (!transparency.isEmpty()) m_transparency = transparency == QStringLiteral("on");
+    const QString renderer = appearance.value(QStringLiteral("renderer")).toString();
+    if (!renderer.isEmpty()) m_renderer = renderer;
     if (m_look.contains(QStringLiteral("dark"))) m_dark = m_look.value(QStringLiteral("dark")).toBool();
     if (m_look.contains(QStringLiteral("rounded"))) m_rounded = m_look.value(QStringLiteral("rounded")).toBool();
     m_hostDark = m_dark;
@@ -194,8 +223,25 @@ void ThemeBridge::setLocalMode(int mode)
     emit changed();
 }
 
+void ThemeBridge::applyWindowBackdrop(HWND window) const
+{
+    if (!window) return;
+    // DWMSBT_MAINWINDOW is Mica; the liquid style stands on acrylic, the way
+    // WinShun's own windows do. 1 is no backdrop.
+    const int material = !m_backdrop ? 1 : (m_style == QStringLiteral("liquid") ? 3 : 2);
+    ::DwmSetWindowAttribute(window, 38, &material, sizeof material);
+}
+
 void ThemeBridge::apply()
 {
+    // Mica needs the host to ask for it, a graphics card (the software
+    // renderer has no alpha swap chain), Windows 11 22H2 and the system's own
+    // transparency left on. A local light/dark override drops the host look,
+    // so it drops the backdrop too.
+    m_backdrop = m_native && m_transparency && m_renderer == QStringLiteral("d3d11")
+                 && QQuickWindow::graphicsApi() == QSGRendererInterface::Direct3D11
+                 && systemBackdropSupported() && systemMaterialsEnabled();
+
     if (!m_native) {
         // No host tokens (the standalone launcher, or an old host): keep the
         // window's own light/dark table and the system accent.
@@ -266,44 +312,55 @@ void ThemeBridge::apply()
         return;
     }
 
-    // The host's own tokens, from the back of the window to the front.
+    // The host's own tokens, from the back of the window to the front. On
+    // Mica the window itself is see-through and the translucent tokens are
+    // painted as the host sent them, so the material shows through; otherwise
+    // they are flattened onto an opaque surface, which is what the contract
+    // asks of a plugin that draws its own window.
     QColor background = lookColor("background");
     if (!background.isValid()) background = fallbackColor("background", m_dark);
     QColor page = lookColor("page");
     if (!page.isValid()) page = fallbackColor("page", m_dark);
-    m_page = over(page, background);
-    m_window = over(background, m_page);
+    m_page = m_backdrop ? page : over(page, background);
+    m_window = m_backdrop ? QColor(0, 0, 0, 0) : over(background, m_page);
 
     QColor layer = lookColor("layer");
     if (!layer.isValid()) layer = fallbackColor("layer", m_dark);
     // WinShun paints its page/body with background and its chrome with layer.
-    m_surface = m_window;
-    m_surfaceAlt = over(layer, m_window);
+    const auto place = [this](const QColor& color, const QColor& onto) {
+        return m_backdrop ? color : over(color, onto);
+    };
+    // The body shows the material; chrome (toolbars, headers, the status
+    // bar) is the host's layer, translucent on Mica.
+    m_surface = m_backdrop ? background : m_window;
+    m_surfaceAlt = place(layer, m_window);
     m_control = lookColor("control");
     if (!m_control.isValid()) m_control = fallbackColor("control", m_dark);
-    m_control = over(m_control, m_surface);
+    m_control = place(m_control, m_surface);
     m_controlHover = lookColor("controlHover");
     if (!m_controlHover.isValid()) m_controlHover = lookColor("hover");
     if (!m_controlHover.isValid()) m_controlHover = fallbackColor("control", m_dark);
-    m_controlHover = over(m_controlHover, m_control);
+    m_controlHover = place(m_controlHover, m_control);
     m_controlBorder = lookColor("controlBorder");
     if (!m_controlBorder.isValid()) m_controlBorder = fallbackColor("controlBorder", m_dark);
-    m_controlBorder = over(m_controlBorder, m_surface);
+    m_controlBorder = place(m_controlBorder, m_surface);
     QColor hover = lookColor("hover");
     if (!hover.isValid()) hover = fallbackColor("hover", m_dark);
-    m_handleFill = over(hover, m_surfaceAlt);
-    m_hoverRow = over(hover, m_surface);
+    m_handleFill = place(hover, m_surfaceAlt);
+    m_hoverRow = place(hover, m_surface);
     QColor divider = lookColor("divider");
     if (!divider.isValid()) divider = fallbackColor("divider", m_dark);
-    m_border = over(divider, m_surface);
+    m_border = place(divider, m_surface);
     m_faint = lookColor("faint");
     if (!m_faint.isValid()) m_faint = fallbackColor("faint", m_dark);
     m_pressed = lookColor("pressed");
     if (!m_pressed.isValid()) m_pressed = fallbackColor("pressed", m_dark);
-    m_pressed = over(m_pressed, m_surface);
+    m_pressed = place(m_pressed, m_surface);
+    // Menus and the drive popup are their own windows and never get Mica, so
+    // they stay flattened onto an opaque surface either way.
     m_menuBackground = lookColor("menuBackground");
     if (!m_menuBackground.isValid()) m_menuBackground = fallbackColor("menuBackground", m_dark);
-    m_menuBackground = over(m_menuBackground, m_window);
+    m_menuBackground = over(m_menuBackground, background);
     m_menuHover = lookColor("menuHover");
     if (!m_menuHover.isValid()) m_menuHover = hover;
     if (!m_menuHover.isValid()) m_menuHover = fallbackColor("menuHover", m_dark);
@@ -315,7 +372,7 @@ void ThemeBridge::apply()
     m_windowEdge = lookColor("windowEdge");
     if (!m_windowEdge.isValid()) m_windowEdge = divider;
     if (!m_windowEdge.isValid()) m_windowEdge = fallbackColor("windowEdge", m_dark);
-    m_windowEdge = over(m_windowEdge, m_window);
+    m_windowEdge = over(m_windowEdge, background);
 
     m_text = lookColor("text");
     if (!m_text.isValid()) m_text = fallbackColor("text", m_dark);
@@ -326,7 +383,7 @@ void ThemeBridge::apply()
     QColor tag = lookColor("tagFill");
     if (!tag.isValid()) tag = lookColor("pressed");
     if (!tag.isValid()) tag = fallbackColor("tagFill", m_dark);
-    m_selection = over(tag, m_surface);
+    m_selection = m_backdrop ? tag : over(tag, m_surface);
 
     QColor accent = lookColor("accent");
     if (!accent.isValid()) accent = lookColor("accentFill");

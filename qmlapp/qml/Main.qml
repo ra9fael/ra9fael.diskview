@@ -13,7 +13,9 @@ ApplicationWindow {
     title: "Disk View"
     font.family: metrics.fontFamily
     // The whole window follows the host's light/dark choice; the chart reads
-    // the same switch so its greys and inks follow.
+    // the same switch so its greys and inks follow. On Mica the window itself
+    // is see-through (theme.window) and the page behind the panes is the
+    // host's background, which is translucent then.
     color: theme.window
     readonly property var themeTokens: theme
     readonly property var metrics: Metrics
@@ -25,7 +27,7 @@ ApplicationWindow {
     // The Basic style's controls take their colours from the palette; feeding
     // it the same tokens keeps a TextField, Button and ComboBox from staying
     // light in a dark WinShun.
-    palette.window: theme.window
+    palette.window: theme.backdrop ? theme.surface : theme.window
     palette.windowText: theme.text
     palette.base: theme.surface
     palette.alternateBase: theme.surfaceAlt
@@ -36,7 +38,7 @@ ApplicationWindow {
     palette.highlight: theme.accent
     palette.highlightedText: theme.accentText
     palette.placeholderText: theme.textMuted
-    palette.toolTipBase: theme.surface
+    palette.toolTipBase: theme.backdrop ? theme.surfaceAlt : theme.surface
     palette.toolTipText: theme.text
     palette.mid: theme.border
     palette.midlight: theme.border
@@ -76,16 +78,18 @@ ApplicationWindow {
     // dragged, and (where a click sorts) the sort key. Headers, rows and the
     // width budget all read this, so a column cannot drift out of step with its
     // own header.
+    // Defaults sum to 676, inside the tree pane a 1280 window gives it, so
+    // the name column is not squeezed on first open. A saved drag still wins.
     readonly property var treeColumnSpec: [
-        { key: "name", label: "文件夹 / 名称", width: 260, min: 140 },
-        { key: "pct", label: "% 父级", width: 82, min: 48 },
-        { key: "size", label: "大小", width: 84, min: 60, sort: 0 },
-        { key: "alloc", label: "已分配", width: 84, min: 64 },
-        { key: "items", label: "项目", width: 62, min: 52 },
-        { key: "files", label: "文件", width: 62, min: 52 },
-        { key: "dirs", label: "文件夹", width: 58, min: 48 },
-        { key: "modified", label: "修改时间", width: 118, min: 92, sort: 2 },
-        { key: "attributes", label: "属性", width: 64, min: 52 }
+        { key: "name", label: "文件夹 / 名称", width: 200, min: 140 },
+        { key: "pct", label: "% 父级", width: 64, min: 48 },
+        { key: "size", label: "大小", width: 72, min: 60, sort: 0 },
+        { key: "alloc", label: "已分配", width: 72, min: 64 },
+        { key: "items", label: "项目", width: 52, min: 52 },
+        { key: "files", label: "文件", width: 52, min: 52 },
+        { key: "dirs", label: "文件夹", width: 52, min: 48 },
+        { key: "modified", label: "修改时间", width: 100, min: 92, sort: 2 },
+        { key: "attributes", label: "属性", width: 52, min: 52 }
     ]
     readonly property var fileColumnSpec: [
         { key: "name", label: "名称", width: 240, min: 140 },
@@ -825,6 +829,12 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
+        Rectangle {
+            anchors.fill: parent
+            z: -1
+            color: theme.backdrop ? theme.surface : theme.window
+        }
+
         // ---- drive, path and scan controls -----------------------------
         Rectangle {
             Layout.fillWidth: true
@@ -837,7 +847,6 @@ ApplicationWindow {
                 // the system folder picker. Enter in the field starts the scan.
                 ThemedComboBox {
                     id: driveBox
-                    implicitWidth: 220
                     implicitHeight: 28
                     font.pixelSize: metrics.caption
                     model: appHost.drives()
@@ -866,11 +875,23 @@ ApplicationWindow {
                         function onCommittedPathChanged() { driveBox.sync() }
                     }
                     // The row carries the free-space detail next to the label,
-                    // and the popup stays wide enough for it.
+                    // and the popup is as wide as the longest of those rows.
+                    function rowText(drive) { return drive.label + "    " + drive.detail }
+                    // The delegate knows its own font and padding, so let it
+                    // report the width it actually needs. A hidden Text measured
+                    // with FontMetrics read short at startup and still elided.
+                    property real popupContentWidth: 16
+                    function reportRowWidth(w) {
+                        // An eliding label reports a constrained implicitWidth,
+                        // so add a generous margin for the padding and the
+                        // glyphs that measurement rounds down.
+                        if (w + 52 > popupContentWidth) popupContentWidth = w + 52
+                    }
                     delegate: ItemDelegate {
                         id: driveEntry
                         required property var modelData
                         required property int index
+                        width: ListView.view ? ListView.view.width : driveBox.width
                         height: 28
                         highlighted: driveBox.highlightedIndex === index
                         background: Rectangle {
@@ -879,17 +900,19 @@ ApplicationWindow {
                         }
                         contentItem: Label {
                             leftPadding: 8
-                            text: driveEntry.modelData.label + "    " + driveEntry.modelData.detail
+                            text: driveBox.rowText(driveEntry.modelData)
                             color: theme.text
+                            font.family: metrics.fontFamily
                             font.pixelSize: metrics.caption
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
+                            onImplicitWidthChanged: driveBox.reportRowWidth(implicitWidth)
                         }
                     }
                     popup: Popup {
                         popupType: Popup.Window
                         y: driveBox.height + 4
-                        width: 440
+                        width: Math.max(driveBox.width, driveBox.popupContentWidth + leftPadding + rightPadding)
                         padding: 4
                         implicitHeight: Math.min(contentItem.implicitHeight + 8, 320)
                         background: Rectangle {
@@ -905,7 +928,7 @@ ApplicationWindow {
                             currentIndex: driveBox.highlightedIndex
                             spacing: 2
                             boundsBehavior: Flickable.StopAtBounds
-                            ScrollBar.vertical: ScrollBar {}
+                            ScrollBar.vertical: StyledScrollBar {}
                         }
                     }
                 }
@@ -1140,6 +1163,7 @@ ApplicationWindow {
                         id: treePaneHeader
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                         title: "树视图"; iconName: "tree-structure"
+                        showTitle: window.chartLayout !== "dock"
                         maximized: window.maximizedPane === "tables"
                         collapsed: window.treeCollapsed
                         onMaximizeRequested: window.maximizePane("tables")
@@ -1456,6 +1480,7 @@ ApplicationWindow {
                             id: filePaneHeader
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                             title: "文件视图"; iconName: "rows"
+                            showTitle: window.chartLayout !== "dock"
                             maximized: window.maximizedPane === "tables"
                             collapsed: window.fileCollapsed
                             showFilter: true
@@ -1477,9 +1502,10 @@ ApplicationWindow {
                             color: theme.surfaceAlt
                             border.color: theme.border
                             RowLayout {
-                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 0
+                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 4
                                 Label {
                                     Layout.fillWidth: true
+                                    elide: Text.ElideRight
                                     text: "文件列表" + (fileListModel.wholeTree ? " · 整个扫描"
                                             : fileListModel.recursive ? " · 含子目录" : "")
                                     font.pixelSize: metrics.caption; font.weight: Font.DemiBold; color: theme.textMuted
@@ -1487,7 +1513,6 @@ ApplicationWindow {
                                 // Where the files come from: the folder the
                                 // chart is on, or the whole scan.
                                 ThemedComboBox {
-                                    implicitWidth: 76
                                     implicitHeight: 22
                                     model: ["当前", "整个扫描"]
                                     currentIndex: fileListModel.wholeTree ? 1 : 0
@@ -1528,7 +1553,6 @@ ApplicationWindow {
                                 // the path, or the fuzzy subsequence of the
                                 // name.
                                 ThemedComboBox {
-                                    implicitWidth: 62
                                     implicitHeight: 22
                                     model: ["子串", "模糊"]
                                     currentIndex: fileListModel.fuzzyMatch ? 1 : 0
@@ -1763,6 +1787,7 @@ ApplicationWindow {
                         id: legendPaneHeader
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                         title: "扩展名视图"; iconName: "tag"
+                        showTitle: window.chartLayout !== "dock"
                         maximized: window.maximizedPane === "tables"
                         collapsed: window.legendCollapsed
                         onMaximizeRequested: window.maximizePane("tables")
@@ -1970,6 +1995,7 @@ ApplicationWindow {
                 PaneHeader {
                     Layout.fillWidth: true
                     title: "可视化视图"; iconName: window.chartKind === 0 ? "squares-four" : "chart-donut"
+                    showTitle: window.chartLayout !== "dock"
                     maximized: window.maximizedPane === "chart"
                     collapsed: window.chartCollapsed
                     onMaximizeRequested: window.maximizePane("chart")
@@ -2109,7 +2135,6 @@ ApplicationWindow {
                     Label { text: "层级"; font.pixelSize: metrics.small; color: theme.textMuted }
                     ThemedComboBox {
                         id: depthBox
-                        implicitWidth: 76
                         implicitHeight: 26
                         model: ["自动", "1", "2", "3", "4", "5"]
                         currentIndex: chart.depth
@@ -2133,7 +2158,6 @@ ApplicationWindow {
                     Label { text: "布局"; font.pixelSize: metrics.small; color: theme.textMuted }
                     ThemedComboBox {
                         id: layoutBox
-                        implicitWidth: 104
                         implicitHeight: 26
                         model: ["表格在上", "图表在上", "表格在左", "图表在左", "自由 Dock"]
                         currentIndex: Math.max(0, ["tablesTop", "tablesBottom", "tablesLeft", "tablesRight", "dock"].indexOf(window.chartLayout))
@@ -2157,7 +2181,10 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     Rectangle {
                         anchors.fill: parent
-                        color: theme.surface
+                        // The chart paints its own tiles; the rectangle only
+                        // frames them, so on Mica it stays clear and the tiles
+                        // sit on the material.
+                        color: theme.backdrop ? "transparent" : theme.surface
                         border.color: theme.border
                         radius: 4
                         clip: true

@@ -10,6 +10,9 @@ Item {
     property bool collapsed: false
     property bool showFilter: false
     property bool showColumnsButton: false
+    // Dock mode already names the pane on its tab, so the header keeps only
+    // the controls and leaves the title out.
+    property bool showTitle: true
     property alias filterField: filterInput
     signal maximizeRequested()
     signal collapseRequested()
@@ -32,8 +35,9 @@ Item {
         anchors.leftMargin: metrics.pad / 2
         anchors.rightMargin: metrics.pad / 2
         spacing: 4
-        Glyph { iconName: root.iconName; size: metrics.icon; color: theme.accent }
+        Glyph { visible: root.showTitle; iconName: root.iconName; size: metrics.icon; color: theme.accent }
         Label {
+            visible: root.showTitle
             Layout.fillWidth: true
             text: root.title
             color: theme.text
