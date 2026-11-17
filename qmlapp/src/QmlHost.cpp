@@ -30,6 +30,7 @@
 
 #include <windows.h>
 #include <shlobj.h>
+#include <sherrors.h>
 #include <objbase.h>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -169,30 +170,34 @@ bool runDeleteOperation(const QString& path, bool permanent, QString* error)
     if (SUCCEEDED(hr)) { step = QStringLiteral("queue"); hr = operation->DeleteItem(item.Get(), sink.Get()); }
     if (SUCCEEDED(hr)) { step = QStringLiteral("perform"); hr = operation->PerformOperations(); }
     BOOL aborted = TRUE;
-    if (SUCCEEDED(hr)) { step = QStringLiteral("aborted"); hr = operation->GetAnyOperationsAborted(&aborted); }
-    const bool ok = SUCCEEDED(hr) && !aborted && sink->completed
-        && (permanent ? SUCCEEDED(sink->itemResult) : sink->recycled);
+    HRESULT abortedResult = E_PENDING;
+    if (SUCCEEDED(hr)) {
+        abortedResult = operation->GetAnyOperationsAborted(&aborted);
+    }
+    const bool ok = SUCCEEDED(hr) && SUCCEEDED(abortedResult) && !aborted && sink->completed
+        && (permanent ? SUCCEEDED(sink->itemResult) && sink->itemResult != S_FALSE : sink->recycled);
     if (!ok && error) {
         // The first failure is the interesting one: PerformOperations can
         // succeed while the single item was refused, and an unfinished sink
         // still holds E_PENDING.
-        const HRESULT failed = FAILED(hr) ? hr
-            : (sink->itemResult != E_PENDING ? sink->itemResult : hr);
-        const QString code = QStringLiteral("0x%1")
-            .arg(static_cast<quint32>(failed), 8, 16, QLatin1Char('0'));
-        // Which call failed is worth keeping: a shell-item failure means the
-        // path itself was rejected, a perform failure means Windows refused
-        // the operation on an otherwise valid item.
-        if (!permanent && sink->abortedAt == QStringLiteral("delete-without-recycle")) {
-            // We refused the operation ourselves: the shell was about to delete
-            // for good on a "move to the recycle bin" request.
-            *error = QStringLiteral("该位置无法移入回收站，未删除任何内容。"
-                                    "如确认不需要恢复，可改用「永久删除」。");
-        } else {
-            *error = QStringLiteral("%1（%2，Windows 错误 %3）")
-                .arg(permanent ? QStringLiteral("永久删除失败") : QStringLiteral("无法移入回收站"),
-                     step, code);
-        }
+        const HRESULT failure = sink->completed && FAILED(sink->itemResult) ? sink->itemResult : hr;
+        *error = permanent ? QStringLiteral("Windows 未确认完成永久删除。")
+                           : QStringLiteral("Windows 未确认完成回收。");
+        if (!permanent && failure == COPYENGINE_E_RECYCLE_SIZE_TOO_BIG)
+            *error = QStringLiteral("此文件超过该磁盘回收站当前可接收的容量。请调整回收站容量后重试。");
+        else if (failure == COPYENGINE_E_USER_CANCELLED || failure == COPYENGINE_E_CANCELLED || failure == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+            *error = QStringLiteral("操作已取消。");
+        else if (failure == E_ACCESSDENIED || failure == COPYENGINE_E_ACCESS_DENIED_SRC)
+            *error = QStringLiteral("访问被拒绝，请检查文件权限或在资源管理器中重试。");
+        *error += QFileInfo::exists(path) ? QStringLiteral(" 文件仍在原位置。")
+                                        : QStringLiteral(" 原路径已不存在，请在回收站或资源管理器中核对结果。");
+        *error += QStringLiteral("\n步骤：%1\n执行状态：0x%2\n单项状态：0x%3\n操作中止：%4\n可恢复目标：%5\n中止查询：0x%6")
+            .arg(step)
+            .arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'))
+            .arg(static_cast<quint32>(sink->itemResult), 8, 16, QLatin1Char('0'))
+            .arg(aborted ? QStringLiteral("是") : QStringLiteral("否"))
+            .arg(sink->recycled ? QStringLiteral("已确认") : QStringLiteral("未确认"))
+            .arg(static_cast<quint32>(abortedResult), 8, 16, QLatin1Char('0'));
     }
     sink.Reset();
     item.Reset();
@@ -1038,20 +1043,22 @@ bool QmlHost::runSelfTest(QString* report)
     const bool paused = m_options.scanPath.isEmpty() || m_pauseVerified;
     QString listDetail;
     const bool list = runListChecks(model, &listDetail);
-    // The rail button owns its menu: the same press has to open and close it,
-    // and the other panels' button has to switch the panel.
     QString columnsMenuToggleFail;
     {
+        QQmlExpression controls(m_engine.rootContext(), window, QStringLiteral("verifyFileControls()"));
+        const QString failure = controls.evaluate().toString();
+        if (controls.hasError() || !failure.isEmpty()) {
+            *report = QStringLiteral("FAIL\tfile-controls %1\n").arg(controls.hasError() ? controls.error().toString() : failure);
+            return false;
+        }
+        listDetail += QStringLiteral(",file-controls");
         QQmlExpression menuToggle(m_engine.rootContext(), window, QStringLiteral("verifyColumnsMenuToggle()"));
         if (menuToggle.hasError())
             columnsMenuToggleFail = menuToggle.error().toString();
         else
             columnsMenuToggleFail = menuToggle.evaluate().toString();
     }
-    // The same toggle through real mouse events: a click on the rail button
-    // opens the menu, the next click lands on the dismiss layer and closes
-    // it. The events go to the window, so they pass the real hit test.
-    if (auto* rail = window->findChild<QQuickItem*>(QStringLiteral("columnsButton:tree"))) {
+    if (auto* button = window->findChild<QQuickItem*>(QStringLiteral("columnsButton:tree"))) {
         const auto send = [&](QEvent::Type type, const QPointF& position) {
             QMouseEvent event(type, position, window->mapToGlobal(position.toPoint()), Qt::LeftButton,
                               type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
@@ -1062,17 +1069,17 @@ bool QmlHost::runSelfTest(QString* report)
             QQmlExpression expression(m_engine.rootContext(), window, QStringLiteral("columnsMenuShown()"));
             return !expression.hasError() && expression.evaluate().toBool();
         };
-        const QPointF center = rail->mapToScene(QPointF(rail->width() / 2, rail->height() / 2));
+        const QPointF center = button->mapToScene(QPointF(button->width() / 2, button->height() / 2));
         send(QEvent::MouseButtonPress, center);
         send(QEvent::MouseButtonRelease, center);
         const bool opened = shown();
-        send(QEvent::MouseButtonPress, center);
-        send(QEvent::MouseButtonRelease, center);
-        const bool closed = !shown();
-        if (!opened || !closed)
-            columnsMenuToggleFail += QStringLiteral("%1real-click opened=%2 closed=%3")
-                                         .arg(columnsMenuToggleFail.isEmpty() ? QString() : QStringLiteral(" "))
-                                         .arg(opened).arg(closed);
+        if (!opened) columnsMenuToggleFail = QStringLiteral("real-click did not open");
+        if (opened) {
+            const QPointF entry = button->mapToScene(QPointF(button->width() / 2, button->height() / 2));
+            send(QEvent::MouseButtonPress, entry);
+            send(QEvent::MouseButtonRelease, entry);
+            if (shown()) columnsMenuToggleFail = QStringLiteral("outside-click did not close");
+        }
     }
     if (viewFollows) {
         if (!listDetail.isEmpty()) listDetail += QStringLiteral(",view");

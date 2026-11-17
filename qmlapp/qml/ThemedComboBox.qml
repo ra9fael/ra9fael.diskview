@@ -13,7 +13,8 @@ import DiskViewPrototype
 ComboBox {
     id: box
 
-    implicitHeight: 26
+    implicitHeight: 28
+    property string labelPrefix: ""
     font.pixelSize: theme.fontSize
 
     // The text of entry i, as the box shows it.
@@ -51,8 +52,9 @@ ComboBox {
     // raises it. The floor matters: a box squeezed by a narrow toolbar used
     // to give its menu that same width, and every entry came out as "...".
     property real popupContentWidth: Math.max(widestText + 20, 80)
+    property string popupDetailRole: "detail"
 
-    implicitWidth: widestText + 9 + indicator.width + 8 + 2
+    implicitWidth: widestText + 9 + indicator.width + 8 + 2 + (labelPrefix.length ? 40 : 0)
 
     // The Basic style pads its control on both sides by default. Our label
     // carries its own padding, so without this the two stack and eat the whole
@@ -75,7 +77,7 @@ ComboBox {
     contentItem: Label {
         leftPadding: 9
         rightPadding: box.indicator.width + 8
-        text: box.displayText
+        text: box.labelPrefix + box.displayText
         color: theme.text
         font.pixelSize: box.font.pixelSize
         verticalAlignment: Text.AlignVCenter
@@ -95,19 +97,35 @@ ComboBox {
         required property var modelData
         required property int index
         width: ListView.view ? ListView.view.width : box.width
-        height: 26
+        height: box.popupDetailRole.length && modelData && modelData[box.popupDetailRole] !== undefined ? 42 : 26
         highlighted: box.highlightedIndex === index
         background: Rectangle {
             radius: theme.radius
             color: entry.highlighted ? theme.hoverRow : "transparent"
         }
         contentItem: Label {
-            leftPadding: 8
+            bottomPadding: entry.height > 26 ? 14 : 0
+            leftPadding: 28
             text: box.entryText(entry.index)
             color: theme.text
             font.pixelSize: box.font.pixelSize
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
+        }
+        Label {
+            anchors.left: parent.left
+            anchors.leftMargin: 28
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 3
+            visible: box.popupDetailRole.length && entry.modelData && entry.modelData[box.popupDetailRole] !== undefined
+            text: visible ? String(entry.modelData[box.popupDetailRole]) : ""
+            color: theme.textMuted
+            font.pixelSize: Metrics.small
+        }
+        Glyph {
+            x: 8; anchors.verticalCenter: parent.verticalCenter
+            visible: entry.index === box.currentIndex
+            iconName: "check"; size: 13; color: theme.accent
         }
     }
 

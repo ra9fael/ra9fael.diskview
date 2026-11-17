@@ -154,9 +154,7 @@ ApplicationWindow {
         const requested = requestedColumnWidths(panel)
         const keys = requested.keys
         const widths = requested.widths
-        // The table's rail takes its 26 px off the right edge before the
-        // columns are budgeted.
-        const available = Math.max(0, Math.floor(columnPane(panel).width - railWidth))
+        const available = Math.max(0, Math.floor(columnPane(panel).width))
         const total = requested.total
         if (total > available && total > 0) {
             const factor = available / total
@@ -183,7 +181,7 @@ ApplicationWindow {
         if (at < 0 || keys.length < 2 || !delta) return
         const neighborAt = at < keys.length - 1 ? at + 1 : at - 1
         const neighbor = keys[neighborAt]
-        const available = Math.max(0, Math.floor(columnPane(panel).width - railWidth))
+        const available = Math.max(0, Math.floor(columnPane(panel).width))
         const scale = requested.total > available && available > 0 ? requested.total / available : 1
         const requestedDelta = delta * scale
         const applied = Math.max(-requested.widths[key], Math.min(requested.widths[neighbor], requestedDelta))
@@ -269,7 +267,7 @@ ApplicationWindow {
         resizeColumn(panel, key, autoFitWidth(panel, key) - columnWidth(panel, key))
     }
     function tableContentWidth(panel) {
-        return Math.max(0, Math.floor(columnPane(panel).width - railWidth))
+        return Math.max(0, Math.floor(columnPane(panel).width))
     }
     // A column is drawn only while the fixed columns to its left still leave
     // the name column its minimum. That replaces the hand-tuned thresholds the
@@ -280,9 +278,6 @@ ApplicationWindow {
     }
     function gridColor() { return Qt.rgba(theme.border.r, theme.border.g, theme.border.b, 0.3) }
 
-    // The fixed 26 px strip on the right of every table, carrying that
-    // table's own column button.
-    readonly property int railWidth: 26
 
     // Which columns each table's user switched off. The name and the size
     // are locked: they are not in the menu, so they cannot leave. One map
@@ -339,6 +334,9 @@ ApplicationWindow {
     }
     function resetColumnWidths(panel) {
         columnStore(panel).resetAll()
+        const next = Object.assign({}, hiddenColumns)
+        next[panel] = []
+        hiddenColumns = next
         persistColumnWidths()
     }
     Timer {
@@ -354,13 +352,11 @@ ApplicationWindow {
         if (all.length <= 6) return all
         return [all[0], { name: "…", id: "", current: false }].concat(all.slice(all.length - 4))
     }
-    // The extension the legend picked lives in the model now, so the file
-    // list can filter on it too; the chart maps the "(无)" pick to its own
-    // sentinel.
+    // The extension highlight is independent of selection and file filtering.
     property string chartHighlightExtension: ""
     function chartHighlight() {
         if (chartHighlightExtension === "") return ""
-        return chartHighlightExtension.length ? chartHighlightExtension : "(none)"
+        return chartHighlightExtension
     }
     // Which picture the chart draws: 0 treemap, 1 sunburst. The startup value
     // is the host's default view; the toolbar switches it for this window.
@@ -543,7 +539,7 @@ ApplicationWindow {
         // A failure belongs where the user is looking: the dialog stays open
         // and says what went wrong instead of closing over a hidden notice.
         property string error: ""
-        title: destructiveDialog.permanent ? "永久删除" : "移至回收站"
+        title: destructiveDialog.error.length ? qsTr("操作未完成") : (destructiveDialog.permanent ? "永久删除" : "移至回收站")
         modal: true
         width: 480
         anchors.centerIn: Overlay.overlay
@@ -556,6 +552,7 @@ ApplicationWindow {
             spacing: 10
             Label {
                 Layout.fillWidth: true
+                visible: !destructiveDialog.error.length
                 text: destructiveDialog.permanent ? "此操作不可恢复，且不会进入回收站。"
                                                   : "项目将移入系统回收站，可以还原。"
                 color: destructiveDialog.permanent ? theme.error : theme.text
@@ -574,9 +571,23 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 visible: destructiveDialog.error.length > 0
-                text: destructiveDialog.error
+                text: destructiveDialog.error.split("\n")[0]
                 color: theme.error
                 wrapMode: Text.WordWrap
+                font.pixelSize: metrics.small
+            }
+            ToolButton {
+                visible: destructiveDialog.error.indexOf("\n") >= 0
+                text: checked ? qsTr("收起技术详情") : qsTr("技术详情")
+                checkable: true
+                id: errorDetailsButton
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: errorDetailsButton.visible && errorDetailsButton.checked
+                text: destructiveDialog.error.split("\n").slice(1).join("\n")
+                wrapMode: Text.WrapAnywhere
+                color: theme.textMuted
                 font.pixelSize: metrics.small
             }
             RowLayout {
@@ -592,13 +603,13 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 ThemedButton {
                     objectName: "destructiveCancel"
-                    text: "取消"
+                    text: destructiveDialog.error.length ? qsTr("关闭") : qsTr("取消")
                     enabled: !destructiveDialog.working
                     onClicked: destructiveDialog.close()
                 }
                 ThemedButton {
                     objectName: "destructiveConfirm"
-                    text: destructiveDialog.permanent ? "永久删除" : "移至回收站"
+                    text: destructiveDialog.error.length ? qsTr("重试") : (destructiveDialog.permanent ? "永久删除" : "移至回收站")
                     enabled: !destructiveDialog.working
                     onClicked: {
                         destructiveDialog.error = ""
@@ -627,6 +638,7 @@ ApplicationWindow {
         destructiveDialog.sizeText = nodeId.length ? diskModel.formatSize(diskModel.sizeForNode(nodeId)) : ""
         destructiveDialog.requestId += 1
         destructiveDialog.error = ""
+        errorDetailsButton.checked = false
         destructiveDialog.working = false
         destructiveDialog.open()
     }
@@ -707,8 +719,8 @@ ApplicationWindow {
             return
         }
         if (state === "columns-menu") {
-            columnsMenu.panel = "file"
-            columnsMenu.popup(fileRailButton, 0, fileRailButton.height)
+            dockState.activate("files")
+            window.toggleColumnsMenu("file", dockWorkspace.columnButton("files") || filePaneHeader)
             return
         }
         if (state === "preset-menu") {
@@ -752,7 +764,7 @@ ApplicationWindow {
             // What a refused recycle looks like: the dialog stays open with
             // the reason inside its frame, not a notice hidden behind it.
             window.askDestructive(contextMenu.targetPath, targetId, false)
-            destructiveDialog.error = "该位置无法移入回收站，未删除任何内容。如确认不需要恢复，可改用「永久删除」。"
+            destructiveDialog.error = "Windows 未完成回收，文件仍在原位置。可重试，或在资源管理器中检查该文件。\n单项状态：0x00270008\n操作中止：是\n可恢复目标：未确认"
         }
     }
     function acceptSuggestion(entry) {
@@ -848,78 +860,117 @@ ApplicationWindow {
         }
     }
 
-    // Each table's own column menu, opened from the rail on that table's
-    // right edge. Opening and closing belong to the rail button and the
-    // dismiss layer below, so the menu itself never closes on a click
-    // outside: a press on the rail button must close it, not fall through
-    // and open it again. Esc still closes it, and picking an entry closes
-    // it too. One Menu serves all three tables; `panel` picks whose
-    // columns it lists.
-    Menu {
+    Popup {
         id: columnsMenu
         property string panel: "tree"
-        closePolicy: Popup.CloseOnEscape
-        // One Repeater draws the whole menu: a Repeater's delegates land
-        // after the Menu's own items, which put the reset entry first.
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: 230
+        padding: 4
+        background: Rectangle { color: theme.surface; radius: theme.radius; border.color: theme.border }
+        // One repeater keeps each table's options in the same menu.
         readonly property var entries: {
             if (!panel.length) return []
             const rows = []
-            for (const column of window.columnSpec(panel).slice(1))
-                if (column.key !== "size") rows.push({ key: column.key, label: column.label })
-            rows.push({ reset: true, label: "─────────" })
-            rows.push({ reset: true, label: "列宽复位" })
+            for (const column of window.columnSpec(panel))
+                rows.push({ key: column.key, label: column.key === "name" ? column.label + "（始终显示）" : column.label })
+            rows.push({ reset: true, label: "恢复默认列" })
             return rows
         }
+        contentItem: Column {
         Repeater {
+            id: columnChoices
             model: columnsMenu.entries
-            delegate: MenuItem {
+            delegate: CheckDelegate {
+                id: columnChoice
                 required property var modelData
+                width: columnsMenu.width - 8
+                height: 30
+                focusPolicy: Qt.StrongFocus
                 text: modelData.label
-                enabled: !modelData.reset || modelData.label !== "─────────"
                 checkable: !modelData.reset
+                enabled: modelData.key !== "name"
                 checked: !modelData.reset && !window.columnHidden(columnsMenu.panel, modelData.key)
-                onTriggered: {
+                leftPadding: 28
+                rightPadding: 8
+                contentItem: Label {
+                    text: columnChoice.text
+                    color: columnChoice.enabled ? theme.text : theme.textMuted
+                    font.pixelSize: metrics.caption
+                    verticalAlignment: Text.AlignVCenter
+                }
+                indicator: Glyph {
+                    x: 7; y: (columnChoice.height - height) / 2
+                    iconName: "check"; size: 13
+                    visible: columnChoice.checked
+                    color: columnChoice.enabled ? theme.accent : theme.textMuted
+                }
+                background: Rectangle { radius: theme.smallRadius; color: parent.hovered ? theme.hoverRow : "transparent" }
+                onClicked: {
                     modelData.reset
                          ? window.resetColumnWidths(columnsMenu.panel)
                          : window.toggleColumn(columnsMenu.panel, modelData.key)
-                    columnsMenu.close()
                 }
             }
+        }
         }
     }
     // The four arrangements the window ships with, in the order of the
     // toolbar button's menu. Picking one applies a whole dock tree; dragging
     // any tab afterwards makes the layout custom and clears every tick.
+    component ChoiceMenuItem: MenuItem {
+        id: choice
+        implicitHeight: 30
+        leftPadding: 28
+        rightPadding: 10
+        contentItem: Label {
+            text: choice.text
+            color: choice.enabled ? theme.text : theme.textMuted
+            font.pixelSize: metrics.caption
+            verticalAlignment: Text.AlignVCenter
+        }
+        indicator: Glyph {
+            x: 7; y: (choice.height - height) / 2
+            iconName: "check"; size: 13
+            visible: choice.checked
+            color: theme.accent
+        }
+        background: Rectangle {
+            radius: theme.smallRadius
+            color: choice.highlighted ? theme.hoverRow : "transparent"
+        }
+    }
     Menu {
         id: presetMenu
         width: 220
-        closePolicy: Popup.CloseOnEscape
-        MenuItem {
+        padding: 4
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { radius: theme.radius; color: theme.surface; border.color: theme.border }
+        ChoiceMenuItem {
             text: "列表在上，图表在下"
             checkable: true
             checked: dockState.preset === "lists-top"
             onTriggered: dockState.applyPreset("lists-top")
         }
-        MenuItem {
+        ChoiceMenuItem {
             text: "列表在下，图表在上"
             checkable: true
             checked: dockState.preset === "lists-bottom"
             onTriggered: dockState.applyPreset("lists-bottom")
         }
-        MenuItem {
+        ChoiceMenuItem {
             text: "列表在左，图表在右"
             checkable: true
             checked: dockState.preset === "lists-left"
             onTriggered: dockState.applyPreset("lists-left")
         }
-        MenuItem {
+        ChoiceMenuItem {
             text: "列表在右，图表在左"
             checkable: true
             checked: dockState.preset === "lists-right"
             onTriggered: dockState.applyPreset("lists-right")
         }
         MenuSeparator { visible: dockState.preset.length === 0 }
-        MenuItem {
+        ChoiceMenuItem {
             visible: dockState.preset.length === 0
             enabled: false
             text: "当前布局：自定义"
@@ -950,24 +1001,21 @@ ApplicationWindow {
             return
         }
         columnsMenu.panel = panel
-        columnsMenu.popup(button, 0, button.height)
+        const at = button.mapToItem(window.contentItem, 0, button.height)
+        columnsMenu.parent = window.contentItem
+        columnsMenu.x = Math.max(0, Math.min(at.x, window.width - columnsMenu.width - 4))
+        columnsMenu.y = at.y
+        columnsMenu.open()
     }
     // The self-test drives the toggle directly: open, close, switch panels.
     // An empty string means every step behaved.
     function verifyColumnsMenuToggle() {
-        toggleColumnsMenu("tree", treeRailButton)
+        toggleColumnsMenu("tree", treePaneHeader)
         const opened = columnsMenu.visible && columnsMenu.panel === "tree"
-        toggleColumnsMenu("tree", treeRailButton)
+        toggleColumnsMenu("tree", treePaneHeader)
         const closed = !columnsMenu.visible
-        // In the dock layout each table's column button belongs to that table,
-        // and the other table's rail exists only while its tab is shown, so the
-        // cross-panel switch is checked on whichever rail is actually there.
-        const otherPanel = fileRailButton.visible ? "file" : (legendRailButton.visible ? "legend" : "")
-        let switched = true
-        if (otherPanel.length) {
-            toggleColumnsMenu(otherPanel, otherPanel === "file" ? fileRailButton : legendRailButton)
-            switched = columnsMenu.visible && columnsMenu.panel === otherPanel
-        }
+        toggleColumnsMenu("file", filePaneHeader)
+        const switched = columnsMenu.visible && columnsMenu.panel === "file"
         columnsMenu.close()
         const settled = !columnsMenu.visible
         return opened && closed && switched && settled ? "" : "opened=" + opened + " closed=" + closed + " switched=" + switched
@@ -975,6 +1023,30 @@ ApplicationWindow {
     // The C++ self-test asks only this; the real press goes through the
     // window and the dismiss layer.
     function columnsMenuShown() { return columnsMenu.visible }
+    function verifyFileControls() {
+        const savedScope = scopeBox.currentIndex
+        const savedMatch = matchBox.currentIndex
+        let ok = true
+        for (let i = 0; i < 3; ++i) {
+            scopeBox.activated(i)
+            ok = ok && fileListModel.wholeTree === (i === 2) && fileListModel.recursive === (i !== 0)
+        }
+        scopeBox.activated(savedScope)
+        matchBox.activated(1)
+        ok = ok && fileListModel.fuzzyMatch
+        matchBox.activated(savedMatch)
+        window.chartHighlightExtension = ".bin"
+        clearHighlightButton.clicked()
+        ok = ok && window.chartHighlightExtension === ""
+        toggleColumnsMenu("file", filePaneHeader)
+        const hidden = columnHidden("file", "pct")
+        const entry = columnChoices.itemAt(1)
+        if (entry) entry.clicked()
+        ok = ok && columnsMenu.visible && columnHidden("file", "pct") !== hidden
+        if (entry) entry.clicked()
+        columnsMenu.close()
+        return ok ? "" : "file controls failed"
+    }
     // A press anywhere outside an open column menu closes it. The layer sits
     // under the popup itself, so the menu's own entries still work, and the
     // rail button keeps its toggle: it is covered while the menu is open, so
@@ -1298,44 +1370,17 @@ ApplicationWindow {
                         onMaximizeRequested: window.maximizePane("tree")
                         onCollapseRequested: window.treeCollapsed = !window.treeCollapsed
                     }
-                    // The table's rail: that table's own column button, at the
-                    // top of a strip along the right edge. It never covers the
-                    // scrollbar, which lives inside the list, left of it.
-                    Rectangle {
-                        id: treeRail
-                        anchors.right: parent.right
-                        anchors.top: treePaneHeader.bottom
-                        anchors.bottom: parent.bottom
-                        width: window.railWidth
-                        visible: !window.treeCollapsed
-                        color: theme.surfaceAlt
-                        Rectangle {
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            width: 1
-                            color: theme.border
-                        }
-                        ToolButton {
-                            id: treeRailButton
-                            objectName: "columnsButton:tree"
-                            anchors.top: parent.top
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            width: window.railWidth
-                            height: metrics.headerRow
-                            ToolTip.visible: hovered
-                            ToolTip.text: "显示或隐藏列"
-                            onClicked: window.toggleColumnsMenu("tree", treeRailButton)
-                            contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
-                        }
-                    }
                     ColumnLayout {
-                        anchors.left: parent.left; anchors.right: treeRail.left; anchors.bottom: parent.bottom
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                         anchors.top: treePaneHeader.bottom
                         spacing: 0
                         visible: !window.treeCollapsed
                         Flickable {
                             id: treeHeader
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: window.toggleColumnsMenu("tree", treeHeader)
+                            }
                             Layout.fillWidth: true
                             Layout.preferredHeight: metrics.headerRow
                             Layout.minimumHeight: metrics.headerRow
@@ -1628,21 +1673,19 @@ ApplicationWindow {
                         Rectangle {
                             id: filePaneHeader
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                            height: metrics.paneHeader
+                            height: fileControls.implicitHeight + 12
                             color: theme.surfaceAlt
                             border.color: theme.border
                             property alias filterField: filterInput
                             // One height for every control in this bar: mixing
                             // implicit heights is what made the filter field
                             // and the two pickers sit at different baselines.
-                            readonly property int controlHeight: Math.max(20, height - 8)
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: metrics.pad / 2
-                                // Clear the column rail: a control under it
-                                // looks cut off and cannot be clicked.
-                                anchors.rightMargin: window.railWidth + metrics.pad / 2
-                                spacing: 6
+                            readonly property int controlHeight: 28
+                            Flow {
+                                id: fileControls
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                                anchors.margins: 6
+                                spacing: 8
                                 Label {
                                     visible: window.chartLayout !== "dock"
                                     text: "文件视图"
@@ -1653,15 +1696,14 @@ ApplicationWindow {
                                 TextField {
                                     id: filterInput
                                     objectName: "filterField"
-                                    Layout.fillWidth: true
-                                    Layout.minimumWidth: 60
-                                    Layout.maximumWidth: 260
+                                    width: Math.min(300, fileControls.width)
                                     Layout.alignment: Qt.AlignVCenter
                                     implicitHeight: filePaneHeader.controlHeight
                                     topPadding: 2
                                     bottomPadding: 2
                                     font.pixelSize: metrics.small
-                                    placeholderText: "筛选名称或文件…"
+                                    placeholderText: qsTr("搜索文件名或路径…")
+                                    Accessible.name: qsTr("搜索文件名或路径")
                                     selectByMouse: true
                                     onTextEdited: fileListModel.filter = text
                                 }
@@ -1675,42 +1717,21 @@ ApplicationWindow {
                                     // inherits that width.
                                     Layout.minimumWidth: implicitWidth
                                     Layout.alignment: Qt.AlignVCenter
-                                    model: ["当前", "整个扫描"]
-                                    currentIndex: fileListModel.wholeTree ? 1 : 0
+                                    labelPrefix: qsTr("范围：")
+                                    model: [
+                                        { label: "当前目录", detail: "只列出当前目录中的文件" },
+                                        { label: "当前目录及子目录", detail: "也列出下级目录中的文件" },
+                                        { label: "整个扫描", detail: "列出本次扫描中的全部文件" }
+                                    ]
+                                    textRole: "label"
+                                    popupContentWidth: 244
+                                    currentIndex: fileListModel.wholeTree ? 2 : (fileListModel.recursive ? 1 : 0)
                                     onActivated: {
-                                        fileListModel.wholeTree = (index === 1)
+                                        fileListModel.wholeTree = (index === 2)
+                                        fileListModel.recursive = (index !== 0)
+                                        scanSettings.fileRecursive = fileListModel.recursive
                                         scanSettings.wholeTree = fileListModel.wholeTree
                                         scanSettings.save()
-                                    }
-                                }
-                                // Walk the folder's subtree. Off by default: a
-                                // big folder's recursive listing is what made
-                                // the first paint slow.
-                                ToolButton {
-                                    id: recursiveButton
-                                    implicitWidth: filePaneHeader.controlHeight
-                                    implicitHeight: filePaneHeader.controlHeight
-                                    Layout.alignment: Qt.AlignVCenter
-                                    padding: 0
-                                    checkable: true
-                                    checked: fileListModel.recursive
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: "包含子目录（大目录会慢）"
-                                    onToggled: {
-                                        fileListModel.recursive = checked
-                                        scanSettings.fileRecursive = checked
-                                        scanSettings.save()
-                                    }
-                                    background: Rectangle {
-                                        radius: theme.smallRadius
-                                        color: recursiveButton.checked ? theme.selection : "transparent"
-                                        border.color: theme.border
-                                    }
-                                    contentItem: Glyph {
-                                        iconName: "folders"
-                                        size: 13
-                                        anchors.centerIn: parent
-                                        color: recursiveButton.checked ? theme.text : theme.textMuted
                                     }
                                 }
                                 // How loosely a text matches: a substring of
@@ -1721,7 +1742,13 @@ ApplicationWindow {
                                     implicitHeight: filePaneHeader.controlHeight
                                     Layout.minimumWidth: implicitWidth
                                     Layout.alignment: Qt.AlignVCenter
-                                    model: ["子串", "模糊"]
+                                    labelPrefix: qsTr("匹配：")
+                                    model: [
+                                        { label: "包含文字", detail: "按名称或路径查找" },
+                                        { label: "模糊匹配", detail: "按文件名字符顺序查找" }
+                                    ]
+                                    textRole: "label"
+                                    popupContentWidth: 210
                                     currentIndex: fileListModel.fuzzyMatch ? 1 : 0
                                     onActivated: {
                                         fileListModel.fuzzyMatch = (index === 1)
@@ -1731,42 +1758,18 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        // The file table's own rail with its own column menu.
-                        Rectangle {
-                            id: fileRail
-                            anchors.right: parent.right
-                            anchors.top: filePaneHeader.bottom
-                            anchors.bottom: parent.bottom
-                            width: window.railWidth
-                            color: theme.surfaceAlt
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                width: 1
-                                color: theme.border
-                            }
-                            ToolButton {
-                                id: fileRailButton
-                                objectName: "columnsButton:file"
-                                anchors.top: parent.top
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                width: window.railWidth
-                                height: metrics.headerRow
-                                ToolTip.visible: hovered
-                                ToolTip.text: "显示或隐藏列"
-                                onClicked: window.toggleColumnsMenu("file", fileRailButton)
-                                contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
-                            }
-                        }
                         ColumnLayout {
-                            anchors.left: parent.left; anchors.right: fileRail.left; anchors.bottom: parent.bottom
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                             anchors.top: filePaneHeader.bottom
                             spacing: 0
                         // Column headers, with the same drag strips as the
                         // tree table; widths live in fileColumns.
                         Flickable {
                             id: fileHeader
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: window.toggleColumnsMenu("file", fileHeader)
+                            }
                             Layout.fillWidth: true
                             Layout.preferredHeight: metrics.headerRow
                             Layout.minimumHeight: metrics.headerRow
@@ -1977,42 +1980,17 @@ ApplicationWindow {
                         onMaximizeRequested: window.maximizePane("legend")
                         onCollapseRequested: window.legendCollapsed = !window.legendCollapsed
                     }
-                    // The extension table's own rail and column menu.
-                    Rectangle {
-                        id: legendRail
-                        anchors.right: parent.right
-                        anchors.top: legendPaneHeader.bottom
-                        anchors.bottom: parent.bottom
-                        width: window.railWidth
-                        visible: !window.legendCollapsed
-                        color: theme.surfaceAlt
-                        Rectangle {
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            width: 1
-                            color: theme.border
-                        }
-                        ToolButton {
-                            id: legendRailButton
-                            objectName: "columnsButton:legend"
-                            anchors.top: parent.top
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            width: window.railWidth
-                            height: metrics.headerRow
-                            ToolTip.visible: hovered
-                            ToolTip.text: "显示或隐藏列"
-                            onClicked: window.toggleColumnsMenu("legend", legendRailButton)
-                            contentItem: Glyph { iconName: "list-numbers"; size: 15; color: theme.text }
-                        }
-                    }
                     ColumnLayout {
-                        anchors.left: parent.left; anchors.right: legendRail.left; anchors.bottom: parent.bottom
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                         anchors.top: legendPaneHeader.bottom
                         spacing: 0
                         visible: !window.legendCollapsed
                         Flickable {
                             id: legendHeader
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: window.toggleColumnsMenu("legend", legendHeader)
+                            }
                             Layout.fillWidth: true
                             Layout.preferredHeight: metrics.headerRow
                             Layout.minimumHeight: metrics.headerRow
@@ -2098,9 +2076,16 @@ ApplicationWindow {
                                 // (which also filters the file list), and the
                                 // extension of whatever the chart has
                                 // selected, so the panels point at each other.
-                                highlighted: (window.chartHighlightExtension === modelData.ext)
+                                highlighted: (window.chartHighlightExtension === (modelData.ext.length ? modelData.ext : "(none)"))
                                              || (diskModel.selectedExtension.length > 0 && diskModel.selectedExtension === modelData.ext)
-                                onClicked: window.chartHighlightExtension = window.chartHighlightExtension === modelData.ext ? "" : modelData.ext
+                                onClicked: {
+                                    const extension = modelData.ext.length ? modelData.ext : "(none)"
+                                    if (window.chartHighlightExtension === extension) {
+                                        window.chartHighlightExtension = ""
+                                    } else {
+                                        window.chartHighlightExtension = extension
+                                    }
+                                }
                                 contentItem: Item {
                                     RowLayout {
                                         anchors.fill: parent
@@ -2341,6 +2326,16 @@ ApplicationWindow {
                         contentItem: Glyph { iconName: "arrow-counter-clockwise"; size: 15; color: theme.text }
                     }
                     Item { Layout.fillWidth: true }
+                    ThemedButton {
+                        id: clearHighlightButton
+                        objectName: "clearExtensionHighlight"
+                        visible: window.chartHighlightExtension !== ""
+                        text: qsTr("高亮：%1 ×").arg(window.chartHighlightExtension === "(none)" ? qsTr("无扩展名") : window.chartHighlightExtension)
+                        Accessible.name: qsTr("取消扩展名高亮")
+                        onClicked: {
+                            window.chartHighlightExtension = ""
+                        }
+                    }
                     Label { text: "层级"; font.pixelSize: metrics.small; color: theme.textMuted }
                     ThemedComboBox {
                         id: depthBox
@@ -2457,7 +2452,14 @@ ApplicationWindow {
             state: dockState
             rowHeight: metrics.row
             fullscreen: window.maximizedPane
+            extensionHighlighted: window.chartHighlightExtension !== ""
             onMaximizeRequested: function(pane) { window.maximizePane(pane) }
+            onColumnsRequested: function(pane, button) {
+                window.toggleColumnsMenu(pane === "files" ? "file" : pane, button)
+            }
+            onClearHighlightRequested: {
+                window.chartHighlightExtension = ""
+            }
             onPersisted: {
                 scanSettings.dockLayout = JSON.stringify(dockState.layout)
                 dockSave.restart()
@@ -2500,6 +2502,14 @@ ApplicationWindow {
                         font.pixelSize: metrics.caption
                         font.weight: Font.DemiBold
                         elide: Text.ElideRight
+                    }
+                    ThemedButton {
+                        id: fullscreenColumnsButton
+                        visible: window.maximizedPane !== "chart"
+                        compactHeight: Math.max(20, metrics.paneHeader - 6)
+                        iconName: "columns"
+                        text: qsTr("显示列")
+                        onClicked: window.toggleColumnsMenu(window.maximizedPane === "files" ? "file" : window.maximizedPane, fullscreenColumnsButton)
                     }
                     ThemedButton {
                         objectName: "fullscreenRestoreButton"

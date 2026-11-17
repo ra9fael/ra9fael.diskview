@@ -26,8 +26,22 @@ Item {
     property var collapsedGroups: ({})
     // path -> body item, filled by the body repeater.
     property var bodies: ({})
+    function columnButton(pane) {
+        function find(item) {
+            if (item.objectName === "columnsButton:" + (pane === "files" ? "file" : pane) && item.visible) return item
+            for (const child of item.children || []) {
+                const found = find(child)
+                if (found) return found
+            }
+            return null
+        }
+        return find(workspace)
+    }
     signal maximizeRequested(string pane)
     signal persisted()
+    signal columnsRequested(string pane, var button)
+    signal clearHighlightRequested()
+    property bool extensionHighlighted: false
 
     function groupCollapsed(id) { return collapsedGroups[id] === true }
     function toggleGroup(id) {
@@ -224,6 +238,28 @@ Item {
                     }
                 }
                 Item { Layout.fillWidth: true }
+                ToolButton {
+                    visible: region.modelData.active === "legend" && workspace.extensionHighlighted
+                    text: qsTr("清除选择")
+                    onClicked: workspace.clearHighlightRequested()
+                }
+                ToolButton {
+                    id: columnsButton
+                    objectName: "columnsButton:" + (region.modelData.active === "files" ? "file" : region.modelData.active)
+                    visible: region.modelData.active !== "chart"
+                    implicitHeight: rowHeight
+                    text: qsTr("显示列")
+                    implicitWidth: 70
+                    Accessible.name: qsTr("显示或隐藏列")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("显示或隐藏列")
+                    onClicked: workspace.columnsRequested(region.modelData.active, columnsButton)
+                    contentItem: Row {
+                        spacing: 4
+                        Glyph { iconName: "columns"; size: 14; color: theme.textMuted }
+                        Label { text: columnsButton.text; color: theme.textMuted; font.pixelSize: Metrics.small }
+                    }
+                }
                 ToolButton {
                     implicitWidth: rowHeight; implicitHeight: rowHeight
                     ToolTip.visible: hovered
