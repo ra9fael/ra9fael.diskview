@@ -423,6 +423,23 @@ ApplicationWindow {
             maximizePane(id)
             passed = dockPanes[id].parent !== fullscreenSlot && passed
         }
+        dockWorkspace.dragged = "chart"
+        dockWorkspace.target = "tree"
+        const directions = ({top: "arrow-up", bottom: "arrow-down", left: "arrow-left",
+                             right: "arrow-right", center: "squares-four"})
+        let directionCount = 0
+        function checkDirections(item) {
+            if (item.visible && item.objectName.indexOf("dockDirection:") === 0) {
+                const edge = item.objectName.slice("dockDirection:".length)
+                passed = item.iconName === directions[edge] && !!item.resolved && passed
+                directionCount += 1
+            }
+            for (const child of item.children || []) checkDirections(child)
+        }
+        checkDirections(dockWorkspace)
+        passed = directionCount === 5 && passed
+        dockWorkspace.dragged = ""
+        dockWorkspace.target = ""
         dockState.layout = saved
         chartLayout = "dock"
         attachDockPanes()

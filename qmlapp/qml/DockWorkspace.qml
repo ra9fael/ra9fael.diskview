@@ -331,10 +331,17 @@ Item {
                             {e:"left",i:"arrow-left",x:4,y:40}, {e:"right",i:"arrow-right",x:76,y:40},
                             {e:"center",i:"squares-four",x:40,y:40}]
                     delegate: Rectangle {
+                        id: directionTarget
                         required property var modelData
                         x: modelData.x; y: modelData.y; width: 32; height: 32; radius: 3
                         color: workspace.edge === modelData.e ? theme.selection : "transparent"
-                        Glyph { anchors.centerIn: parent; iconName: dropPreview.modelData.i; size: 17; color: theme.accent }
+                        Glyph {
+                            objectName: "dockDirection:" + directionTarget.modelData.e
+                            anchors.centerIn: parent
+                            iconName: directionTarget.modelData.i
+                            size: 17
+                            color: theme.accent
+                        }
                     }
                 }
             }
