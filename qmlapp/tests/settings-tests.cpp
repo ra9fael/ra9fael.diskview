@@ -151,6 +151,8 @@ void testRoundTrip()
     saved.setWholeTree(true);
     saved.setChartDepth(4);
     saved.setChartLayout(QStringLiteral("tablesLeft"));
+    saved.setDefaultView(1);
+    saved.setFolderMenuEnabled(false);
     saved.setFontSize(14);
     saved.setTreeRowHeight(27);
     saved.setFileRowHeight(31);
@@ -172,6 +174,8 @@ void testRoundTrip()
     check(back.wholeTree(), "the whole-tree scope survives the round trip");
     check(back.chartDepth() == 4, "the chart depth survives the round trip");
     check(back.chartLayout() == QStringLiteral("dock"), "legacy layout settings migrate to Dock");
+    check(back.defaultView() == 1, "the default layout survives the round trip");
+    check(!back.folderMenuEnabled(), "the folder menu switch survives the round trip");
     check(back.fontSize() == 14, "the font size survives the round trip");
     check(back.treeRowHeight() == 27, "the tree row height survives the round trip");
     check(back.fileRowHeight() == 31, "the file row height survives the round trip");
@@ -223,6 +227,129 @@ void testFixtureModeDoesNotEnumerateVolumes()
     check(settings.excludedPaths().isEmpty(), "fixture defaults do not enumerate mounted volumes");
 }
 
+void testLegacyEmptyExclusionsAreSeededOnce()
+{
+    QTemporaryDir dir(QDir::current().filePath(QStringLiteral("dv-settings-exclusions-XXXXXX")));
+    check(dir.isValid(), "the legacy exclusion settings directory is usable");
+    if (!dir.isValid()) return;
+    ScopedDataDir scoped(dir.path());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("diskview-qml.json"));
+    {
+        QFile file(path);
+        check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "the legacy settings file is writable");
+        file.write(R"({"excludedPaths":[]})");
+    }
+
+    ScanSettings migrated;
+    check(migrated.load(), "the legacy settings file is read");
+    check(!migrated.excludedPaths().isEmpty(), "an old empty exclusion list receives the default system paths");
+    check(migrated.save(), "the seeded defaults and initialization marker are saved");
+
+    migrated.setExcludedPaths({});
+    check(migrated.save(), "an intentionally empty exclusion list is saved");
+    ScanSettings restored;
+    check(restored.load(), "the migrated settings are read back");
+    check(restored.excludedPaths().isEmpty(), "user-cleared defaults stay cleared after restart");
+}
+
+// The host sends choices as strings; the scanner and the window use numbers.
+// A value has to mean the same thing on the card and in the scan.
+void testHostChoices()
+{
+    check(ScanSettings::scanModeFromHost(QStringLiteral("auto")) == 0
+              && ScanSettings::scanModeFromHost(QStringLiteral("fast")) == 1
+              && ScanSettings::scanModeFromHost(QStringLiteral("ordinary")) == 2,
+          "the host's scan modes map to the scanner's three");
+    check(ScanSettings::scanModeToHost(0) == QStringLiteral("auto")
+              && ScanSettings::scanModeToHost(1) == QStringLiteral("fast")
+              && ScanSettings::scanModeToHost(2) == QStringLiteral("ordinary"),
+          "the scan modes map back to the host's names");
+    check(ScanSettings::workersFromHost(QStringLiteral("auto")) == 0
+              && ScanSettings::workersFromHost(QStringLiteral("4")) == 4,
+          "the host's worker counts map to the scanner's");
+    check(ScanSettings::workersToHost(0) == QStringLiteral("auto")
+              && ScanSettings::workersToHost(8) == QStringLiteral("8"),
+          "the worker counts map back to the host's names");
+    check(ScanSettings::mediaFromHost(QStringLiteral("auto")) == 0
+              && ScanSettings::mediaFromHost(QStringLiteral("ssd")) == 1
+              && ScanSettings::mediaFromHost(QStringLiteral("hdd")) == 2
+              && ScanSettings::mediaFromHost(QStringLiteral("network")) == 3,
+          "the host's media map to the scanner's");
+    check(ScanSettings::mediaToHost(3) == QStringLiteral("network")
+              && ScanSettings::mediaToHost(0) == QStringLiteral("auto"),
+          "the media map back to the host's names");
+    check(ScanSettings::previewIntervalFromHost(QStringLiteral("balanced")) == 1500
+              && ScanSettings::previewIntervalFromHost(QStringLiteral("less")) == 5000,
+          "the host's preview rates map to the two intervals");
+    check(ScanSettings::previewIntervalToHost(5000) == QStringLiteral("less")
+              && ScanSettings::previewIntervalToHost(1500) == QStringLiteral("balanced"),
+          "the preview intervals map back to the host's names");
+    check(ScanSettings::defaultViewFromHost(QStringLiteral("sunburst")) == 1
+              && ScanSettings::defaultViewFromHost(QStringLiteral("treemap")) == 0,
+          "the host's default views map to the window's two layouts");
+    check(ScanSettings::defaultViewToHost(1) == QStringLiteral("sunburst")
+              && ScanSettings::defaultViewToHost(0) == QStringLiteral("treemap"),
+          "the default views map back to the host's names");
+}
+
+// What the host sends wins over the file, key by key: a key it does not send
+// leaves the file's value alone, which is what keeps the local-only scan
+// parameters after they left the manifest.
+void testApplyHostSettings()
+{
+    QTemporaryDir dir(QDir::current().filePath(QStringLiteral("dv-settings-host-XXXXXX")));
+    check(dir.isValid(), "the host settings directory is usable");
+    if (!dir.isValid()) return;
+    ScopedDataDir scoped(dir.path());
+
+    ScanSettings settings;
+    settings.setScanMode(2);
+    settings.setWorkers(8);
+    settings.setMedia(2);
+    settings.setPreviewIntervalMs(5000);
+    settings.setDefaultView(0);
+    settings.setFolderMenuEnabled(true);
+    check(settings.save(), "the local settings of the host test are written");
+
+    // The manifest's three public keys arrive on every start; the advanced
+    // ones only when the user had set them on the card before the move.
+    settings.applyHostSettings({
+        {QStringLiteral("defaultView"), QStringLiteral("sunburst")},
+        {QStringLiteral("scanMode"), QStringLiteral("fast")},
+        {QStringLiteral("folderMenuEnabled"), false},
+        {QStringLiteral("workers"), QStringLiteral("4")},
+    });
+    check(settings.defaultView() == 1, "the host's default view reaches the window setting");
+    check(settings.scanMode() == 1, "the host's scan mode reaches the scanner");
+    check(!settings.folderMenuEnabled(), "the host's folder menu switch reaches the action");
+    check(settings.workers() == 4, "a worker count the host still sends wins over the file");
+    check(settings.media() == 2, "a media value the host no longer sends keeps the file's");
+    check(settings.previewIntervalMs() == 5000, "a preview rate the host no longer sends keeps the file's");
+
+    // The defaults the manifest declares arrive too, so an untouched card
+    // still means "automatic".
+    settings.applyHostSettings({
+        {QStringLiteral("defaultView"), QStringLiteral("treemap")},
+        {QStringLiteral("scanMode"), QStringLiteral("auto")},
+        {QStringLiteral("folderMenuEnabled"), true},
+    });
+    check(settings.defaultView() == 0, "the host's default layout is applied");
+    check(settings.scanMode() == 0, "the host's automatic scan mode is applied");
+    check(settings.folderMenuEnabled(), "the host's folder menu default is applied");
+    check(settings.workers() == 4, "the advanced parameters survive a host update that omits them");
+
+    // Applying the same values again changes nothing: the setters compare, so
+    // a host echo cannot bounce back to it.
+    int changes = 0;
+    QObject::connect(&settings, &ScanSettings::changed, [&changes] { ++changes; });
+    settings.applyHostSettings({
+        {QStringLiteral("defaultView"), QStringLiteral("treemap")},
+        {QStringLiteral("scanMode"), QStringLiteral("auto")},
+        {QStringLiteral("folderMenuEnabled"), true},
+    });
+    check(changes == 0, "an unchanged host setting does not report a change");
+}
+
 } // namespace
 
 int main()
@@ -233,6 +360,9 @@ int main()
     testExcludedPaths();
     testRoundTrip();
     testFixtureModeDoesNotEnumerateVolumes();
+    testLegacyEmptyExclusionsAreSeededOnce();
+    testHostChoices();
+    testApplyHostSettings();
     if (g_failures == 0) {
         std::cout << "PASS\n";
         return 0;

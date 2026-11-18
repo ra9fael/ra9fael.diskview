@@ -31,7 +31,7 @@ set_source_files_properties(qml/Metrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRU
 qt_add_qml_module(diskview-qml
     URI DiskViewPrototype
     VERSION 1.0
-    QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ThemedButton.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/PercentCell.qml qml/Metrics.qml qml/PathSuggestions.qml)
+    QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ThemedButton.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/PercentCell.qml qml/Metrics.qml qml/PathSuggestions.qml qml/SettingsContent.qml qml/SettingsWindow.qml)
 qt_add_resources(diskview-qml "diskview_qml_fixture"
     PREFIX "/fixtures"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
@@ -119,7 +119,7 @@ if(DISKVIEW_BUILD_PLUGIN)
     qt_add_qml_module(diskview-qml-app
         URI DiskViewPrototype
         VERSION 1.0
-        QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ThemedButton.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/PercentCell.qml qml/Metrics.qml qml/PathSuggestions.qml)
+        QML_FILES qml/Main.qml qml/PaneHeader.qml qml/StyledScrollBar.qml qml/ScanSettingsDialog.qml qml/ThemeSettingsDialog.qml qml/ScanIssuesDialog.qml qml/Glyph.qml qml/DockWorkspace.qml qml/ThemedComboBox.qml qml/ThemedButton.qml qml/ColumnHandle.qml qml/ColumnStore.qml qml/TableCell.qml qml/PercentCell.qml qml/Metrics.qml qml/PathSuggestions.qml qml/SettingsContent.qml qml/SettingsWindow.qml)
     qt_add_resources(diskview-qml-app "diskview_qml_fixture"
         PREFIX "/fixtures"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

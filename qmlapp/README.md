@@ -86,9 +86,9 @@ cmake --build qmlapp/build
 `-DDISKVIEW_BUILD_PLUGIN=ON` 时额外产出宿主用的两段式插件（与 WinShun 自带的 `winshun.capture`、`ra9fael.binarylab-qml` 同一套做法）：
 
 - `diskview-qml.exe`：无 Qt、静态 CRT 的启动器（`qmlapp/stub/main.cpp`），读 `WS_APP_DIR`、把宿主的文件夹加进 DLL 搜索路径，加载同目录的 `DiskViewQmlApp.dll`；
-- `DiskViewQmlApp.dll`：跑在 Qt 上（`qmlapp/src/plugin_main.cpp`），`QGuiApplication` 留在主线程，`winshun::Plugin::serve()` 在工作线程，`query`/`action`/`appearance`/`shutdown` 都接上了；窗口就是现有的 `QmlHost`。
+- `DiskViewQmlApp.dll`：跑在 Qt 上（`qmlapp/src/plugin_main.cpp`），`QGuiApplication` 留在主线程，`winshun::Plugin::serve()` 在工作线程，`query`/`action`/`settingsChanged`/`showSettings`/`appearance`/`shutdown` 都接上了；窗口就是现有的 `QmlHost`，查看器和设置窗口共用同一个 `ScanSettings`。
 
-产物在 `build-plugin/plugin/`。`tools/package-qml.py` 打包成 `dist/ra9fael.diskview.qml-<版本>.wsplugin`（1 MB），`tools/verify/smoke-plugin-qml.py` 用真实协议验证（查询、打开、扫描、主题、关闭）。
+产物在 `build-plugin/plugin/`。`tools/package-qml.py` 打包成 `dist/ra9fael.diskview.qml-<版本>.wsplugin`（1 MB），`tools/verify/smoke-plugin-qml.py` 用真实协议验证（查询、打开、扫描、设置窗口、设置回写、文件夹菜单、主题、关闭）。它自己找 `WS_APP_DIR`：先看环境变量，再看可执行文件旁边，最后看 PATH 里带 `Qt6Core.dll` 的目录。无人值守的会话拿不到前台，窗口收不到鼠标输入，所以设置窗口的「应用」由一个已登记在文档里的 `WS_SETTINGS_APPLY=1` 触发——走的是同一个按钮处理函数。
 
 **只补宿主缺的**：宿主的 Qt 本身很全（Core/Gui/Qml/Quick、Layouts、Templates、各样式都在），唯一缺的是 `qml/QtQuick/Controls` 顶层——那一层只有 `qmldir` + `qtquickcontrols2plugin.dll` + `plugins.qmltypes` 三个文件（约 42 KB），模块本体在宿主的 `Qt6QuickControls2.dll` 里。所以包**不复制任何 Qt DLL**，只把这 3 个文件放到 `qml/QtQuick/Controls/`，`runtime.qt` 保持 `"host"`。整个包 1 MB、7 个文件。
 
@@ -101,9 +101,9 @@ cmake --build qmlapp/build
 - 提权不可能：受限令牌下 UAC 连提示都不会出现，`runas` 直接失败。所以插件的快扫 helper 不会启动——`ScanService` 先用 `TokenRestrictedSids` 探出受限令牌，直接退回普通遍历，底栏写明原因；独立运行时快扫照旧按需提权。
 - 进程内存有上限（`plugin.json` 的 `memoryMB`，声明上限 2048）：`C:\` 这种 500 万文件的树必须省着用。模型不再为每个节点存路径和扩展名（按父链现算），名字只留一份（直接接管扁平树里的那份，不再逐节点复制），`flatten` 边读边清空扫描器自己的节点，预览快照合并、并在树超过 50 万节点后停发（`ScanOptions::previewNodeLimit`，原生版默认 0 不受影响）；扫描线程整体包了 try/catch——内存不够时窗口显示「扫描中断」，而不是整个插件进程崩掉。实测普通遍历 `C:\`（4 工作线程，约 4.73M 文件 / 867k 目录），启用完整自检后峰值工作集约 1405 MB、峰值提交约 1690 MB；在 2048 MB 作业内存上限下完整扫描 + 自检通过。
 
-首次运行（还没有设置文件时）默认排除各固定盘的 `System Volume Information`、`$Recycle.Bin` 与 `Recovery`。
+首次运行及升级时尚未初始化排除列表的旧配置，默认排除各固定盘的 `System Volume Information`、`$Recycle.Bin` 与 `Recovery`。默认列表只补入一次；之后在设置里删除或清空并应用，会按用户选择保留。
 
-**设置归属**：`scanMode` / `workers` / `media` / `preview` 由宿主的插件设置页展示和持久化（`plugin.json` 里声明，`settingsChanged` 会即时推给已打开的窗口，此时窗口内的设置对话框对这四项只显示说明文字）。排除路径没有对应的宿主设置类型，仍留在 `diskview-qml.json`。
+**设置归属**：`defaultView` / `scanMode` / `folderMenuEnabled` 由宿主的插件设置页展示和持久化（`plugin.json` 里声明）。宿主下发时按 key 覆盖本地值，窗口里改这三项会通过 `winshun/settings/update` 回写宿主，宿主校验、保存后再以 `settingsChanged` 推回，两边显示同一个值；回写只发生在用户点「应用」时，宿主下发不会再次回发。`workers` / `media` / `preview` 已从清单移出，改由插件保存：宿主若仍带着用户以前存下的值就照用，没有就保留 `diskview-qml.json` 里的值。排除路径、最近路径、Dock 布局、列宽与视觉状态一直留在本地文件。
 
 ## 独立运行包
 
@@ -125,6 +125,7 @@ wrapper 的命令行：
 | `--screenshot <路径>` | 延时后抓图并退出 |
 | `--delay <毫秒>` | 抓图前的等待时间，默认 1200 |
 | `--settings` | 启动即打开扫描设置对话框 |
+| `--settings-window` | 只打开设置窗口（与宿主卡片上的「设置」同一个窗口），不建扫描器、不读磁盘树 |
 | `--pause` | 启动即扫描并把扫描按住不放，用于看「扫描已暂停」的样子 |
 | `--self-test` | 跑命中/变换/导航自检并打印制表符分隔的报告 |
 | `--bench-chart <节点数>` | 造一棵该规模的树，量图表全链路耗时并退出 |
@@ -146,15 +147,20 @@ wrapper 的可执行文件同时是管理员快扫 helper：`--scan-helper <盘�
 
 `ScanSettings` 把设置存在 `diskview-qml.json`（位置取 `WS_DATA_DIR`，否则 `QStandardPaths::AppDataLocation`）。文件名与原生插件的 `diskview.json` 刻意不同，因为两个插件要并存安装，各读各的。
 
-| 设置 | 取值 | 说明 |
-| --- | --- | --- |
-| 扫描方式 | 自动 / 快扫（MFT，需管理员）/ 普通遍历 | 自动 = 能用 MFT 就用，不能就退回普通遍历 |
-| 并发上限 | 自动 / 1 / 2 / 4 / 8 | 自动时由扫描器决定；填别的数会吸附到最近的一档 |
-| 介质策略 | 自动检测 / SSD / 机械硬盘 / 网络目录 | 传给扫描器的 `ScanOptions::Media` |
-| 预览发布 | 平衡（1.5s）/ 更少更新（5s） | 局部快照的发布间隔；树超过 50 万节点后不再发布，避免整树副本 |
-| 排除路径 | 路径列表 | 扫描时跳过的目录 |
+宿主卡片上的「设置」按钮、搜索框里的「磁盘透视设置」和查看器工具栏的「扫描设置」显示同一份内容（`SettingsContent.qml`）：前者是顶层窗口（`SettingsWindow.qml`，没有扫描器和磁盘树），后两者是查看器里的对话框。
 
-设置只影响下一次扫描，当前结果不变。对话框是草稿式的：改动先落在对话框的副本上，点「确定」才写回，点「取消」什么都不改。对话框里有一个「确定后立即重新扫描」勾选项，勾上就当场用新设置重扫一次。
+| 设置 | 归属 | 取值 | 说明 |
+| --- | --- | --- | --- |
+| 默认视图 | 宿主 | 方块图 / 圆盘图 | 新窗口先用哪种画法；浏览时切换视图不改这里 |
+| 扫描方式 | 宿主 | 自动 / 快扫（MFT，需管理员）/ 普通遍历 | 自动 = 能用 MFT 就用，不能就退回普通遍历 |
+| 文件夹右键菜单 | 宿主 | 开 / 关 | 文件夹结果的右键菜单里是否出现「分析文件夹占用」 |
+| 并发上限 | 插件 | 自动 / 1 / 2 / 4 / 8 | 自动时由扫描器决定；填别的数会吸附到最近的一档 |
+| 介质策略 | 插件 | 自动检测 / SSD / 机械硬盘 / 网络目录 | 传给扫描器的 `ScanOptions::Media` |
+| 预览发布 | 插件 | 平衡（1.5s）/ 更少更新（5s） | 局部快照的发布间隔；树超过 50 万节点后不再发布，避免整树副本 |
+| 小文件聚合 | 插件 | 不聚合 / 16 KB / 64 KB / 256 KB / 1 MB | 小于阈值的文件按目录折成一行 |
+| 排除路径 | 插件 | 路径列表 | 扫描时跳过的目录 |
+
+设置只影响下一次扫描，当前结果不变。两处入口都是草稿式的：改动先落在控件上，点「应用」才写回并回写宿主，点「取消」（或直接关掉设置窗口）什么都不改；应用本身从不启动扫描。要马上用新参数重扫，查看器对话框里有单独的「用新设置重新扫描」按钮，没有扫描目标或扫描进行中时不可用。
 
 ## 扫描控制
 

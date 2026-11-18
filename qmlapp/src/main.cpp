@@ -76,6 +76,10 @@ int main(int argc, char** argv)
         QTextStream(stdout) << QmlHost::usage();
         return 0;
     }
+    // The settings window is the whole window: no scanner, no disk tree.
+    if (options.settingsWindow) {
+        options.settingsOnly = true;
+    }
 
     QmlHost host(options);
     if (!host.load(&error)) {
@@ -125,7 +129,7 @@ int main(int argc, char** argv)
         if (!options.holdWindow) app.exit(code);
     };
 
-    if (options.openSettings) {
+    if (options.openSettings && !options.settingsWindow) {
         if (!host.openSettingsDialog(&error)) {
             QTextStream(stderr) << "error: " << error << "\n";
             return 5;

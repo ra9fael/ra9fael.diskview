@@ -6,8 +6,8 @@
 // and runs the protocol on a worker, the same split WinShun's own
 // winshun.capture and ra9fael.binarylab-qml use.
 //
-// The window itself is the existing QmlHost: this file only maps the protocol
-// onto it.
+// Two windows share one settings object: the viewer and the settings window
+// the host's card button opens. The protocol thread never touches either.
 
 #include "QmlHost.h"
 #include "ScanService.h"
@@ -24,12 +24,14 @@
 #include <QQuickWindow>
 #include <QThread>
 #include <QTimer>
+#include <QVariantMap>
 
 #include <windows.h>
 
 #include <cstdio>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -41,16 +43,88 @@ std::string tr(bool zh, const char* chinese, const char* english)
     return zh ? chinese : english;
 }
 
-// plugin.json's defaultView: anything but "sunburst" opens on the treemap.
-int defaultViewMode(const winshun::Json& settings)
+QString fromUtf8(const std::string& text)
 {
-    const winshun::Json& v = settings["defaultView"];
-    return v.isString() && v.toString() == "sunburst" ? 1 : 0;
+    return QString::fromStdString(text);
 }
 
-// One row per fixed drive, then the row that opens the window; the same shape
-// the native plugin answers with, so the launcher looks unchanged.
-winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
+// The host's settings object as the plain map ScanSettings reads. The plugin
+// SDK speaks its own JSON; Qt's reader is right here and does the nesting.
+QVariantMap fromJson(const winshun::Json& value)
+{
+    const QJsonDocument document = QJsonDocument::fromJson(QString::fromStdString(value.dump()).toUtf8());
+    return document.toVariant().toMap();
+}
+
+winshun::Json fromVariant(const QVariant& value)
+{
+    switch (value.typeId()) {
+    case QMetaType::Bool:
+        return winshun::Json(value.toBool());
+    case QMetaType::Int:
+    case QMetaType::LongLong:
+        return winshun::Json(value.toLongLong());
+    case QMetaType::Double:
+        return winshun::Json(value.toDouble());
+    default:
+        return winshun::Json(value.toString().toStdString());
+    }
+}
+
+// The window, owned by the GUI thread. Opening and closing is marshalled onto
+// that thread; the protocol thread never touches a widget.
+QmlHost* g_host = nullptr;
+QWindow* g_window = nullptr;
+// The settings window: its own window, without the scanner or the disk tree.
+QmlHost* g_settingsHost = nullptr;
+QWindow* g_settingsWindow = nullptr;
+// Where the host's QtQuick modules live: WinShun's qml folder.
+QStringList g_importPaths;
+// The last appearance object and theme string from the host, kept as JSON so a
+// window opened later still matches WinShun before the next notification.
+QString g_appearanceJson = QStringLiteral("{}");
+QString g_theme = QStringLiteral("light");
+std::atomic<bool> g_closing{false};
+
+// The settings both windows read, and the bridge the settings window writes
+// the host's keys back through. GUI thread only; they outlive every window.
+ScanSettings* g_settings = nullptr;
+class SettingsBridge* g_settingsBridge = nullptr;
+
+// What the folder menu acts on, as the protocol thread sees it: the host's
+// switch when it sent one, the local value otherwise.
+std::atomic<bool> g_folderMenuOn{true};
+
+// The host's public settings go back to WinShun, which validates them against
+// the manifest, stores them and answers through settingsChanged. Only the keys
+// the user changed are sent, and only from here: nothing else re-enters the
+// host, so a host update cannot bounce back to it.
+class SettingsBridge : public QObject {
+    Q_OBJECT
+public:
+    explicit SettingsBridge(winshun::Plugin* plugin) : m_plugin(plugin) {}
+
+    // The plugin outlives this object by a moment at shutdown; the pointer is
+    // dropped there so a late call cannot reach a destroyed plugin.
+    void forgetPlugin() { m_plugin = nullptr; }
+
+    Q_INVOKABLE void applyPublic(const QVariantMap& values)
+    {
+        if (!m_plugin || values.isEmpty()) return;
+        winshun::Json patch(winshun::Json::Object{});
+        for (auto it = values.begin(); it != values.end(); ++it)
+            patch.set(it.key().toStdString(), fromVariant(it.value()));
+        m_plugin->updateSettings(patch);
+    }
+
+private:
+    winshun::Plugin* m_plugin;
+};
+
+// One row per fixed drive, then the last target when there is one, the row
+// that opens the window and the settings entry; the same shape the native
+// plugin answers with, so the launcher looks unchanged.
+winshun::Items emptyItems(bool zh, const std::wstring& lastPath, bool folderMenuOn)
 {
     winshun::Items items;
     int score = 100;
@@ -69,18 +143,35 @@ winshun::Items emptyItems(bool zh, const std::wstring& lastPath)
         items.push_back(std::move(item));
     }
 
-    std::string title = tr(zh, "打开磁盘透视", "Open Disk View");
     std::string subtitle = tr(zh, "Enter 打开窗口 · 输入 disk <路径> 可直接开始扫描，如 disk D:\\工作",
                               "Enter opens the window · type disk <path> to scan right away, e.g. disk D:\\work");
-    if (!lastPath.empty()) {
-        subtitle += tr(zh, " · 上次：", " · last: ") + winshun::utf8(lastPath);
-        title += tr(zh, " · 上次扫描 ", " · last scan ") + winshun::utf8(lastPath);
+    if (folderMenuOn) {
+        subtitle += tr(zh, " · 文件夹右键可直接分析", " · a folder's menu analyzes it");
     }
-    winshun::Item open("disk.open", title, subtitle);
+    winshun::Item open("disk.open", tr(zh, "打开磁盘透视", "Open Disk View"), subtitle);
     open.withIcon("color:#0F766E")
         .withScore(50)
         .withData(winshun::Json(winshun::Json::Object{{"kind", "open"}, {"path", ""}}));
     items.push_back(std::move(open));
+
+    if (!lastPath.empty()) {
+        const std::string last = winshun::utf8(lastPath);
+        winshun::Item recent("disk.recent",
+                             tr(zh, "上次扫描 · ", "Last scan · ") + last,
+                             tr(zh, "Enter 打开窗口并重新扫描这个路径", "Enter opens the window and scans this path again"));
+        recent.withIcon("color:#0F766E")
+            .withScore(60)
+            .withData(winshun::Json(winshun::Json::Object{{"kind", "open"}, {"path", last}}));
+        items.push_back(std::move(recent));
+    }
+
+    winshun::Item settings("disk.settings", tr(zh, "磁盘透视设置", "Disk view settings"),
+                           tr(zh, "扫描方式、默认视图、排除路径与高级参数",
+                              "Scan mode, default view, exclusions and advanced parameters"));
+    settings.withIcon("color:#185FA5")
+        .withScore(40)
+        .withData(winshun::Json(winshun::Json::Object{{"kind", "settings"}}));
+    items.push_back(std::move(settings));
 
     const std::string usage = "disk C:\\";
     winshun::Item help("disk.help", usage,
@@ -115,44 +206,23 @@ winshun::Items pathItems(const std::string& text, bool zh)
     return items;
 }
 
-QString fromUtf8(const std::string& text)
-{
-    return QString::fromStdString(text);
-}
-
-// The window, owned by the GUI thread. Opening and closing is marshalled onto
-// that thread; the protocol thread never touches a widget.
-QmlHost* g_host = nullptr;
-QWindow* g_window = nullptr;
-// Where the host's QtQuick modules live: WinShun's qml folder.
-QStringList g_importPaths;
-// The last appearance object and theme string from the host, kept as JSON so a
-// window opened later still matches WinShun before the next notification.
-QString g_appearanceJson = QStringLiteral("{}");
-QString g_theme = QStringLiteral("light");
-// The host's settings, kept for windows that are opened later.
-std::atomic<bool> g_closing{false};
-
 struct WindowRequest {
     QString path;
-    int viewMode = 0;
-    QString settingsFile;
 };
 
 // Runs on the GUI thread: creates the window, and starts the scan when a path
-// came with the request.
+// came with the request. A scan already running refuses the retarget instead of
+// reporting an open that did not happen.
 bool openWindowOnGui(const WindowRequest& request, QString* error)
 {
     if (g_host && g_window) {
         // Already open: retarget the existing window instead of stacking
         // another one, which is what the host expects from "open" again.
         if (!request.path.isEmpty()) {
-            if (auto* service = g_host->scanner()) {
-                service->start(request.path);
-            }
-            if (auto* settings = g_host->settings()) {
-                settings->setLastPath(request.path);
-                settings->save();
+            auto* service = g_host->scanner();
+            if (!service || !service->start(request.path)) {
+                *error = QStringLiteral("a scan is already running");
+                return false;
             }
         }
         if (auto* window = qobject_cast<QQuickWindow*>(g_window)) {
@@ -164,19 +234,19 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     }
 
     QmlHost::Options options;
-    options.viewMode = request.viewMode;
     options.scanPath = request.path;
     options.importPaths = g_importPaths;
-    // Host settings synchronisation is intentionally disabled until the
-    // upstream bridge is merged. The local settings file remains authoritative.
+    // Both windows read the same settings object: what the host sends reaches
+    // the next scan and the open window alike.
+    options.settings = g_settings;
+    options.hostBridge = g_settingsBridge;
     auto* host = new QmlHost(options);
     if (!host->load(error)) {
         delete host;
         return false;
     }
     // The host's look, as the appearance contract spells it out. Applying it
-    // after load (when the bridge exists) keeps the window from flashing the
-    // fallback palette first.
+    // after load keeps the window from flashing the fallback palette first.
     host->setTheme(g_theme);
     {
         const QJsonDocument document = QJsonDocument::fromJson(g_appearanceJson.toUtf8());
@@ -217,12 +287,75 @@ bool openWindowOnGui(const WindowRequest& request, QString* error)
     return true;
 }
 
+// Opens the settings window, or brings the open one forward. Looking at the
+// settings builds no scanner and reads no disk tree.
+bool openSettingsWindowOnGui(QString* error)
+{
+    if (g_settingsHost && g_settingsWindow) {
+        if (auto* window = qobject_cast<QQuickWindow*>(g_settingsWindow)) {
+            window->show();
+            window->raise();
+            window->requestActivate();
+        }
+        return true;
+    }
+
+    QmlHost::Options options;
+    options.settingsOnly = true;
+    options.importPaths = g_importPaths;
+    options.settings = g_settings;
+    options.hostBridge = g_settingsBridge;
+    auto* host = new QmlHost(options);
+    if (!host->load(error)) {
+        delete host;
+        return false;
+    }
+    host->setTheme(g_theme);
+    {
+        const QJsonDocument document = QJsonDocument::fromJson(g_appearanceJson.toUtf8());
+        if (document.isObject()) host->setAppearance(document.object().toVariantMap());
+    }
+    auto* window = qobject_cast<QQuickWindow*>(host->window());
+    if (!window) {
+        *error = QStringLiteral("the settings window did not come up");
+        delete host;
+        return false;
+    }
+    QObject::connect(window, &QWindow::visibleChanged, host, [window, host] {
+        if (!window->isVisible()) {
+            window->deleteLater();
+            host->deleteLater();
+            g_settingsHost = nullptr;
+            g_settingsWindow = nullptr;
+        }
+    });
+    g_settingsHost = host;
+    g_settingsWindow = window;
+    window->show();
+    window->raise();
+    window->requestActivate();
+    return true;
+}
+
+// The two windows are created where the event loop that drives them lives.
+bool onGui(const std::function<bool(QString*)>& work, QString* error)
+{
+    if (QThread::currentThread() == qGuiApp->thread()) {
+        return work(error);
+    }
+    bool done = false;
+    QMetaObject::invokeMethod(qGuiApp, [&] { done = work(error); }, Qt::BlockingQueuedConnection);
+    return done;
+}
+
 class DiskViewQml : public winshun::Plugin {
 public:
     std::string name() const override { return "ra9fael.diskview.qml"; }
 
     // The host's data directory is where the settings file belongs, so the
-    // model finds the last path and the settings dialog saves beside it.
+    // model finds the last path and the settings dialog saves beside it. The
+    // settings are loaded once, with the host's values applied on top, and
+    // every window from here on shares that object.
     void initialized() override
     {
         if (!dataDir().empty()) {
@@ -231,22 +364,54 @@ public:
         // Keep the host's look for the first window and every later one.
         g_theme = QString::fromStdString(theme().empty() ? "light" : theme());
         g_appearanceJson = QString::fromStdString(appearance().dump());
+        const QVariantMap host = fromJson(settings());
+        QMetaObject::invokeMethod(qGuiApp, [this, host] {
+            g_settingsBridge = new SettingsBridge(this);
+            g_settings = new ScanSettings(qGuiApp);
+            g_settings->load();
+            g_settings->applyHostSettings(host);
+            // The protocol thread decides whether the folder menu acts; keep
+            // its copy in step without reaching into this object.
+            g_folderMenuOn.store(g_settings->folderMenuEnabled());
+        }, Qt::BlockingQueuedConnection);
     }
 
     void settingsChanged(const winshun::Json& s) override
     {
-        // Keep the window's local settings editable; do not overwrite them
-        // with host defaults while the upstream sync bridge is unavailable.
-        Q_UNUSED(s);
+        // A key the host sends wins over the file; the advanced scan
+        // parameters it no longer declares keep their local value. The
+        // window, the next scan and the settings window all read this object.
+        const winshun::Json& folderMenu = s["folderMenuEnabled"];
+        if (folderMenu.isBool()) g_folderMenuOn.store(folderMenu.toBool());
+        const QVariantMap values = fromJson(s);
+        QMetaObject::invokeMethod(qGuiApp, [values] {
+            if (g_settings) g_settings->applyHostSettings(values);
+        }, Qt::QueuedConnection);
+    }
+
+    // The host's card button: the plugin's own settings window.
+    void showSettings() override
+    {
+        QString error;
+        if (!onGui(openSettingsWindowOnGui, &error)) {
+            winshun::debug("ra9fael.diskview.qml: settings window failed: " + error.toStdString());
+        }
     }
 
     ~DiskViewQml() override
     {
-        // The window lives on the GUI thread; close it there and wait, so the
-        // process does not exit with a UI thread still running.
-        if (g_host) {
+        // The windows live on the GUI thread; close them there and wait, so
+        // the process does not exit with a UI thread still running.
+        if (g_host || g_settingsHost || g_settingsBridge) {
             QMetaObject::invokeMethod(qGuiApp, [] {
+                if (g_settingsBridge) {
+                    g_settingsBridge->forgetPlugin();
+                    g_settingsBridge = nullptr;
+                }
+                if (auto* window = qobject_cast<QQuickWindow*>(g_settingsWindow)) window->close();
                 if (auto* window = qobject_cast<QQuickWindow*>(g_window)) window->close();
+                g_settingsHost = nullptr;
+                g_settingsWindow = nullptr;
                 g_host = nullptr;
                 g_window = nullptr;
             }, Qt::BlockingQueuedConnection);
@@ -257,7 +422,7 @@ public:
     {
         const bool zh = chinese();
         const std::string text = winshun::trim(q.text);
-        if (text == "help" || text == "?" || text == "帮助") return emptyItems(zh, {});
+        if (text == "help" || text == "?" || text == "帮助") return emptyItems(zh, {}, folderMenuEnabled());
         if (text.empty()) {
             // The settings file lives in the host's data directory; reading it
             // needs the directory the host named at initialize.
@@ -268,33 +433,28 @@ public:
                 settings.load();
                 last = settings.lastPath().toStdWString();
             }
-            return emptyItems(zh, last);
+            return emptyItems(zh, last, folderMenuEnabled());
         }
         return pathItems(text, zh);
     }
 
     winshun::Effects action(const winshun::ActionRequest& a) override
     {
-        if (a.action != "open" && a.action != "default") return {winshun::effect::keep()};
-        const winshun::Json data = a.item["data"];
-        const std::string path = data["path"].isString() ? data["path"].toString() : winshun::trim(a.text);
         const bool zh = chinese();
+        const winshun::Json data = a.item["data"];
+        const std::string kind = data["kind"].isString() ? data["kind"].toString() : std::string();
 
-        WindowRequest request;
-        request.path = fromUtf8(path);
-        request.viewMode = defaultViewMode(settings());
+        if (kind == "settings" || a.action == "settings") return openSettingsEffects(zh);
+
+        // A folder chosen from the result menu: the host hands over the exact
+        // path, so nothing is typed, split or re-quoted on the way in.
+        if (a.trigger == "files" && a.action == "files") return analyzeFolder(a, zh);
+
+        if (a.action != "open" && a.action != "default") return {winshun::effect::keep()};
+        const std::string path = data["path"].isString() ? data["path"].toString() : winshun::trim(a.text);
 
         QString error;
-        bool opened = false;
-        if (QThread::currentThread() == qGuiApp->thread()) {
-            opened = openWindowOnGui(request, &error);
-        } else {
-            // The protocol runs on its own thread: the window has to be made
-            // where the event loop that drives it lives.
-            QMetaObject::invokeMethod(qGuiApp, [&] { opened = openWindowOnGui(request, &error); },
-                                      Qt::BlockingQueuedConnection);
-        }
-        if (!opened) {
+        if (!openViewer(fromUtf8(path), &error)) {
             winshun::debug("ra9fael.diskview.qml: window failed: " + error.toStdString());
             return {winshun::effect::notify(tr(zh, "无法打开磁盘透视窗口：", "Could not open the disk view window: ")
                                             + error.toStdString()),
@@ -307,18 +467,19 @@ public:
     void appearanceChanged() override
     {
         // The host changed style, light/dark, corners or UI size: keep the new
-        // object for the next window and repaint the open one. This is the
-        // appearance contract, not the host settings sync that stays off.
+        // object for the next window and repaint the open ones.
         g_theme = QString::fromStdString(theme().empty() ? "light" : theme());
         g_appearanceJson = QString::fromStdString(appearance().dump());
-        if (!g_host) return;
+        if (!g_host && !g_settingsHost) return;
         const QString json = g_appearanceJson;
         const QString look = g_theme;
         QMetaObject::invokeMethod(qGuiApp, [json, look] {
-            if (!g_host) return;
-            g_host->setTheme(look);
             const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8());
-            if (document.isObject()) g_host->setAppearance(document.object().toVariantMap());
+            for (QmlHost* host : {g_host, g_settingsHost}) {
+                if (!host) continue;
+                host->setTheme(look);
+                if (document.isObject()) host->setAppearance(document.object().toVariantMap());
+            }
         }, Qt::BlockingQueuedConnection);
     }
 
@@ -326,8 +487,62 @@ public:
     {
         if (g_closing.exchange(true)) return;
         QMetaObject::invokeMethod(qGuiApp, [] {
+            if (auto* window = qobject_cast<QQuickWindow*>(g_settingsWindow)) window->close();
             if (auto* window = qobject_cast<QQuickWindow*>(g_window)) window->close();
         }, Qt::BlockingQueuedConnection);
+    }
+
+private:
+    // Whether the folder entry is offered, from the host's own copy: the
+    // protocol thread does not read the GUI thread's settings object.
+    bool folderMenuEnabled() const
+    {
+        return g_folderMenuOn.load();
+    }
+
+    bool openViewer(const QString& path, QString* error)
+    {
+        WindowRequest request;
+        request.path = path;
+        return onGui([&request](QString* inner) { return openWindowOnGui(request, inner); }, error);
+    }
+
+    winshun::Effects openSettingsEffects(bool zh)
+    {
+        QString error;
+        if (!onGui(openSettingsWindowOnGui, &error)) {
+            winshun::debug("ra9fael.diskview.qml: settings window failed: " + error.toStdString());
+            return {winshun::effect::notify(tr(zh, "无法打开设置窗口：", "Could not open the settings window: ")
+                                            + error.toStdString()),
+                    winshun::effect::hide()};
+        }
+        return {winshun::effect::hide()};
+    }
+
+    winshun::Effects analyzeFolder(const winshun::ActionRequest& a, bool zh)
+    {
+        // The menu entry is hidden while the switch is off; a host that sends
+        // it anyway must not start a scan.
+        if (!folderMenuEnabled()) return {winshun::effect::keep()};
+        if (a.files.size() != 1) {
+            return {winshun::effect::notify(tr(zh, "一次只能分析一个文件夹", "Only one folder can be analyzed at a time")),
+                    winshun::effect::hide()};
+        }
+        const QString path = fromUtf8(a.files.front());
+        const QFileInfo info(path);
+        if (path.isEmpty() || !info.exists() || !info.isDir()) {
+            return {winshun::effect::notify(tr(zh, "文件夹已不存在：", "The folder is gone: ") + path.toStdString()),
+                    winshun::effect::hide()};
+        }
+        QString error;
+        if (!openViewer(path, &error)) {
+            winshun::debug("ra9fael.diskview.qml: window failed: " + error.toStdString());
+            return {winshun::effect::notify(tr(zh, "无法打开磁盘透视窗口：", "Could not open the disk view window: ")
+                                            + error.toStdString()),
+                    winshun::effect::hide()};
+        }
+        return {winshun::effect::notify(tr(zh, "正在分析 ", "Analyzing ") + path.toStdString()),
+                winshun::effect::hide()};
     }
 };
 
@@ -368,7 +583,7 @@ extern "C" __declspec(dllexport) int winshunDiskViewQmlMain(const wchar_t* appDi
     char* argv[] = {name, nullptr};
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("Disk View QML"));
-    // The host may open the window again after the user closed it.
+    // The host may open a window again after the user closed it.
     QGuiApplication::setQuitOnLastWindowClosed(false);
 
     int rc = 0;
@@ -381,3 +596,5 @@ extern "C" __declspec(dllexport) int winshunDiskViewQmlMain(const wchar_t* appDi
     serve.join();
     return rc;
 }
+
+#include "plugin_main.moc"

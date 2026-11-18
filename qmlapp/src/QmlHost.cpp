@@ -217,28 +217,31 @@ bool QmlHost::load(QString* error)
     for (const QString& path : m_options.importPaths) {
         if (!path.isEmpty()) m_engine.addImportPath(path);
     }
-    m_engine.rootContext()->setContextProperty("diskViewMode", m_options.viewMode);
     m_engine.rootContext()->setContextProperty("fixtureSource",
                                                m_options.fixture.isEmpty() ? QString::fromLatin1(kBuiltInFixture) : m_options.fixture);
 
     // The scanner is a plain object owned by the host and handed to the QML as
     // a context property: the same instance drives the window and the command
-    // line. The settings decide how the next scan runs.
-    m_scanService = new ScanService(this);
-    m_scanSettings = new ScanSettings(this);
-    m_scanSettings->setDefaultVolumeEnumerationEnabled(!m_options.fixtureOnly);
-    m_scanSettings->load();
-    // The host's own settings, when this window is a plugin: they win over the
-    // local file for the keys the host shows.
-    if (!m_options.hostSettings.isEmpty()) {
-        applyHostSettings(m_options.hostSettings);
+    // line. The settings decide how the next scan runs. A settings-only window
+    // builds neither: looking at the settings must not touch a disk tree.
+    m_scanSettings = m_options.settings ? m_options.settings : new ScanSettings(this);
+    if (!m_options.settings) {
+        m_scanSettings->setDefaultVolumeEnumerationEnabled(!m_options.fixtureOnly);
+        m_scanSettings->load();
     }
-    m_scanService->setSettings(m_scanSettings);
-    m_engine.rootContext()->setContextProperty("scanService", m_scanService);
     m_engine.rootContext()->setContextProperty("scanSettings", m_scanSettings);
-    // The settings page in WinShun owns these; the window's dialog must not
-    // offer a second place to change them.
-    m_engine.rootContext()->setContextProperty("hostManagedSettings", !m_options.hostSettings.isEmpty());
+    // An explicit --view-mode wins; otherwise the window opens on the default
+    // view the settings hold, which in plugin mode is the host's choice.
+    m_options.viewMode = m_options.viewModeSet ? m_options.viewMode : m_scanSettings->defaultView();
+    m_engine.rootContext()->setContextProperty("diskViewMode", m_options.viewMode);
+    if (!m_options.settingsOnly) {
+        m_scanService = new ScanService(this);
+        m_scanService->setSettings(m_scanSettings);
+        m_engine.rootContext()->setContextProperty("scanService", m_scanService);
+    }
+    // The settings the host owns are edited here and sent back through it; a
+    // standalone run has no one to send them to and keeps them in the file.
+    m_engine.rootContext()->setContextProperty("hostBridge", m_options.hostBridge);
     // The window asks the host for the two things QML cannot do on its own.
     m_engine.rootContext()->setContextProperty("appHost", this);
     // The look: one token set the whole window and the chart read. The icon
@@ -267,10 +270,12 @@ bool QmlHost::load(QString* error)
     });
 
     if (m_options.qmlDir.isEmpty()) {
-        m_engine.loadFromModule("DiskViewPrototype", "Main");    } else {
-        const QString mainQml = QDir(m_options.qmlDir).filePath("Main.qml");
+        m_engine.loadFromModule("DiskViewPrototype", m_options.settingsOnly ? "SettingsWindow" : "Main");
+    } else {
+        const QString rootName = m_options.settingsOnly ? QStringLiteral("SettingsWindow") : QStringLiteral("Main");
+        const QString mainQml = QDir(m_options.qmlDir).filePath(rootName + QStringLiteral(".qml"));
         if (!QFileInfo::exists(mainQml)) {
-            *error = QStringLiteral("no Main.qml under %1").arg(m_options.qmlDir);
+            *error = QStringLiteral("no %1.qml under %2").arg(rootName, m_options.qmlDir);
             return false;
         }
         m_engine.load(QUrl::fromLocalFile(mainQml));
@@ -281,7 +286,7 @@ bool QmlHost::load(QString* error)
         // the only way to say why the module did not load.
         *error = m_options.qmlDir.isEmpty()
                      ? QStringLiteral("the built-in QML module failed to load")
-                     : QStringLiteral("Main.qml failed to load from %1").arg(m_options.qmlDir);
+                     : QStringLiteral("the window failed to load from %1").arg(m_options.qmlDir);
         if (!m_loadWarnings.isEmpty()) {
             *error += QStringLiteral(": ") + m_loadWarnings.join(QStringLiteral("; "));
         }
@@ -321,12 +326,14 @@ bool QmlHost::load(QString* error)
         // Hand the finished tree to the model by move. The QML signal handler
         // would copy the whole tree through a QVariant; on a full C: volume
         // that is a second multi-hundred-megabyte allocation.
-        if (auto* model = window->findChild<DiskViewModel*>(QStringLiteral("diskModel"))) {
-            connect(m_scanService, &ScanService::finished, model, [this, model] {
-                if (auto tree = m_scanService->takeFinishedTree()) {
-                    model->loadFlat(std::move(*tree), false);
-                }
-            });
+        if (m_scanService) {
+            if (auto* model = window->findChild<DiskViewModel*>(QStringLiteral("diskModel"))) {
+                connect(m_scanService, &ScanService::finished, model, [this, model] {
+                    if (auto tree = m_scanService->takeFinishedTree()) {
+                        model->loadFlat(std::move(*tree), false);
+                    }
+                });
+            }
         }
         // --maximize drives the same pane action as its dock title-bar button.
         if (!m_options.maximizeOnStart.isEmpty()) {
@@ -334,22 +341,16 @@ bool QmlHost::load(QString* error)
                                       QStringLiteral("maximizePane(\"%1\")").arg(m_options.maximizeOnStart));
             expression.evaluate();
         }
+        // WS_SETTINGS_APPLY presses the settings window's 应用 button, so the
+        // write-back to the host can be checked without a pointer.
+        if (m_options.settingsOnly && qEnvironmentVariableIsSet("WS_SETTINGS_APPLY")) {
+            QTimer::singleShot(0, window, [window] {
+                if (auto* apply = window->findChild<QObject*>(QStringLiteral("applySettings")))
+                    QMetaObject::invokeMethod(apply, "clicked");
+            });
+        }
     }
     return true;
-}
-
-void QmlHost::applyHostSettings(const QVariantMap& settings)
-{
-    if (!m_scanSettings) return;
-    const QString mode = settings.value(QStringLiteral("scanMode")).toString();
-    m_scanSettings->setScanMode(mode == QLatin1String("fast") ? 1 : mode == QLatin1String("ordinary") ? 2 : 0);
-    const QString workers = settings.value(QStringLiteral("workers")).toString();
-    m_scanSettings->setWorkers(workers == QLatin1String("auto") ? 0 : workers.toInt());
-    const QString media = settings.value(QStringLiteral("media")).toString();
-    m_scanSettings->setMedia(media == QLatin1String("ssd") ? 1 : media == QLatin1String("hdd") ? 2
-                             : media == QLatin1String("network") ? 3 : 0);
-    const QString preview = settings.value(QStringLiteral("preview")).toString();
-    m_scanSettings->setPreviewIntervalMs(preview == QLatin1String("less") ? 5000 : 1500);
 }
 
 QQuickWindow* QmlHost::window() const
@@ -1579,6 +1580,7 @@ bool QmlHost::saveScreenshot(const QString& path)
             || state == QLatin1String("scan-settings-dialog")
             || state == QLatin1String("theme-dialog")
             || state == QLatin1String("file-filter") || state == QLatin1String("extension-highlight")
+            || state == QLatin1String("depth-menu") || state == QLatin1String("extension-highlight-dock")
             || state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")
             || state == QLatin1String("recycle-confirmation") || state == QLatin1String("recycle-error")
             || state == QLatin1String("preset-menu")) {
@@ -1593,14 +1595,15 @@ bool QmlHost::saveScreenshot(const QString& path)
             if (state == QLatin1String("context-menu") || state == QLatin1String("delete-confirmation")
                 || state == QLatin1String("recycle-confirmation") || state == QLatin1String("recycle-error")
                 || state == QLatin1String("preset-menu")
-                || state == QLatin1String("drives") || state == QLatin1String("dock-tabs")
+                || state == QLatin1String("drives") || state == QLatin1String("depth-menu")
+                || state == QLatin1String("dock-tabs") || state == QLatin1String("extension-highlight-dock")
                 || state == QLatin1String("dock-compass") || state == QLatin1String("columns-menu")
                 || state == QLatin1String("dock-maximized") || state == QLatin1String("scan-settings-dialog")
                 || state == QLatin1String("theme-dialog")) {
                 for (int frame = 0; frame < 4; ++frame)
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
             }
-            if (state == QLatin1String("drives")) {
+            if (state == QLatin1String("drives") || state == QLatin1String("depth-menu")) {
                 // The ComboBox popup lives in its own transient window
                 // (popupType Window); prefer that grab so the open picker is
                 // visible in the shot, and fall back to the main window.
@@ -1664,6 +1667,7 @@ bool QmlHost::saveScreenshot(const QString& path)
     }
     const QString state = QString::fromLatin1(visualState);
     if (m_options.fixtureOnly && (state == QLatin1String("drives")
+                                  || state == QLatin1String("depth-menu")
                                   || state == QLatin1String("context-menu")
                                   || state == QLatin1String("delete-confirmation"))) {
         // Qt Quick Controls render Menu/Dialog as a separate popup window, so
@@ -1711,6 +1715,7 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
                 return false;
             }
             options->viewMode = mode;
+            options->viewModeSet = true;
         } else if (argument == QStringLiteral("--screenshot")) {
             options->screenshotPath = value(argument);
         } else if (argument == QStringLiteral("--delay")) {
@@ -1727,6 +1732,8 @@ bool QmlHost::parseArgs(const QStringList& arguments, Options* options, QString*
             options->fixtureOnly = true;
         } else if (argument == QStringLiteral("--settings")) {
             options->openSettings = true;
+        } else if (argument == QStringLiteral("--settings-window")) {
+            options->settingsWindow = true;
         } else if (argument == QStringLiteral("--pause")) {
             options->pauseOnStart = true;
         } else if (argument == QStringLiteral("--hold-window")) {
@@ -1779,6 +1786,7 @@ QString QmlHost::usage()
         "  --screenshot <png> save a window grab and exit\n"
         "  --delay <ms>       wait before the grab (default 1200)\n"
         "  --settings         open the scan settings dialog on startup\n"
+        "  --settings-window  open the settings window instead of the viewer\n"
         "  --pause            start the scan and hold it there\n"
         "  --hold-window      keep a standalone validation window open after scan\n"
         "  --maximize <tree|files|legend|chart|tables>  open with that pane in the fullscreen layer\n"

@@ -239,9 +239,24 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
                 ToolButton {
+                    id: clearHighlightButton
                     visible: region.modelData.active === "legend" && workspace.extensionHighlighted
+                    implicitWidth: 82
+                    implicitHeight: rowHeight
+                    padding: 0
                     text: qsTr("清除选择")
                     onClicked: workspace.clearHighlightRequested()
+                    contentItem: Label {
+                        text: clearHighlightButton.text
+                        color: clearHighlightButton.hovered ? theme.text : theme.textMuted
+                        font.pixelSize: Metrics.small
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        radius: theme.smallRadius
+                        color: clearHighlightButton.hovered ? theme.hoverRow : "transparent"
+                    }
                 }
                 ToolButton {
                     id: columnsButton

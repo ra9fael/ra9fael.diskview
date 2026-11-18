@@ -130,6 +130,9 @@ ComboBox {
     }
 
     popup: Popup {
+        // Keep wider lists inside the control's horizontal footprint. This
+        // matters for the depth selector at the chart toolbar's right edge.
+        x: Math.min(0, box.width - width)
         y: box.height + 4
         width: Math.max(box.width, box.popupContentWidth + leftPadding + rightPadding)
         padding: 4

@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.16] - 2026-11-18
+
+### Fixed
+- File-operation context menus retain a normal horizontal width.
+- Settings button labels are centered, and Apply retains its accent fill on hover.
+
+## [QML 0.3.15] - 2026-11-18
+
+### Fixed
+- The settings window and scan-settings dialog now render Cancel as a clear secondary outline button and Apply as the primary action.
+- File-operation context menus now share a styled surface and menu items with visible hover, keyboard-highlight, pressed and disabled states.
+- The chart's depth popup aligns to the selector's right edge so its options stay inside the window.
+- Showing Clear selection in the extension pane no longer changes the Dock tab-row height; the button stays vertically centered.
+- Upgrading an older configuration with an empty exclusion list now seeds fixed-drive system folders once; later user removals and clearing remain respected.
+
+## [QML 0.3.14] - 2026-11-18
+
+### Added
+- The plugin has its own settings window (`settingsWindow`): the card's Settings button and the launcher's "Disk view settings" entry open it, holding everything the scan-settings dialog had but building no scanner and reading no disk tree. The viewer toolbar's scan settings show the same content.
+- A folder result offers "Analyze folder space" (a `files` trigger, one folder only); the path goes straight into the existing scan flow, so spaces and non-ASCII characters need no retyping.
+
+### Changed
+- Host settings now take effect: they are applied at initialize and `settingsChanged` updates the same settings object on the GUI thread, so the next scan and every open window read one value.
+- Default view, scan mode and the folder-menu switch are editable again and write back through `winshun/settings/update`, only the keys that changed; a host update is never echoed back. The worker limit, media strategy and preview interval left the manifest and are stored by the plugin, while a value the host still carries for them is used as before.
+- The default view is separate from the layout a window is browsing in: the default only decides what the next window opens with, and switching the layout no longer changes it implicitly.
+- Settings submit only the fields that were edited; the "rescan after applying" checkbox became a separate "Rescan with the new settings" button, disabled without a target or during a scan, and applying never starts a scan.
+- An open window asked to scan while the scanner is busy now reports the failure instead of recording the new last path and claiming success.
+
 ## [QML 0.3.8] - 2026-11-16
 
 ### Fixed

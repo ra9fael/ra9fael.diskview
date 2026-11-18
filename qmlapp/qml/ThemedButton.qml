@@ -11,6 +11,7 @@ Button {
     id: button
 
     property string iconName: ""
+    property bool primary: false
     // A slim row (a pane-header bar, a dialog footer) can ask for a lower
     // button; anything else keeps the host's control height.
     property real compactHeight: -1
@@ -21,18 +22,21 @@ Button {
 
     background: Rectangle {
         radius: theme.controlRadius
-        border.width: 1
         color: !button.enabled ? theme.surfaceAlt
+             : button.primary ? theme.accent
              : button.pressed ? theme.pressed
              : button.hovered ? theme.controlHover
              : theme.control
+        border.width: button.primary ? 0 : 1
         border.color: !button.enabled ? theme.border
+                    : button.primary ? theme.accent
                     : button.pressed ? theme.accent
                     : button.hovered ? theme.controlBorder
                     : theme.controlBorder
     }
 
     contentItem: Row {
+        anchors.centerIn: parent
         spacing: 6
 
         Glyph {
@@ -40,12 +44,12 @@ Button {
             visible: button.iconName.length > 0
             iconName: button.iconName
             size: 14
-            color: button.enabled ? theme.text : theme.textMuted
+            color: !button.enabled ? theme.textMuted : button.primary ? theme.accentText : theme.text
         }
         Label {
             anchors.verticalCenter: parent.verticalCenter
             text: button.text
-            color: button.enabled ? theme.text : theme.textMuted
+            color: !button.enabled ? theme.textMuted : button.primary ? theme.accentText : theme.text
             font.pixelSize: button.font.pixelSize
             verticalAlignment: Text.AlignVCenter
         }

@@ -121,6 +121,97 @@ void ScanSettings::setPreviewIntervalMs(int intervalMs)
     emit changed();
 }
 
+void ScanSettings::setDefaultView(int view)
+{
+    const int clamped = std::clamp(view, 0, 1);
+    if (clamped == m_defaultView) {
+        return;
+    }
+    m_defaultView = clamped;
+    emit changed();
+}
+
+void ScanSettings::setFolderMenuEnabled(bool enabled)
+{
+    if (enabled == m_folderMenuEnabled) {
+        return;
+    }
+    m_folderMenuEnabled = enabled;
+    emit changed();
+}
+
+int ScanSettings::scanModeFromHost(const QString& value)
+{
+    return value == QLatin1String("fast") ? 1 : value == QLatin1String("ordinary") ? 2 : 0;
+}
+
+QString ScanSettings::scanModeToHost(int mode)
+{
+    return mode == 1 ? QStringLiteral("fast") : mode == 2 ? QStringLiteral("ordinary")
+                                                         : QStringLiteral("auto");
+}
+
+int ScanSettings::workersFromHost(const QString& value)
+{
+    return value == QLatin1String("auto") ? 0 : value.toInt();
+}
+
+QString ScanSettings::workersToHost(int workers)
+{
+    return workers == 0 ? QStringLiteral("auto") : QString::number(workers);
+}
+
+int ScanSettings::mediaFromHost(const QString& value)
+{
+    return value == QLatin1String("ssd") ? 1 : value == QLatin1String("hdd") ? 2
+         : value == QLatin1String("network") ? 3 : 0;
+}
+
+QString ScanSettings::mediaToHost(int media)
+{
+    static const char* const names[] = {"auto", "ssd", "hdd", "network"};
+    return QString::fromLatin1(names[std::clamp(media, 0, 3)]);
+}
+
+int ScanSettings::previewIntervalFromHost(const QString& value)
+{
+    return value == QLatin1String("less") ? 5000 : 1500;
+}
+
+QString ScanSettings::previewIntervalToHost(int intervalMs)
+{
+    return intervalMs >= 5000 ? QStringLiteral("less") : QStringLiteral("balanced");
+}
+
+int ScanSettings::defaultViewFromHost(const QString& value)
+{
+    return value == QLatin1String("sunburst") ? 1 : 0;
+}
+
+QString ScanSettings::defaultViewToHost(int view)
+{
+    return view == 1 ? QStringLiteral("sunburst") : QStringLiteral("treemap");
+}
+
+void ScanSettings::applyHostSettings(const QVariantMap& settings)
+{
+    // Absent keys keep the local value: the manifest no longer declares the
+    // advanced scan parameters, so a host that never had a user value for them
+    // sends nothing and the file stays in charge of them.
+    if (settings.contains(QStringLiteral("defaultView")))
+        setDefaultView(defaultViewFromHost(settings.value(QStringLiteral("defaultView")).toString()));
+    if (settings.contains(QStringLiteral("scanMode")))
+        setScanMode(scanModeFromHost(settings.value(QStringLiteral("scanMode")).toString()));
+    if (settings.contains(QStringLiteral("folderMenuEnabled")))
+        setFolderMenuEnabled(settings.value(QStringLiteral("folderMenuEnabled")).toBool());
+    if (settings.contains(QStringLiteral("workers")))
+        setWorkers(workersFromHost(settings.value(QStringLiteral("workers")).toString()));
+    if (settings.contains(QStringLiteral("media")))
+        setMedia(mediaFromHost(settings.value(QStringLiteral("media")).toString()));
+    if (settings.contains(QStringLiteral("preview")))
+        setPreviewIntervalMs(previewIntervalFromHost(settings.value(QStringLiteral("preview")).toString()));
+}
+
 void ScanSettings::setSmallFileThreshold(int bytes)
 {
     // 0 means every file; the upper bound keeps the aggregate meaningful.
@@ -300,6 +391,7 @@ bool ScanSettings::load()
         // First run: the volume's own reserved folders are excluded from the
         // start, the way the report is meant to be read.
         m_excludedPaths = m_defaultVolumeEnumerationEnabled ? defaultExcludedPaths() : QStringList();
+        m_excludedPathsInitialized = true;
         emit changed();
         return false;
     }
@@ -317,6 +409,8 @@ bool ScanSettings::load()
     m_media = std::clamp(object.value(QStringLiteral("media")).toInt(0), 0, 3);
     const int interval = object.value(QStringLiteral("previewIntervalMs")).toInt(1500);
     m_previewIntervalMs = interval >= 5000 ? 5000 : 1500;
+    m_defaultView = std::clamp(object.value(QStringLiteral("defaultView")).toInt(0), 0, 1);
+    m_folderMenuEnabled = object.value(QStringLiteral("folderMenuEnabled")).toBool(true);
     m_smallFileThreshold = std::clamp(object.value(QStringLiteral("smallFileThreshold")).toInt(0), 0, 1024 * 1024);
     m_excludedPaths.clear();
     const QJsonArray excluded = object.value(QStringLiteral("excludedPaths")).toArray();
@@ -328,6 +422,12 @@ bool ScanSettings::load()
         if (!path.isEmpty() && !m_excludedPaths.contains(path)) {
             m_excludedPaths.append(path);
         }
+    }
+    m_excludedPathsInitialized = object.value(QStringLiteral("excludedPathsInitialized")).toBool(false);
+    if (!m_excludedPathsInitialized) {
+        if (m_excludedPaths.isEmpty() && m_defaultVolumeEnumerationEnabled)
+            m_excludedPaths = defaultExcludedPaths();
+        m_excludedPathsInitialized = true;
     }
     QStringList hidden;
     const QJsonArray hiddenArray = object.value(QStringLiteral("hiddenColumns")).toArray();
@@ -359,7 +459,10 @@ bool ScanSettings::save()
     object.insert(QStringLiteral("workers"), m_workers);
     object.insert(QStringLiteral("media"), m_media);
     object.insert(QStringLiteral("previewIntervalMs"), m_previewIntervalMs);
+    object.insert(QStringLiteral("defaultView"), m_defaultView);
+    object.insert(QStringLiteral("folderMenuEnabled"), m_folderMenuEnabled);
     object.insert(QStringLiteral("smallFileThreshold"), m_smallFileThreshold);
+    object.insert(QStringLiteral("excludedPathsInitialized"), true);
     QJsonArray hidden;
     for (const QString& column : m_hiddenColumns) {
         hidden.append(column);

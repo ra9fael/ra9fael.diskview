@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
 // The scan settings, the ones the native plugin keeps in its data directory.
@@ -17,6 +18,12 @@ class ScanSettings : public QObject {
     Q_PROPERTY(int workers READ workers WRITE setWorkers NOTIFY changed)
     Q_PROPERTY(int media READ media WRITE setMedia NOTIFY changed)
     Q_PROPERTY(int previewIntervalMs READ previewIntervalMs WRITE setPreviewIntervalMs NOTIFY changed)
+    // The layout a new window opens with: 0 treemap, 1 sunburst. Switching the
+    // layout while browsing does not touch it.
+    Q_PROPERTY(int defaultView READ defaultView WRITE setDefaultView NOTIFY changed)
+    // Whether a folder's result menu offers "analyze this folder". The host
+    // owns it in plugin mode; a standalone run keeps the local value.
+    Q_PROPERTY(bool folderMenuEnabled READ folderMenuEnabled WRITE setFolderMenuEnabled NOTIFY changed)
     // Files below this many bytes are folded into one row per directory.
     Q_PROPERTY(int smallFileThreshold READ smallFileThreshold WRITE setSmallFileThreshold NOTIFY changed)
     Q_PROPERTY(QStringList excludedPaths READ excludedPaths WRITE setExcludedPaths NOTIFY changed)
@@ -65,6 +72,10 @@ public:
     void setMedia(int media);
     int previewIntervalMs() const { return m_previewIntervalMs; }
     void setPreviewIntervalMs(int intervalMs);
+    int defaultView() const { return m_defaultView; }
+    void setDefaultView(int view);
+    bool folderMenuEnabled() const { return m_folderMenuEnabled; }
+    void setFolderMenuEnabled(bool enabled);
     int smallFileThreshold() const { return m_smallFileThreshold; }
     void setSmallFileThreshold(int bytes);
     QStringList excludedPaths() const { return m_excludedPaths; }
@@ -109,6 +120,26 @@ public:
     Q_INVOKABLE void addExcludedPath(const QString& path);
     Q_INVOKABLE void removeExcludedPath(int index);
 
+    // Applies the settings the host sent (its manifest defaults merged with the
+    // user's values): every key in `settings` wins over the local file, and a
+    // key the host does not send leaves the local value alone. Reading the
+    // host's card and writing it back use the same table as this.
+    void applyHostSettings(const QVariantMap& settings);
+
+    // The host stores choices as strings; the scanner and the window use the
+    // enumerations below. One function per key, in both directions, so a value
+    // cannot mean one thing on the card and another in the scan.
+    static int scanModeFromHost(const QString& value);
+    static QString scanModeToHost(int mode);
+    static int workersFromHost(const QString& value);
+    static QString workersToHost(int workers);
+    static int mediaFromHost(const QString& value);
+    static QString mediaToHost(int media);
+    static int previewIntervalFromHost(const QString& value);
+    static QString previewIntervalToHost(int intervalMs);
+    static int defaultViewFromHost(const QString& value);
+    static QString defaultViewToHost(int view);
+
 signals:
     void changed();
 
@@ -118,6 +149,8 @@ private:
     int m_media = 0;        // ScanOptions::Media
     int m_previewIntervalMs = 1500;
     int m_smallFileThreshold = 0;
+    int m_defaultView = 0;
+    bool m_folderMenuEnabled = true;
     QStringList m_excludedPaths;
     QString m_lastPath;
     QStringList m_hiddenColumns;
@@ -125,6 +158,7 @@ private:
     bool m_wholeTree = false;
     bool m_fileRecursive = false;
     bool m_defaultVolumeEnumerationEnabled = true;
+    bool m_excludedPathsInitialized = false;
     int m_chartDepth = 0; // 0 = auto: the area budget picks the depth
     bool m_chartOnTop = false;
     QString m_chartLayout = QStringLiteral("dock");

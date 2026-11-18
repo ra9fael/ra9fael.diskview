@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.diskview.qml",
   "name": {"zh": "磁盘透视 · QML", "en": "Disk View · QML"},
-  "version": "0.3.13",
+  "version": "0.3.16",
   "description": "QML 版磁盘占用可视化：跟随 WinShun 主题、切换磁盘下拉框、独立文件视图筛选、可调列宽与安全文件操作。",
   "author": "ra9fael",
   "license": "MIT",
@@ -21,12 +21,13 @@
     "idleExitSec": 0,
     "encoding": "utf-8"
   },
+  "settingsWindow": true,
   "settings": [
     {
       "key": "defaultView",
       "type": "choice",
       "title": {"zh": "默认视图", "en": "Default view"},
-      "hint": {"zh": "打开窗口时先用哪种画法；窗口里随时可切", "en": "Which layout to open with; switchable in the window"},
+      "hint": {"zh": "新窗口先用哪种画法；窗口里切换视图不会改这里", "en": "Which layout a new window opens with; switching it in the window does not change this"},
       "default": "treemap",
       "options": ["treemap", "sunburst"]
     },
@@ -40,28 +41,11 @@
       "options": ["auto", "fast", "ordinary"]
     },
     {
-      "key": "workers",
-      "type": "choice",
-      "title": {"zh": "普通扫描并发上限", "en": "Ordinary scan workers"},
-      "hint": {"zh": "自动时由扫描器按介质决定；并发更高不保证更快", "en": "Automatic lets the scanner decide; more workers are not promised to be faster"},
-      "default": "auto",
-      "options": ["auto", "1", "2", "4", "8"]
-    },
-    {
-      "key": "media",
-      "type": "choice",
-      "title": {"zh": "介质策略", "en": "Media"},
-      "hint": {"zh": "告诉扫描器盘是什么类型，影响并发与预读", "en": "Lets the scanner tune concurrency and read-ahead"},
-      "default": "auto",
-      "options": ["auto", "ssd", "hdd", "network"]
-    },
-    {
-      "key": "preview",
-      "type": "choice",
-      "title": {"zh": "预览发布", "en": "Preview rate"},
-      "hint": {"zh": "扫描过程中界面刷新的间隔", "en": "How often the window refreshes during a scan"},
-      "default": "balanced",
-      "options": ["balanced", "less"]
+      "key": "folderMenuEnabled",
+      "type": "bool",
+      "title": {"zh": "文件夹右键菜单", "en": "Folder menu entry"},
+      "hint": {"zh": "在文件夹结果上提供「分析文件夹占用」", "en": "Offers \"analyze this folder\" on a folder result"},
+      "default": true
     }
   ],
   "commands": [
@@ -73,6 +57,16 @@
                "en": "Enter opens the window · optional path, e.g. disk D:\\work"},
       "actions": [
         {"id": "open", "title": {"zh": "打开磁盘透视窗口", "en": "Open disk view"}, "key": "Enter"}
+      ],
+      "triggers": [
+        {
+          "files": {
+            "kind": "folder",
+            "max": 1,
+            "if": "folderMenuEnabled",
+            "title": {"zh": "分析文件夹占用", "en": "Analyze folder space"}
+          }
+        }
       ]
     }
   ]

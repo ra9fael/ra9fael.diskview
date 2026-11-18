@@ -753,6 +753,20 @@ ApplicationWindow {
             window.chartHighlightExtension = ".bin"
             return
         }
+        if (state === "depth-menu") {
+            depthBox.popup.open()
+            return
+        }
+        if (state === "extension-highlight-dock") {
+            window.chartLayout = "dock"
+            window.attachDockPanes()
+            dockState.layout = ({type: "split", orientation: "vertical", ratio: .52,
+                                 first: ({type: "tabs", panes: ["tree", "files", "legend"], active: "legend"}),
+                                 second: ({type: "tabs", panes: ["chart"], active: "chart"})})
+            window.chartHighlightExtension = ".bin"
+            Qt.callLater(dockWorkspace.refresh)
+            return
+        }
         if (state === "suggestions") {
             pathField.text = ""
             pathField.forceActiveFocus()
@@ -824,51 +838,79 @@ ApplicationWindow {
         }
     }
 
+    component ContextMenuItem: MenuItem {
+        id: menuItem
+        implicitWidth: 240
+        implicitHeight: 34
+        leftPadding: 12
+        rightPadding: 16
+        hoverEnabled: true
+        contentItem: Label {
+            text: menuItem.text
+            color: !menuItem.enabled ? theme.textMuted : theme.text
+            font.pixelSize: metrics.caption
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+        background: Rectangle {
+            radius: theme.smallRadius
+            color: menuItem.enabled && (menuItem.hovered || menuItem.highlighted)
+                   ? theme.hoverRow : "transparent"
+        }
+    }
+
     Menu {
         id: contextMenu
         property string targetPath: ""
         property string targetId: ""
-        MenuItem {
+        implicitWidth: 248
+        padding: 4
+        background: Rectangle {
+            color: theme.surface
+            radius: theme.radius
+            border.color: theme.border
+        }
+        ContextMenuItem {
             text: "打开"
             enabled: contextMenu.targetId.length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
             onClicked: diskModel.isDirectoryNode(contextMenu.targetId)
                        ? diskModel.enterNode(contextMenu.targetId) : appHost.openPath(targetPath())
         }
-        MenuItem {
+        ContextMenuItem {
             text: "复制完整路径"
             enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
             onClicked: appHost.copyToClipboard(targetPath())
         }
-        MenuItem {
+        ContextMenuItem {
             text: "复制文件"
             enabled: targetAllowed()
             onClicked: appHost.copyFilesToClipboard(targetPath(), false)
         }
-        MenuItem {
+        ContextMenuItem {
             text: "剪切文件"
             enabled: targetAllowed()
             onClicked: appHost.copyFilesToClipboard(targetPath(), true)
         }
-        MenuItem {
+        ContextMenuItem {
             text: "在资源管理器中显示"
             enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId)
             onClicked: appHost.revealInExplorer(targetPath())
         }
-        MenuItem {
+        ContextMenuItem {
             text: "在树中定位"
             enabled: contextMenu.targetId.length > 0
             onClicked: diskModel.revealNode(contextMenu.targetId)
         }
-        MenuItem { text: "属性"; enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId); onClicked: appHost.showProperties(targetPath()) }
+        ContextMenuItem { text: "属性"; enabled: targetPath().length > 0 && !diskModel.isAggregateNode(contextMenu.targetId); onClicked: appHost.showProperties(targetPath()) }
         MenuSeparator {}
-        MenuItem {
+        ContextMenuItem {
             text: "移至回收站…"
             enabled: targetAllowed() && scanService.state !== "scanning"
             ToolTip.visible: hovered && !enabled
             ToolTip.text: scanService.state === "scanning" ? "扫描完成后才能操作" : targetDeniedReason()
             onClicked: window.askDestructive(targetPath(), contextMenu.targetId, false)
         }
-        MenuItem {
+        ContextMenuItem {
             text: "永久删除…"
             enabled: targetAllowed() && scanService.state !== "scanning"
             ToolTip.visible: hovered && !enabled

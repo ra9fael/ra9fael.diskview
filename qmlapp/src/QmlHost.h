@@ -21,6 +21,9 @@ public:
         QString fixture;
         QString scanPath;
         int viewMode = 0;
+        // Whether --view-mode named one: without it the window opens on the
+        // default view the settings hold.
+        bool viewModeSet = false;
         QString screenshotPath;
         int screenshotDelayMs = 1200;
         bool selfTest = false;
@@ -31,6 +34,9 @@ public:
         // Opens the scan settings dialog right away, so it can be looked at
         // without a pointer.
         bool openSettings = false;
+        // Opens the settings window instead of the viewer: the same window the
+        // host's card button opens, without a scanner or a disk tree.
+        bool settingsWindow = false;
         // Starts the scan and leaves it paused, so the held state can be
         // looked at.
         bool pauseOnStart = false;
@@ -47,10 +53,17 @@ public:
         // folder, plus whatever the package added. Empty leaves the engine to
         // its defaults.
         QStringList importPaths;
-        // The scan settings the host owns (its plugin settings page), as the
-        // raw manifest values. Non-empty means the window must not edit them:
-        // the host is where they are changed.
-        QVariantMap hostSettings;
+        // The settings object the plugin shares between its windows. Empty
+        // leaves this window to load its own from the local file, which is
+        // what a standalone run does.
+        ScanSettings* settings = nullptr;
+        // Builds the settings window instead of the viewer: no scanner, no
+        // disk model, no chart. The settings are the whole window.
+        bool settingsOnly = false;
+        // Where the settings the host owns go when the user changes them
+        // here; the plugin bridges it to WinShun. Null in a standalone run,
+        // where they are only written to the local file.
+        QObject* hostBridge = nullptr;
         // A one-off file action, so the Windows side of "move to the recycle
         // bin" and "delete for good" can be checked without a pointer:
         // "recycle" or "delete", with the path in `fileActionPath`.
@@ -61,9 +74,6 @@ public:
     explicit QmlHost(Options options, QObject* parent = nullptr);
 
     bool load(QString* error);
-    // Puts the host's plugin settings onto the scan settings, in memory: the
-    // host persists them, this only applies them.
-    void applyHostSettings(const QVariantMap& settings);
     // The window the QML module created, for a host that has to manage it.
     QQuickWindow* window() const;
     ScanService* scanner() const { return m_scanService; }
