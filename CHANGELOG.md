@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.17] - 2026-11-18
+
+### Fixed
+- Build, test and package the host-Qt QML plugin in the release workflow, using its own manifest and QML branch identity.
+- Validate remote version tags and QML package contents before publishing immutable release assets.
+
 ## [0.3.16] - 2026-11-18
 
 ### 修复

@@ -1,9 +1,4 @@
-"""Validate the selected source, release tag and packaged artifact (stdlib only).
-
-Usage:
-  python tools/ci_release.py            # validate the source and the event
-  python tools/ci_release.py dist/ci    # verify a packaged folder
-"""
+"""Validate QML release source identity and packaged artifacts (stdlib only)."""
 import hashlib
 import json
 import os
@@ -14,10 +9,33 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = ROOT / 'qmlapp' / 'plugin.json'
 
 
 def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT, text=True, encoding='utf-8').strip()
+
+
+def manifest():
+    value = json.loads(MANIFEST.read_text(encoding='utf-8-sig'))
+    if (value['id'] != 'ra9fael.diskview.qml'
+            or value['runtime']['program'] != 'diskview-qml.exe'
+            or value['runtime']['qt'] != 'host'
+            or value['runtime']['qtVersion'] != '6.12.0'):
+        raise ValueError('Expected the host-Qt QML plugin variant')
+    return value
+
+
+def release_notes(version):
+    sections = []
+    for name in ('CHANGELOG.en.md', 'CHANGELOG.md'):
+        text = (ROOT / name).read_text(encoding='utf-8')
+        match = re.search(r'^## \[(?:QML )?' + re.escape(version)
+                          + r'\][^\n]*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+        if not match or not match[1].strip():
+            raise ValueError(f'Missing nonempty {version} section in {name}')
+        sections.append(match[1].strip())
+    return '\n\n'.join(sections) + '\n'
 
 
 def validate():
@@ -25,40 +43,40 @@ def validate():
     name = os.environ['GITHUB_EVENT_NAME']
     if name not in ('push', 'workflow_dispatch'):
         raise ValueError('Only a new version tag or manual dispatch is allowed')
-    manifest = json.loads((ROOT / 'plugin.json').read_text(encoding='utf-8-sig'))
-    version = manifest['version']
+    value = manifest()
+    version = value['version']
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Version must be X.Y.Z')
-    tag = ''
-    publish = name == 'push' or str(event.get('inputs', {}).get('publish', 'false')).lower() == 'true'
-    if name == 'push':
-        if not event.get('created') or event.get('deleted') or not event.get('ref', '').startswith('refs/tags/'):
-            raise ValueError('Only newly created tags can publish automatically')
-        tag = event['ref'].removeprefix('refs/tags/')
-    elif publish:
-        tag = event.get('inputs', {}).get('ref', '').removeprefix('refs/tags/')
-    expected = f'v{version}'
+    inputs = event.get('inputs', {})
+    publish = name == 'push' or str(inputs.get('publish', 'false')).lower() == 'true'
     sha = git('rev-parse', 'HEAD')
+    tag = f'v{version}'
+    if name == 'push':
+        if (not event.get('created') or event.get('deleted')
+                or os.environ.get('GITHUB_REF_TYPE') != 'tag'
+                or not re.fullmatch(r'refs/tags/v\d+\.\d+\.\d+', event.get('ref', ''))):
+            raise ValueError('Only newly created version tags can publish automatically')
+        if event['ref'] != f'refs/tags/{tag}':
+            raise ValueError(f'Publish requires version tag {tag}, got {event["ref"]!r}')
+    elif not str(inputs.get('source_ref', '')).strip():
+        raise ValueError('source_ref is required')
     if publish:
-        if tag != expected:
-            raise ValueError(f'Publish requires existing version tag {expected}, got {tag!r}')
         if git('rev-parse', '--verify', f'refs/tags/{tag}^{{commit}}') != sha:
             raise ValueError('Checked out source does not match tag')
-        subprocess.run(['git', 'merge-base', '--is-ancestor', sha, 'origin/main'], cwd=ROOT, check=True)
-    for name in ('CHANGELOG.md', 'CHANGELOG.en.md'):
-        path = ROOT / name
-        if (publish and name == 'CHANGELOG.md') or path.exists():
-            text = path.read_text(encoding='utf-8')
-            if not re.search(r'^## \[' + re.escape(version) + r'\][^\n]*\n\s*\S', text, re.M):
-                raise ValueError(f'Missing nonempty {version} section in {name}')
+        remote = git('ls-remote', '--tags', 'origin', f'refs/tags/{tag}', f'refs/tags/{tag}^{{}}')
+        refs = dict((line.split()[1], line.split()[0]) for line in remote.splitlines())
+        if refs.get(f'refs/tags/{tag}^{{}}', refs.get(f'refs/tags/{tag}')) != sha:
+            raise ValueError('Remote version tag does not point to the expected commit')
+        subprocess.run(['git', 'merge-base', '--is-ancestor', sha, 'origin/qml'], cwd=ROOT, check=True)
+    release_notes(version)
     title = git('log', '-1', '--format=%s')
     if not re.fullmatch(r'(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_.-]+\))?!?: [\x20-\x7e]+', title):
         raise ValueError('Release source commit must use an English Angular subject')
     values = dict(sha=sha, tag=tag, publish=str(publish).lower(), version=version)
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-        for key, value in values.items():
-            output.write(f'{key}={value}\n')
-    print(f'Validated {manifest["id"]} {version} at {sha}; publish={publish}; tag={tag or "none"}')
+        for key, item in values.items():
+            output.write(f'{key}={item}\n')
+    print(f'Validated {value["id"]} {version} at {sha}; publish={publish}')
 
 
 def verify_package(folder):
@@ -69,17 +87,21 @@ def verify_package(folder):
     digest = hashlib.sha256(package.read_bytes()).hexdigest()
     if package.with_suffix('.wsplugin.sha256').read_text(encoding='ascii').split()[0] != digest:
         raise ValueError('Package checksum mismatch')
-    expected = json.loads((ROOT / 'plugin.json').read_text(encoding='utf-8-sig'))
+    expected = manifest()
+    if package.name != f'{expected["id"]}-{expected["version"]}.wsplugin':
+        raise ValueError('Package filename differs from QML identity')
     with zipfile.ZipFile(package) as archive:
         actual = json.loads(archive.read('plugin.json').decode('utf-8-sig'))
         if actual != expected:
-            raise ValueError('Packaged manifest differs from source')
-        required = [actual['runtime']['program']]
-        if actual.get('icon'):
-            required.append(actual['icon'])
-        for name in required:
+            raise ValueError('Packaged manifest differs from QML source')
+        for name in (actual['runtime']['program'], 'DiskViewQmlApp.dll', actual['icon'],
+                     'qml/QtQuick/Controls/qmldir', 'qml/QtQuick/Controls/qtquickcontrols2plugin.dll',
+                     'qml/QtQuick/Controls/plugins.qmltypes'):
             if not archive.read(name):
                 raise ValueError(f'Empty runtime asset {name}')
+        if 'diskview.exe' in archive.namelist():
+            raise ValueError('Native executable found in QML package')
+    (Path(folder) / 'release-notes.md').write_text(release_notes(expected['version']), encoding='utf-8')
     print(f'Verified {package.name}: SHA256 {digest}')
 
 

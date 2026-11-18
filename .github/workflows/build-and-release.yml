@@ -1,22 +1,16 @@
-# Build, test and publish a GitHub Release for Disk View.
-#
-# The only entry points are a new version tag and a manual dispatch: no
-# branch push and no pull request run anything. The tag must equal "v" +
-# plugin.json "version"; CHANGELOG.md and CHANGELOG.en.md must have a matching
-# "## [x.y.z]" section. tools/ci_release.py checks all of that before a build.
 name: build-and-release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'Source branch/SHA to verify, or existing version tag to publish (empty uses selected ref)'
+      source_ref:
+        description: 'Source branch, SHA or existing version tag'
         type: string
-        default: ''
+        required: true
       publish:
-        description: 'Publish an existing version tag after verification'
+        description: 'Publish the matching existing version tag'
         type: boolean
         default: false
 
@@ -24,86 +18,103 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}-${{ inputs.ref || github.ref_name }}
+  group: release-${{ github.repository }}-${{ inputs.source_ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   verify:
-    if: github.event_name == 'workflow_dispatch' || (github.event.created && !github.event.deleted)
-    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && github.event.created && !github.event.deleted)
+    runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.meta.outputs.sha }}
       tag: ${{ steps.meta.outputs.tag }}
       publish: ${{ steps.meta.outputs.publish }}
-      version: ${{ steps.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ inputs.source_ref || github.ref }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.12'
-      - name: Validate source and release identity
+          python-version: '3.12.8'
+      - name: Test release identity validation
+        run: python tools/test_ci_release.py
+      - name: Validate QML source and release identity
         id: meta
         run: python tools/ci_release.py
 
   build:
     needs: verify
+    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && github.event.created && !github.event.deleted)
     runs-on: windows-2022
     defaults:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.sha }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.12'
-      # MSVC x64 with the static CRT (see CMakeLists.txt): the exe depends on
-      # system DLLs only.
-      - name: Configure
+          python-version: '3.12.8'
+      - name: Install Qt 6.12.0
         run: |
-          $options = @('-S', '.', '-B', 'build/ci', '-A', 'x64')
-          cmake @options
+          python -m pip install aqtinstall==3.3.0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m aqt install-qt windows desktop 6.12.0 win64_msvc2022_64 --outputdir "$env:RUNNER_TEMP/Qt"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $qt = "$env:RUNNER_TEMP/Qt/6.12.0/msvc2022_64"
+          "QT_ROOT=$qt" >> $env:GITHUB_ENV
+          "WS_APP_DIR=$qt/bin" >> $env:GITHUB_ENV
+          "$qt/bin" >> $env:GITHUB_PATH
+      - name: Configure QML plugin and existing tests
+        run: |
+          cmake -S . -B build/ci -A x64 -DDISKVIEW_BUILD_QML=ON -DDISKVIEW_BUILD_PLUGIN=ON "-DDISKVIEW_QT_PREFIX=$env:QT_ROOT"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build
         run: cmake --build build/ci --config Release --parallel 2
       - name: Run all existing tests
         run: ctest --test-dir build/ci -C Release --output-on-failure --no-tests=error
-      - name: Package the tested binaries
-        env:
-          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      - name: Run QML interface self-test
+        run: build/ci/bin/diskview-qml.exe --self-test --fixture-only
+      - name: Run QML plugin protocol smoke test
         run: |
-          $options = @('tools/package.py', '--out', 'dist/ci')
-          if ($env:RELEASE_TAG) { $options += @('--tag', $env:RELEASE_TAG) }
-          python @options
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Verify package and checksum
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$env:QT_ROOT/plugins/platforms"
+          python tools/verify/smoke-plugin-qml.py build/ci/plugin/diskview-qml.exe
+      - name: Package QML plugin
+        run: python tools/package-qml.py --build build/ci/plugin --qt "$env:QT_ROOT" --out dist/ci
+      - name: Verify QML variant identity and package
         run: python tools/ci_release.py dist/ci
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: needs.verify.outputs.publish == 'true'
         with:
-          name: verified-package
+          name: verified-qml-package
           path: dist/ci/
           if-no-files-found: error
 
   publish:
     needs: [verify, build]
-    if: needs.verify.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    if: needs.verify.outputs.publish == 'true' && (github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && github.event.created && !github.event.deleted))
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.sha }}
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          name: verified-package
+          python-version: '3.12.8'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: verified-qml-package
           path: dist/ci
-      - name: Publish verified artifact without overwriting a release
+      - name: Revalidate remote tag and QML package
+        run: |
+          python tools/ci_release.py
+          python tools/ci_release.py dist/ci
+      - name: Publish immutable QML assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -112,11 +123,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$SOURCE_SHA"
-          python tools/ci_release.py dist/ci
-          if gh release view "$RELEASE_TAG" --json id >/dev/null 2>&1; then
-            echo 'Release already exists; refusing to replace immutable assets.' >&2
-            exit 1
+          assets=(dist/ci/*.wsplugin dist/ci/*.sha256)
+          pace() { sleep $((3 + RANDOM % 3)); }
+          if gh release view "$RELEASE_TAG" --json assets > release-assets.json; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          existing = {a['name'] for a in json.loads(Path('release-assets.json').read_text())['assets']}
+          wanted = {p.name for p in Path('dist/ci').iterdir() if p.suffix in ('.wsplugin', '.sha256')}
+          if existing & wanted:
+              raise SystemExit('Release asset already exists; use a new version')
+          PY
+          else
+            pace
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes-file dist/ci/release-notes.md
           fi
-          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --latest=true \
-            --notes-file dist/ci/release-notes.md dist/ci/*.wsplugin dist/ci/*.sha256
+          pace
+          gh release upload "$RELEASE_TAG" "${assets[@]}"
+          pace
+          gh release view "$RELEASE_TAG" --json tagName,assets
+          echo "commit: $SOURCE_SHA"
+          cat dist/ci/*.sha256
