@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.18] - 2026-11-18
+
+### Fixed
+- Install Qt 6.12.0 from its current SDK repository layout in the QML release workflow.
+- Cover aggregated remainder bytes and single-child folders in the treemap tests.
+
 ## [0.3.17] - 2026-11-18
 
 ### Fixed

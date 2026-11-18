@@ -3,7 +3,7 @@
   "manifest": 1,
   "id": "ra9fael.diskview.qml",
   "name": {"zh": "磁盘透视 · QML", "en": "Disk View · QML"},
-  "version": "0.3.17",
+  "version": "0.3.18",
   "description": "QML 版磁盘占用可视化：跟随 WinShun 主题、切换磁盘下拉框、独立文件视图筛选、可调列宽与安全文件操作。",
   "author": "ra9fael",
   "license": "MIT",
