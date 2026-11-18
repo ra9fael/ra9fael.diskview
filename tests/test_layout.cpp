@@ -180,6 +180,7 @@ static void testTreemapAggregatesUnaccountedBytes()
     // like a file of its own.
     diskview::Node root = makeDir(L"root", {{L"a", 400}});
     root.logical = 1000;
+    root.rest = 600;
     const diskview::Rect area {0, 0, 100, 100};
     std::vector<diskview::Tile> tiles;
     diskview::treemapTiles(root, area, 0, 0.0, tiles);
@@ -193,8 +194,8 @@ static void testTreemapAggregatesUnaccountedBytes()
 
 static void testTreemapFolderStates()
 {
-    // A folder nests only when it has the room and at least two children worth
-    // reading. Otherwise it stays one block, with or without a title strip.
+    // A folder nests when it has room and at least one child worth reading.
+    // A narrow folder stays one block.
     diskview::Node sub;
     sub.name = L"sub";
     sub.dir = true;
@@ -219,9 +220,12 @@ static void testTreemapFolderStates()
     }
     CHECK(subTile && subTile->header > 0);
     CHECK(soloTile && soloTile->header > 0);   // room for a strip
-    CHECK(depth1 == 2);                        // only sub's two files nest
-    for (const diskview::Tile& t : tiles)
-        CHECK(!(t.node && t.node->name == L"only"));
+    CHECK(subTile && subTile->expanded);
+    CHECK(soloTile && soloTile->expanded);
+    CHECK(depth1 == 3);
+    CHECK(std::any_of(tiles.begin(), tiles.end(), [](const diskview::Tile& t) {
+        return t.depth == 1 && t.node && t.node->name == L"only";
+    }));
 
     // The same folders in a 60 px wide column: no strip, no nesting, and the
     // top level is still drawn whole.
